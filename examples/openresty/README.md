@@ -18,7 +18,9 @@ The image verification script checks installed-module loading, absence of Rust, 
 
 `client_body_buffer_size 64k` selects buffering; it is separate from the 256 MiB example request limit. Larger completed requests use Nginx disk files. Use a disk-backed Docker volume for `/tmp/qjson-body`, size its budget for concurrent uploads, and monitor it. This path must not be mounted as tmpfs for memory experiments. The library retains a file descriptor rather than relying on Nginx's temporary pathname. Nginx owns and cleans its original files.
 
-`/incremental` uses a sole request-socket reader only for HTTP/1.1 requests with a Content-Length and no Transfer-Encoding. HTTP/2 and chunked uploads use the completed-body adapter. `X-QJSON-Input-Mode` reports the actual path. The incremental producer does not mix request sockets with `ngx.req.read_body`, and `finish()` still completes before forwarding. A query for a last-wins field may wait until its containing object closes or the decoder finishes.
+`/incremental` uses a sole request-socket reader only for HTTP/1.1 requests with a Content-Length and no Transfer-Encoding. HTTP/2 and chunked uploads use the completed-body adapter. `X-QJSON-Input-Mode` reports the actual path. The incremental producer does not mix request sockets with `ngx.req.read_body`. The current decoder publishes queried fields only after `finish()` and full validation; the example then connects upstream.
+
+The handler registers application-holder abort cleanup before its first mutation and protects the whole mutation/connection/response path with error unwind. It closes independently owned forks, input ownership and the HTTP client on normal completion, ordinary errors and cancellation. An abort callback alone would not cover an ordinary source or connection error.
 
 To use another test upstream, set `QJSON_UPSTREAM_HOST` and `QJSON_UPSTREAM_PORT`. The sink response reports encoded byte length and SHA256; it intentionally does not echo or parse a large request. The example accepts JSON objects; it does not implement application routing, authentication, schema validation, or retry policy.
 

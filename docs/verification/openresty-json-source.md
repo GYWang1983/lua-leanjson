@@ -82,7 +82,7 @@ The dev image is based on native `openresty/openresty:1.29.2.4-0-jammy@sha256:0a
 
 The native harness starts a dedicated qjson worker and a separate upstream worker. The sink only reads bounded chunks, counts bytes, hashes them, and optionally writes a disk capture. A separate test client parses those captures after the transfer for semantic comparison. This separates the oracle's full parsing from the measured process and sink.
 
-Acceptance covers memory/file selection; large siblings; independent branches and mixed changes; exact output length and bounded chunks; malformed input without upstream side effects; one-attempt disconnects; final duplicate values with multiple waiters; false/null; one input owner; chunked/HTTP2 completed fallbacks; slow and aborted uploads; real source truncation and unlink; output cancellation; descriptor/temp-file cleanup; and worker liveness. Set `QJSON_KEEP_TEST_OUTPUT=1` to keep logs/captures. Set `QJSON_TEST_PORT`/`QJSON_SINK_PORT` to change the default 19841/19842 ports.
+Acceptance covers memory/file selection; large siblings; independent branches and mixed changes; exact output length and bounded chunks; malformed input without upstream side effects; one-attempt disconnects; final duplicate values with multiple waiters; false/null; one input owner; chunked/HTTP2 completed fallbacks; slow and aborted uploads; real source truncation and unlink; output cancellation; descriptor/temp-file cleanup; and worker liveness. First-write cancellation, source errors and upstream connection errors check the actual fd returns EBADF with GC stopped. Separate direct-core, adapter and completed-fallback controls check forgotten roots release their fd after request-end GC. Test instrumentation retains only fd numbers, paths and event flags and is disabled for benchmarks. Set `QJSON_KEEP_TEST_OUTPUT=1` to keep logs/captures. Set `QJSON_TEST_PORT`/`QJSON_SINK_PORT` to change the default 19841/19842 ports.
 
 Bounded libFuzzer sessions are a separate nightly gate:
 
@@ -115,7 +115,61 @@ Cold cases call Linux `fsync` and `posix_fadvise(POSIX_FADV_DONTNEED)` before fi
 
 ## Measured status
 
-Implementation and verification results are recorded here after the source/decoder dependencies are integrated. The first native RED run confirmed that the adapter was missing; subsequent dependency-stage HTTP runs correctly fail where `decode_file`, `new_decoder`, `get`, and `close` have not yet been added. Those runs are not a passing acceptance claim. Lua lint and shell syntax checks pass for the initial scaffold.
+Verified locally on 2026-10-31 at source commit `e44eb74362129ee0d26256dcc08bdc9da0a1f3b1`. This is the implemented fork, including the lifecycle review fixes. The exact runtime image was built from that commit and passed installed-module loading, no-Rust checks, four memory/file/incremental length/SHA cases, malformed-input rejection and clean Nginx startup.
+
+| Gate | Result |
+| --- | --- |
+| Rust release default / scalar / panic-barrier | 412 / 412 / 413 tests passed |
+| Clippy | Passed with warnings denied |
+| Lua suite / lint | 351 tests passed; 49 files, no warnings/errors |
+| Extended properties | 2,000 encode cases; 1,000 mutation cases × 100 steps |
+| Seeded source stress | 500 valid + 500 byte-mutated cases, seed 760076 |
+| New-source JSONTestSuite | All 318 files via file + 17/65536-byte feeds; 95 valid, 188 invalid, 35 implementation-defined (11 accepted/24 rejected) |
+| Native HTTP acceptance | 36 checks passed |
+| Installed LuaRocks package | Isolated tree, workspace paths unset; memory/file/feed/fork/linked get/reader and OpenResty module smoke passed |
+| Bounded ASan/libFuzzer | Six targets × 30 seconds passed; new-source target included |
+| Source FFI under ASan | 8 tests passed, no sanitizer findings |
+
+The dev image used for gates and measurements was `sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47`. The runtime image was `sha256:ddacbf73c2b65cd29221e3cd2fc6c62190066de7c7073c7b2493e079dddecd61`, with the exact source commit in its revision label.
+
+The supplemental sanitizer image was `sha256:c4c8f06d4c8552c7d91a01da676966d4975d801efc1fb7a55dbb0887a37951c5`, adding nightly `1.101.0-nightly (92b5b8c87 2026-10-29)` and cargo-fuzz 0.13.2 to the dev environment. The fuzz/ASan-tested Rust sources are unchanged in the measured commit. On this ARM64 image, the additional source-FFI command was:
+
+```sh
+RUSTFLAGS='-Zsanitizer=address' CARGO_TARGET_DIR=target/source-asan cargo +nightly test --locked --release --target aarch64-unknown-linux-gnu --no-default-features --features test-panic --test source_ffi
+```
+
+### Paired local measurements
+
+[Raw benchmark JSONL](openresty-json-source-benchmarks.jsonl) contains one environment record and all 18 measured method/scenario records, including current RSS, HWM, sampled Lua heap, CPU, I/O, input digest, output bounds, latency, first sink body chunk, ping delay and the untimed semantic oracle. All nine pairs have byte-identical input SHA256 and passing complete-output semantic/SHA checks. Each method/scenario starts fresh workers. The default output bound is 64 KiB; the separate sink reads at most 16 KiB. No body capture or full output parsing occurs during timed requests.
+
+Hardware was an Apple M5 Pro with 48 GiB host memory; Docker Linux ARM64 exposed 18 vCPUs and 8,371,556,352 bytes of VM memory. Containers had no additional cgroup CPU/memory cap. Body/spool files used Linux overlay disk, with no tmpfs; the checkout used virtiofs. No build/fuzz jobs ran concurrently, while other local services remained running. This single local campaign has four timed requests per method in the approximately 1 MiB cases (two clients, two requests each), and eight in the 8 MiB cases (four clients, two requests each). Every request creates two branches. These small samples describe this run, not a production latency guarantee.
+
+Every paired cell below is **cjson / qjson**. Throughput counts input MiB per elapsed second; HWM is process peak RSS, while Lua heap is a sampled maximum rather than an allocator peak.
+
+| Shape | HWM MiB | Sampled Lua MiB | p95 ms | Input MiB/s |
+| --- | ---: | ---: | ---: | ---: |
+| 1 MiB prompt | 16.7 / 12.7 | 6.0 / 3.7 | 14 / 15 | 210.53 / 166.67 |
+| 1 MiB input | 16.7 / 11.8 | 6.0 / 3.0 | 12 / 16 | 285.72 / 173.92 |
+| 1 MiB messages | 16.7 / 12.8 | 6.0 / 3.7 | 11 / 15 | 250.01 / 160.01 |
+| 1 MiB escaped | 15.2 / 12.9 | 5.5 / 3.9 | 12 / 14 | 250.01 / 181.82 |
+| Short elements (939,196 bytes) | 45.9 / 254.3 | 29.8 / 197.2 | 33 / 3103 | 58.73 / 0.60 |
+| 1 MiB explicit long value | 15.7 / 14.3 | 6.0 / 5.2 | 11 / 24 | 266.68 / 100.00 |
+| 1 MiB advisory cold | 16.7 / 12.2 | 6.0 / 3.2 | 26 / 21 | 114.29 / 117.65 |
+| 8 MiB prompt | 73.8 / 15.1 | 41.0 / 5.7 | 85 / 141 | 453.90 / 245.21 |
+| 8 MiB messages | 73.8 / 14.9 | 41.0 / 5.5 | 94 / 141 | 438.36 / 232.73 |
+
+The long-string cases reduce RSS and sampled Lua heap, with higher latency and CPU cost. At 8 MiB, prompt/messages first upstream body chunk p50 was 43/48 ms for cjson versus 103/114 ms for qjson; concurrent ping maximum was 28/23 ms versus 4/4 ms. Thus improved worker responsiveness and lower memory did not produce higher throughput in those cases.
+
+The 32,768-short-object shape is a material limitation: qjson consumed much more memory and CPU and was substantially slower at the same size, concurrency and branch count. Its worker CPU was 5,902 ms versus cjson's 58 ms. Normalized container traversal and per-node bookkeeping can dominate; bounded output alone does not establish bounded overall memory or a speedup. The explicit long-value case also narrows the memory benefit and adds latency.
+
+Both cold runs reported successful fsync/fadvise advice and 4,210,688 process read bytes. Cold first-chunk p50 was 8 / 11 ms and ping maximum 19 / 5 ms. This remains an advisory Linux page-cache experiment on Docker overlay storage, not evidence of physical disk cache eviction or asynchronous I/O. Structural-index, Rust-heap and overlay allocation counters remain unavailable (`null` in each record); RSS is not substituted for them.
+
+Reproduce the measured sizes/concurrency with:
+
+```sh
+QJSON_BENCH_BYTES=1048576 QJSON_BENCH_CONCURRENCY=2 QJSON_BENCH_REQUESTS=2 QJSON_BENCH_BRANCHES=2 scripts/benchmark-openresty.sh
+QJSON_BENCH_BYTES=8388608 QJSON_BENCH_CONCURRENCY=4 QJSON_BENCH_REQUESTS=2 QJSON_BENCH_BRANCHES=2 QJSON_BENCH_CASES='prompt messages' scripts/benchmark-openresty.sh
+```
 
 The upstream baseline was isolated at `8e1b394e0dd0322bedae3a9fc87d15d8049a02ce`: 271 Lua checks and all 21 corpus/fixture checks pass. On Linux ARM64 the unmodified upstream full Rust test build fails at two hard-coded `*const i8` test casts, and Clippy reports 15 pre-existing ARM lints. With only the portable test-cast adjustment, all three Rust modes pass 383 tests. This is baseline evidence, separate from verification of the new source APIs.
 

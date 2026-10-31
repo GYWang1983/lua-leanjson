@@ -1,10 +1,10 @@
 # 基于 lua-qjson fork 的大请求体处理设计
 
-> 日期：2026-10-31。状态：设计草案，尚未实现新增接口。
+> 日期：2026-10-31。状态：独立库与原生 OpenResty 接口已实现；验证范围、实测结果和限制见[验收记录](../verification/openresty-json-source.md)。
 > 已确定方向：fork `api7/lua-qjson`，在现有 Rust 内核和 LuaJIT 接口上扩展。
 > 集成范围：独立 JSON 组件与原生 OpenResty；本次不对接 Kong，不修改 Gateway、Controller 或业务插件。
 > 上游评估基线：`8e1b394e0dd0322bedae3a9fc87d15d8049a02ce`；个人 fork：`GYWang1983/lua-qjson`。
-> 本文中的新增接口和行为都是拟实现设计，不表示上游已经支持。
+> 本文描述个人 fork 的实现与边界，不表示上游已经支持。增量输入已实现，字段查询在 finish 和完整校验后发布；尚不提供提前字段值或边上传边转发。
 
 ## 1. 目标与边界
 
@@ -18,7 +18,7 @@
 - 输出使用有界片段，不为完整上游请求分配 Lua 字符串。
 - 在上述能力稳定后，支持文件数据源和增量输入；增量输入不要求重写业务对象接口。
 
-首批库改造使用已经接收完整的请求，不能据此宣称解决了所有 OOM 或实现了边上传边转发。原始输入仍为内存字符串时，它仍占用请求大小对应的内存。文件输入完成后，索引、被业务明确读取的长字符串及新增值仍占用内存，不承诺所有 JSON 形状下常量内存。
+内存、已完成文件及文件暂存的增量输入均已实现，不能据此宣称解决了所有 OOM 或实现了边上传边转发。原始输入仍为内存字符串时，它仍占用请求大小对应的内存。文件输入完成后，索引、被业务明确读取的长字符串及新增值仍占用内存，不承诺所有 JSON 形状下常量内存。
 
 OpenResty 示例在完整接收并校验 JSON 后才向测试上游发送请求。鉴权、路由、计费、JSON Schema 业务校验、故障迁移和异步任务均由使用组件的应用负责，不属于组件实现与验收范围。未来应用接入另行设计，不作为本次交付的前置条件。
 
@@ -99,7 +99,7 @@ first._usage_tags = nil
 
 ## 5. 分段序列化
 
-新增 reader 接口，示意如下：
+已实现的 reader 接口：
 
 ```lua
 local reader = qjson.reader(branch, { chunk_size = 64 * 1024 })
@@ -110,6 +110,8 @@ local chunk, err = reader:next()     -- nil,nil 表示正常结束；nil,err 表
 `chunk_size` 是读取/输出工作缓冲，不是请求大小限制。新增接口可对普通 Lua 值和代理混合结构输出；`qjson.encode` 保留为明确生成完整字符串的兼容接口。
 
 Writer 创建时固定逻辑快照。未修改片段按块复制；有修改的容器只重写必要结构，其他子节点仍引用原文。不能通过 `source:sub(完整子树)`、大数组 `table.concat` 或构建完整输出 table 来伪装分段写入。
+
+Reader 构造只创建快照和所有权范围，不执行源 I/O；首次 `length()` 或 `next()` 才计算长度，文件读取阶段可以在 Lua 块间 yield。HTTP 适配器先注册具体 reader 的取消清理，再调用 `length()`。
 
 Reader 提供幂等的 `close()`。正常 EOF、输出错误或主动关闭后进入终止状态，再次 `next()` 返回明确的 closed 状态错误；需要再次输出时创建新的 reader。Source 和 overlay 快照至少保持到 reader 关闭，终止时释放 reader 持有的引用；不得关闭仍被其他分支持有的共享 Source。垃圾回收仅作为遗漏关闭的兜底。
 
@@ -141,17 +143,17 @@ Source 通过引用计数/等价所有权覆盖 Document、子代理、Fork 和 
 
 OpenResty 示例必须显式配置 Nginx 请求体缓冲和磁盘临时目录。首轮验证以 `client_body_buffer_size=64k` 为可调实验值，非请求上限；检查大请求实际生成文件，小请求允许内存路径。暂存介质使用磁盘，不采用 tmpfs。通过并发上传实验确定临时磁盘预算；磁盘耗尽/读写失败明确终止，不能退化成无界内存缓存。相关参数进入示例配置和使用说明，不涉及 Kong 或 Kubernetes 部署配置。
 
-### 6.3 持续增长的输入（后续阶段）
+### 6.3 持续增长的输入（已实现，finish 后查询）
 
-新增 `feed`、`finish`、`abort` 和明确的 `READY / NEED_INPUT / NEED_READ / ABSENT / ERROR` 状态；不是向原来的借用切片直接追加数据。原文进入可回读的分段/文件 Source，解析器记录绝对位置。
+`qjson.new_decoder(opts)` 提供 `feed(chunk)`、`finish()`、`abort(reason)`、`get(path)` 和幂等的 `close()`。原文进入可回读的文件暂存 Source，解析器记录绝对位置；不是向原来的借用切片直接追加数据。配置的 `temp_dir` 用于安全独占创建的暂存文件，在最终所有者释放时删除。
 
-Lua wrapper 在可 yield 的阶段等待输入推进；Rust 调用保持有界、不等待网络。一个 reader 独占客户端输入，所有字段查询共享解析状态。错误和取消唤醒全部等待者，不能把 pending/error 当作 nil。
+公开 Lua 查询状态为 `READY / NEED_INPUT / ABSENT / ERROR`。当前 decoder 在 `finish()` 完整校验成功前返回 `NEED_INPUT`，成功后才发布最终值或 `ABSENT`；`NEED_READ` 是 Rust 窗口协议的内部状态。重复键保持 last-wins，不能按第一个同名字段触发路由。尚未实现对象闭合即发布的提前查询。
 
-原生 OpenResty 的 live socket 接入只作为 HTTP/1.1 + Content-Length 的候选实现，需在选定的 OpenResty/ngx_lua 版本上独立验证。HTTP/2 和 chunked 继续使用完整接收路径；不得将 `ngx.req.socket` 与 `ngx.req.read_body` 混用，也不得轮询未完成的 Nginx 临时文件冒充受支持的增量 API。
+Lua wrapper 在可 yield 的阶段等待输入推进；Rust 调用保持有界、不等待网络。原生 OpenResty `start_body` 的一个 producer 独占客户端输入，多个 `session:get` 等待者共享 decoder 和 semaphore。错误、显式关闭与取消唤醒全部等待者；pending/error 不会被当作缺失值。producer 仅调用一次 `finish` 并保存结果。
 
-重复键会影响提前读取：保留 last-wins 语义时，字段在所属对象结束前未必是最终值。第一阶段不改变此行为；增量阶段需明确选择“等待最终值”或“拒绝重复键的独立输入契约”，不得默默按第一个值路由。该协议决策是增量模式启用前的单独评审项。
+live socket 路径已在固定原生 OpenResty 版本上验证，仅支持 HTTP/1.1 + Content-Length 且无 Transfer-Encoding。HTTP/2 和 chunked 使用已完成请求体路径，并报告 fallback 原因。两种路径不混用 `ngx.req.socket` 与 `ngx.req.read_body`，也不轮询未完成的 Nginx 临时文件。文件读写仍是同步有界 I/O，块间 Lua yield 不等于异步磁盘后端。
 
-即使对象可以提前交付，OpenResty 示例仍在 EOF 和完整 JSON 校验完成后发送测试上游。允许提前提取字段、唤醒等待者及做可丢弃的准备工作；业务准入由调用方负责，组件不提前触发外部副作用。
+OpenResty 示例在 EOF、finish 和完整 JSON 校验完成后才连接并发送测试上游。业务准入由调用方负责，组件不提前触发外部副作用。公开 API、所有权、错误返回及验证命令见[接口与验收记录](../verification/openresty-json-source.md)。
 
 ## 7. 仓库、构建与接入
 
@@ -183,6 +185,8 @@ L1 的发布验收只承诺三个可测不变量：修改 model 不物化兄弟�
 库正确性用差分测试、上游 JSONTestSuite 和针对性属性测试验证：空对象/数组、null、Unicode/转义、重复键、任意分块、内部属性同名 key、先读后写数组、父节点替换、跨分支复制、多个 Fork 与 Writer 生命周期。
 
 内存验收必须同时覆盖：嵌套长消息、顶层长 input、转义密集字符串、大量短元素、多个分支、并发请求和显式读取大字段。检查 Lua heap、Rust heap 与进程/容器 RSS，不能只把分配从 Lua 移到 Rust 后宣布完成。记录原文大小、索引大小、实际物化字节数、overlay 大小、输出最大 chunk、CPU、磁盘 I/O、worker 延迟及上游首字节时间；与同一 OpenResty 环境下的完整 `cjson.decode/encode` 对照，不预设无依据的提升倍数，并记录硬件、输入及并发条件。
+
+已完成的 ARM64 原生实测见[验收记录与原始 JSONL](../verification/openresty-json-source.md#paired-local-measurements)：长字符串输入降低了 RSS，但增加了部分延迟和 CPU 开销；大量短对象输入的内存和吞吐明显退化，是当前发布边界，不能宣传为所有 JSON 形状都更快或更省内存。未提供准确接口的 Rust heap、结构索引和 overlay 分配计数明确记为 unavailable/null，不从 RSS 推算。
 
 ## 9. 参考
 

@@ -9,7 +9,7 @@ local lua_max = initial.lua_kib
 local function sample()
     lua_max = math.max(lua_max, collectgarbage("count"))
 end
-local opts = { chunk_size = 16384, on_chunk = function() sample(); ngx.sleep(0) end }
+local opts = { chunk_size = tonumber(ngx.var.arg_chunk_size) or 65536, on_chunk = function() sample(); ngx.sleep(0) end }
 local body, info, cold
 if method == "cjson" or ngx.var.arg_cold == "1" then
     ngx.req.read_body()

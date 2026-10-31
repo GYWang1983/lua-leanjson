@@ -7,6 +7,7 @@ local size = tonumber(os.getenv("QJSON_BENCH_BYTES")) or 1048576
 local concurrency = tonumber(os.getenv("QJSON_BENCH_CONCURRENCY")) or 2
 local requests = tonumber(os.getenv("QJSON_BENCH_REQUESTS")) or 3
 local branches = tonumber(os.getenv("QJSON_BENCH_BRANCHES")) or 2
+local chunk_size = tonumber(os.getenv("QJSON_BENCH_CHUNK_SIZE")) or 65536
 local raw
 do
 local body = { model = "original" }
@@ -44,7 +45,7 @@ for _ = 1, concurrency do
             local client = http.new()
             client:set_timeout(120000)
             local start = ngx.now()
-            local path = "/benchmark?method=" .. method .. "&branches=" .. branches ..
+            local path = "/benchmark?method=" .. method .. "&branches=" .. branches .. "&chunk_size=" .. chunk_size ..
                 "&explicit=" .. (scenario == "explicit" and "1" or "0") .. "&cold=" .. (scenario == "cold" and "1" or "0")
             local res, err = client:request_uri("http://127.0.0.1:" .. port .. path,
                 { method = "POST", body = raw, keepalive = false })
@@ -52,7 +53,7 @@ for _ = 1, concurrency do
             assert(res.status == 200, res.body)
             local result = cjson.decode(res.body)
             assert(result.sink.bytes == result.output.length)
-            if method == "qjson" then assert(result.output.max_chunk <= 16384) end
+            if method == "qjson" then assert(result.output.max_chunk <= chunk_size) end
             latencies[#latencies + 1] = (ngx.now() - start) * 1000
             first_bytes[#first_bytes + 1] = (result.sink.first_byte_at - start) * 1000
             results[#results + 1] = result
@@ -64,20 +65,22 @@ local elapsed = ngx.now() - began
 running = false
 ngx.thread.wait(ticker)
 local health_after = get("/health")
+local io_delta = {}
+for key, value in pairs(health_after.io) do io_delta[key] = value - health_before.io[key] end
 table.sort(latencies)
 table.sort(first_bytes)
 local function percentile(values, quantile) return values[math.max(1, math.ceil(#values * quantile))] end
-local lua_max, hwm, max_chunk = 0, 0, 0
+local lua_max, hwm, max_chunk = 0, math.max(health_before.hwm_kib, health_after.hwm_kib), 0
 for _, result in ipairs(results) do
     lua_max = math.max(lua_max, result.lua_heap_sample_max_kib)
     hwm = math.max(hwm, result.hwm_kib)
     max_chunk = math.max(max_chunk, result.output.max_chunk)
 end
 print(cjson.encode { scenario = scenario, method = method, payload_bytes = #raw,
-    requests = #results, concurrency = concurrency, branches = branches, elapsed_s = elapsed,
+    requests = #results, concurrency = concurrency, branches = branches, chunk_size = chunk_size, elapsed_s = elapsed,
     mib_per_s = (#raw * #results / 1048576) / elapsed, p50_ms = percentile(latencies, 0.5),
     p95_ms = percentile(latencies, 0.95), first_upstream_byte_p50_ms = percentile(first_bytes, 0.5),
     worker_lag_max_ms = lag_max, ping_samples = ping_count,
     worker_cpu_ms = (health_after.cpu_s - health_before.cpu_s) * 1000,
     lua_heap_sample_max_kib = lua_max, worker_hwm_kib = hwm, output_max_chunk = max_chunk,
-    before = health_before, after = health_after, sample = results[1] })
+    before = health_before, after = health_after, io_delta = io_delta, sample = results[1] })

@@ -10,6 +10,8 @@ mod cursor;
 mod decode;
 mod validate;
 pub mod ffi;
+pub mod source;
+pub mod source_ffi;
 
 #[doc(hidden)]
 pub mod __test_api {

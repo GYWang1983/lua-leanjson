@@ -38,6 +38,7 @@ build = {
         cp lua/qjson/source_io.lua "$(LUADIR)/qjson/source_io.lua"
         cp lua/qjson/path.lua "$(LUADIR)/qjson/path.lua"
         cp lua/qjson/leases.lua "$(LUADIR)/qjson/leases.lua"
+        cp lua/qjson/options.lua "$(LUADIR)/qjson/options.lua"
         cp lua/qjson/openresty.lua "$(LUADIR)/qjson/openresty.lua"
         lib=target/release/libqjson.so
         if [ ! -f "$lib" ]; then lib=target/release/libqjson.dylib; fi

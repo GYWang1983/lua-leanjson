@@ -77,36 +77,20 @@ local function changed(node, key, value, scope)
     return { kind = node.kind, keys = new_keys, values = new_values }
 end
 
-local function replace(cell, node, scope)
-    leases.check(scope)
-    if cell.closed then error("qjson: holder closed", 0) end
-    local holder = live_holder(cell)
-    if holder then leases.retarget(holder.scope, node); watch_resources(cell) end
-    local old = cell.node
-    cell.node, cell.version = node, cell.version + 1
-    local parent = cell.parent
-    if parent and not parent.closed then
-        local _, values = M.members(parent.node, scope)
-        if parent.closed then cell.parent = nil; return end
-        if values[cell.key] == old then
-            replace(parent, changed(parent.node, cell.key, node, scope), scope)
-        elseif cell.lexical then
-            -- Earlier duplicate occurrences may be traversed for compatibility,
-            -- but only the last occurrence participates in the logical value.
-            replace(parent, changed(parent.node, cell.key, values[cell.key], scope), scope)
-        end
-    end
-end
-
 local function new_cell(node, parent, key, lexical)
     return { node = node, parent = parent, key = key, children = {}, version = 0, lexical = lexical }
 end
 
-local function wrap(cell)
+local function wrap(cell, prepared)
     local holder, value = live_holder(cell)
     if holder then return value end
     value = setmetatable({}, cell.node.kind == "array" and Array or Object)
-    META[value] = { cell = cell, scope = leases.acquire(cell.node) }
+    local scope
+    if prepared then
+        scope = leases.acquire()
+        leases.adopt(scope, prepared)
+    else scope = leases.acquire(cell.node) end
+    META[value] = { cell = cell, scope = scope }
     cell.public = setmetatable({ value }, { __mode = "v" })
     watch_resources(cell)
     return value
@@ -261,26 +245,102 @@ local function read(proxy, key)
     end)
 end
 
+-- Metadata, scalar reads and dependency checks may yield. Prepare immutable
+-- target/ancestor replacements first, then validate every captured version and
+-- link in one non-yielding step before moving children or publishing any node.
+local function mutate(holder, prepare)
+    local scope = holder.scope
+    return leases.guard(scope, holder.cell.node, function()
+        local records, chain = {}, {}
+        local function dependencies(node)
+            local prepared, record = leases.prepare(scope, node)
+            records[#records + 1] = record
+            return prepared
+        end
+        local ok, result = pcall(function()
+            local cell = holder.cell
+            while cell and not cell.closed do
+                local current, public = live_holder(cell)
+                chain[#chain + 1] = { cell = cell, node = cell.node, version = cell.version,
+                    parent = cell.parent, key = cell.key, holder = current, public = public }
+                cell = cell.parent
+            end
+            for _, entry in ipairs(chain) do
+                -- Synthetic private ancestors have no I/O and are non-owning.
+                -- Their unrelated source dependencies may already be closed
+                -- after an unreachable public wrapper was collected.
+                if entry.node.backend then dependencies(entry.node) end
+            end
+            local node, publish, complete = prepare(chain[1].node, scope, dependencies)
+            local updates = { { entry = chain[1], node = node } }
+            for i = 2, #chain do
+                local child, parent = chain[i - 1], chain[i]
+                local _, values = M.members(parent.node, scope)
+                if values[child.key] == child.node then
+                    node = changed(parent.node, child.key, node, scope)
+                elseif child.cell.lexical then
+                    -- Only the final duplicate occurrence is a logical member.
+                    node = changed(parent.node, child.key, values[child.key], scope)
+                else break end
+                updates[#updates + 1] = { entry = parent, node = node }
+            end
+            for _, update in ipairs(updates) do
+                if update.entry.holder then update.prepared = dependencies(update.node) end
+            end
+            -- Finish all potentially yielding checks before the atomic test.
+            leases.check(scope)
+            for _, update in ipairs(updates) do
+                if update.entry.holder then leases.check(update.entry.holder.scope) end
+                if update.prepared then leases.check(update.prepared) end
+            end
+            for _, entry in ipairs(chain) do
+                local current = live_holder(entry.cell)
+                if entry.cell.closed or entry.cell.node ~= entry.node or entry.cell.version ~= entry.version
+                    or entry.cell.parent ~= entry.parent or entry.cell.key ~= entry.key or current ~= entry.holder
+                then error("qjson: stale proxy mutation", 0) end
+            end
+            -- Backend lease transfers, cache edits and publication do not yield.
+            for _, update in ipairs(updates) do
+                if update.prepared then
+                    leases.adopt(update.entry.holder.scope, update.prepared)
+                    watch_resources(update.entry.cell)
+                end
+            end
+            if publish then publish() end
+            for _, update in ipairs(updates) do
+                update.entry.cell.node = update.node
+                update.entry.cell.version = update.entry.version + 1
+            end
+            if complete then return complete() end
+        end)
+        for _, record in ipairs(records) do leases.finish(scope, record) end
+        if not ok then error(result, 0) end
+        return result
+    end)
+end
+
 local function write(proxy, key, value)
     local holder = META[proxy]
     local cell = holder.cell
-    return leases.guard(holder.scope, cell.node, function()
-        if cell.node.kind == "object" then
+    return mutate(holder, function(original, scope, dependencies)
+        if original.kind == "object" then
             if type(key) ~= "string" then error("qjson: object key must be a string, got " .. type(key), 0) end
         elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key == math.huge then
             error("qjson: array index must be a positive integer", 0)
         end
         local present = type(value) ~= "nil"
-        if cell.node.kind == "array" then
-            local n = array_length(cell.node, holder.scope)
+        if original.kind == "array" then
+            local n = array_length(original, scope)
             if (present and key > n + 1) or (not present and key < n) then
                 error("qjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
         local node = present and M.snapshot(value) or nil
-        local cached = cell.children[key]
-        if cached then cached.parent = nil; cell.children[key] = nil end
-        replace(cell, changed(cell.node, key, node, holder.scope), holder.scope)
+        if node then dependencies(node) end
+        return changed(original, key, node, scope), function()
+            local cached = cell.children[key]
+            if cached then cached.parent = nil; cell.children[key] = nil end
+        end
     end)
 end
 
@@ -349,62 +409,84 @@ function M.pairs(value)
 end
 Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs
 
-local function check_array(value, index, inserting)
-    local holder = META[value]
-    if M.type(value) ~= "array" then error("qjson: expected array", 0) end
-    local n = M.len(value)
-    if not holder then
-        local count = 0
-        for key in pairs(value) do
-            if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > n then
-                error("qjson: array operations require a dense array", 0)
-            end
-            count = count + 1
-        end
-        if count ~= n then error("qjson: array operations require a dense array", 0) end
-    end
+local function check_index(index, n, inserting)
     if type(index) ~= "number" or index ~= math.floor(index) or index < 1
         or index > n + (inserting and 1 or 0)
     then error("qjson: array index out of range", 0) end
-    return holder, n
+end
+
+local function check_plain_array(value, index, inserting)
+    if M.type(value) ~= "array" then error("qjson: expected array", 0) end
+    local n = #value
+    local count = 0
+    for key in pairs(value) do
+        if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > n then
+            error("qjson: array operations require a dense array", 0)
+        end
+        count = count + 1
+    end
+    if count ~= n then error("qjson: array operations require a dense array", 0) end
+    check_index(index, n, inserting)
 end
 
 function M.array_insert(value, index, child)
-    local holder, n = check_array(value, index, true)
+    local holder = META[value]
+    if not holder then check_plain_array(value, index, true) end
     if type(child) == "nil" then error("qjson: array_insert requires a value", 0) end
     if not holder then table.insert(value, index, child); return end
     local cell = holder.cell
-    local inserted = M.snapshot(child)
-    local _, old = M.members(cell.node, holder.scope)
-    local values, keys = copy_map(old), {}
-    for i = n, index, -1 do
-        values[i + 1] = values[i]
-        cell.children[i + 1] = cell.children[i]
-        if cell.children[i + 1] then cell.children[i + 1].key = i + 1 end
-    end
-    cell.children[index] = nil
-    values[index] = inserted
-    for i = 1, n + 1 do keys[i] = i end
-    replace(cell, { kind = "array", keys = keys, values = values }, holder.scope)
+    return mutate(holder, function(original, scope, dependencies)
+        if original.kind ~= "array" then error("qjson: expected array", 0) end
+        local n = array_length(original, scope)
+        check_index(index, n, true)
+        local inserted = M.snapshot(child)
+        dependencies(inserted)
+        local _, old = M.members(original, scope)
+        local values, keys = copy_map(old), {}
+        for i = n, index, -1 do values[i + 1] = values[i] end
+        values[index] = inserted
+        for i = 1, n + 1 do keys[i] = i end
+        return { kind = "array", keys = keys, values = values }, function()
+            for i = n, index, -1 do
+                cell.children[i + 1] = cell.children[i]
+                if cell.children[i + 1] then cell.children[i + 1].key = i + 1 end
+            end
+            cell.children[index] = nil
+        end
+    end)
 end
 
 function M.array_remove(value, index)
-    local holder, n = check_array(value, index, false)
-    if not holder then return table.remove(value, index) end
+    local holder = META[value]
+    if not holder then check_plain_array(value, index, false); return table.remove(value, index) end
     local cell = holder.cell
-    local removed = read(value, index)
-    if META[removed] then META[removed].cell.parent = nil end
-    local _, old = M.members(cell.node, holder.scope)
-    local values, keys = copy_map(old), {}
-    for i = index, n - 1 do
-        values[i] = values[i + 1]
-        cell.children[i] = cell.children[i + 1]
-        if cell.children[i] then cell.children[i].key = i end
-    end
-    values[n], cell.children[n] = nil, nil
-    for i = 1, n - 1 do keys[i] = i end
-    replace(cell, { kind = "array", keys = keys, values = values }, holder.scope)
-    return removed
+    return mutate(holder, function(original, scope, dependencies)
+        if original.kind ~= "array" then error("qjson: expected array", 0) end
+        local n = array_length(original, scope)
+        check_index(index, n, false)
+        local _, old = M.members(original, scope)
+        local removed_node, removed, removed_cell = old[index]
+        local container = removed_node.kind == "array" or removed_node.kind == "object"
+        local prepared
+        if container then prepared = dependencies(removed_node)
+        else removed = M.scalar(removed_node, scope) end
+        local values, keys = copy_map(old), {}
+        for i = index, n - 1 do values[i] = values[i + 1] end
+        values[n] = nil
+        for i = 1, n - 1 do keys[i] = i end
+        return { kind = "array", keys = keys, values = values }, function()
+            removed_cell = cell.children[index]
+            if removed_cell then removed_cell.parent = nil end
+            for i = index, n - 1 do
+                cell.children[i] = cell.children[i + 1]
+                if cell.children[i] then cell.children[i].key = i end
+            end
+            cell.children[n] = nil
+        end, function()
+            if container then return wrap(removed_cell or new_cell(removed_node), prepared) end
+            return removed
+        end
+    end)
 end
 
 M.Object, M.Array = Object, Array

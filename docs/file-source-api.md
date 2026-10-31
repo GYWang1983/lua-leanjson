@@ -19,17 +19,19 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 
 ## Options and callbacks
 
-Both `decode_file` and `new_decoder` accept:
+`decode(raw, opts)`, `decode_file` and `new_decoder` validate the same parsing options. Calling `decode(raw)` without options retains its default eager behavior; the legacy `parse` API keeps its separate option contract. File/spool controls are validated in all modes but apply only where specified below:
 
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `chunk_size` | `65536` | Positive uint32 integer; bounds file reads, feed steps and native scalar windows. |
 | `max_depth` | `1024` | Nonnegative uint32 integer; zero selects the default, values above 4096 are clamped. |
 | `lazy` | `false` | Source v1 supports eager validation only; `true` is rejected. |
-| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for owned decoder spools; never silently ignored. |
-| `on_chunk(bytes_sofar)` | absent | Runs between bounded source steps and may yield. The argument is the received/scanned byte total and stays fixed during later value reads. |
+| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for owned decoder spools; memory and original-file decoding do not create spools. |
+| `on_chunk(bytes_sofar)` | absent | Runs between bounded file/feed source steps and may yield; not invoked by memory decoding. The argument is the received/scanned byte total and stays fixed during later value reads. |
 
 No Lua callback runs inside Rust. Every native output pointer is copied before the callback. A callback error propagates as a source failure and releases the failing operation's resources. The caller should close its holders on cancellation. The OpenResty adapter handles request cleanup separately.
+
+If a mutation yields and another coroutine changes its proxy or a linked ancestor, it raises the nonterminal `qjson: stale proxy mutation` before publication. It preserves the completed writer, dense array positions and held child links. Retry against the current value if needed; independent forks do not conflict. See [mutable view semantics](source-proxy-api.md).
 
 ## Incremental input
 

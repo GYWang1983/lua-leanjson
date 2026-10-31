@@ -13,6 +13,28 @@ source_io.open = function(filename)
     return fd, err
 end
 
+local original_spool = source_io.spool
+source_io.spool = function(directory)
+    local fd, filename = original_spool(directory)
+    local case = ngx.var.arg_case
+    if case and fd then state[case] = { fd = fd, filename = filename, owned = true } end
+    return fd, filename
+end
+
+-- The shipped example connects to the real bounded sink in this harness. Its
+-- connection-error case still uses a real refused TCP connection.
+local http = require "resty.http"
+local original_new = http.new
+http.new = function(...)
+    local client = original_new(...)
+    local connect = client.connect
+    function client:connect(params, ...)
+        if ngx.var.arg_fault == "connect" then params.port = 1 end
+        return connect(self, params, ...)
+    end
+    return client
+end
+
 local original_fork = qjson.fork
 qjson.fork = function(value)
     local branch = original_fork(value)

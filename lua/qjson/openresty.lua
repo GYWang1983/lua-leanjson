@@ -9,16 +9,19 @@ local OWNER = "qjson.openresty.input"
 local ABORT = "qjson.openresty.abort"
 
 local function options(opts)
-    opts = opts or {}
-    local size = opts.chunk_size or 65536
-    assert(type(size) == "number" and size >= 1 and size == math.floor(size), "chunk_size must be a positive integer")
+    if opts == nil then opts = {} end
+    assert(type(opts) == "table", "OpenResty opts must be a table")
+    local normalize = require("qjson.options").normalize
+    -- Validate decode options before applying HTTP I/O overrides. An invalid
+    -- option must not disappear merely because this body fits in memory.
+    normalize(opts.decode)
     local json = {}
     for key, value in pairs(opts.decode or {}) do json[key] = value end
-    assert(not json.lazy, "OpenResty input requires full JSON validation")
-    json.chunk_size = size
-    json.on_chunk = opts.on_chunk or function() ngx.sleep(0) end
-    if opts.temp_dir then json.temp_dir = opts.temp_dir end
-    return opts, json, size
+    json.chunk_size = opts.chunk_size == nil and 65536 or opts.chunk_size
+    json.on_chunk = opts.on_chunk == nil and function() ngx.sleep(0) end or opts.on_chunk
+    if opts.temp_dir ~= nil then json.temp_dir = opts.temp_dir end
+    json = normalize(json)
+    return opts, json, json.chunk_size
 end
 
 local function release(value)

@@ -28,12 +28,7 @@ local function run()
     local err, info
     if ngx.var.uri == "/incremental" then
         session, err, info = adapter.start_body { chunk_size = 65536 }
-        if session then
-            -- The current decoder finalizes lookups at finish/full validation.
-            local _, status, get_err = session:get("model")
-            if status == "ERROR" then err = get_err end
-            if not err then body, err = session:finish() end
-        end
+        if session then body, err = session:finish() end
     else
         body, err, info = adapter.read_body { chunk_size = 65536 }
     end

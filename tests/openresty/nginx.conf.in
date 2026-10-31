@@ -7,6 +7,7 @@ env LD_LIBRARY_PATH;
 env QJSON_TEST_PREFIX;
 env QJSON_TEST_PORT;
 env QJSON_SINK_PORT;
+env QJSON_UPSTREAM_PORT=@SINK_PORT@;
 env QJSON_RUN_MODE;
 events { worker_connections 1024; }
 http {
@@ -28,6 +29,11 @@ http {
         location = /ping { content_by_lua_block { ngx.say("{}") } }
         location = /benchmark { content_by_lua_file @ROOT@/tests/openresty/benchmark-handler.lua; }
         location = /example { content_by_lua_file @ROOT@/examples/openresty/handler.lua; }
+        location = /example-incremental {
+            rewrite ^ /incremental break;
+            content_by_lua_file @ROOT@/examples/openresty/handler.lua;
+        }
+        location /policy/ { content_by_lua_file @ROOT@/tests/openresty/policy.lua; }
         location /lifecycle/ { content_by_lua_file @ROOT@/tests/openresty/lifecycle.lua; }
         location / { content_by_lua_file @ROOT@/tests/openresty/handler.lua; }
     }

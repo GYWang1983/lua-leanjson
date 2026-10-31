@@ -34,12 +34,16 @@ if ngx.var.uri == "/abort-output-length" or ngx.var.uri == "/output-hook-failure
     end
 end
 local body, session, branch, sibling, nested, httpc, unregister
+local model_view, other_view, original_view
 local function close(fn, value)
     local ok, err = pcall(fn, value)
     if not ok then ngx.log(ngx.ERR, "test handler cleanup failed: ", tostring(err)) end
 end
 local function cleanup()
     if unregister then unregister(); unregister = nil end
+    if model_view ~= nil then close(qjson.close, model_view); model_view = nil end
+    if other_view ~= nil then close(qjson.close, other_view); other_view = nil end
+    if original_view ~= nil then close(qjson.close, original_view); original_view = nil end
     if nested ~= nil then close(qjson.close, nested); nested = nil end
     if branch ~= nil then close(qjson.close, branch); branch = nil end
     if sibling ~= nil then close(qjson.close, sibling); sibling = nil end
@@ -52,13 +56,22 @@ local function run()
     local err, info
     if ngx.var.uri == "/incremental" or ngx.var.uri == "/close-waiters" then
         session, err, info = adapter.start_body(opts)
+        if session then unregister = assert(adapter.on_abort(cleanup)) end
         if session and ngx.var.uri == "/close-waiters" then
-            local first = ngx.thread.spawn(function() return session:get("model") end)
-            local second = ngx.thread.spawn(function() return session:get("model") end)
+            local first = ngx.thread.spawn(function()
+                local status, get_err
+                model_view, status, get_err = session:get("model")
+                return status, get_err
+            end)
+            local second = ngx.thread.spawn(function()
+                local status, get_err
+                other_view, status, get_err = session:get("model")
+                return status, get_err
+            end)
             ngx.sleep(0.01)
             session:close()
-            local ok1, _, status1, err1 = ngx.thread.wait(first)
-            local ok2, _, status2, err2 = ngx.thread.wait(second)
+            local ok1, status1, err1 = ngx.thread.wait(first)
+            local ok2, status2, err2 = ngx.thread.wait(second)
             ngx.header.content_type = "application/json"
             ngx.say(cjson.encode { first = { ok = ok1, status = status1, error = err1 },
                 second = { ok = ok2, status = status2, error = err2 } })
@@ -67,13 +80,26 @@ local function run()
         if session then
             -- This may yield until last-wins has a final value. It must not return
             -- the first duplicate while a later upload chunk is still pending.
-            local waiter = ngx.thread.spawn(function() return session:get("model") end)
-            local value, status, get_err = session:get("model")
+            local waiter = ngx.thread.spawn(function()
+                local status, get_err
+                other_view, status, get_err = session:get("model")
+                return status, get_err
+            end)
+            local status, get_err
+            model_view, status, get_err = session:get("model")
             if status == "ERROR" then err = get_err end
-            info.model = value
-            local waited, other, other_status = ngx.thread.wait(waiter)
-            info.other_model = waited and other or nil
+            local waited, other_status, other_err = ngx.thread.wait(waiter)
+            if not waited then err = other_status elseif other_status == "ERROR" then err = other_err end
             info.other_status = other_status
+            if not err then
+                info.model = qjson.materialize(model_view)
+                info.other_model = qjson.materialize(other_view)
+            end
+            -- Repeated attached queries may alias one public child. Materialize
+            -- both results before closing either; close is idempotent on aliases.
+            qjson.close(model_view)
+            qjson.close(other_view)
+            model_view, other_view = nil, nil
             if not err then body, err = session:finish() end
         end
     else
@@ -87,7 +113,7 @@ local function run()
         return
     end
     -- Own every subsequent holder before its first mutation/read can yield.
-    unregister = assert(adapter.on_abort(cleanup))
+    if not unregister then unregister = assert(adapter.on_abort(cleanup)) end
     if ngx.var.uri == "/abort-callbacks" then
         assert(adapter.on_abort(function() error("intentional abort callback failure") end))
         assert(adapter.on_abort(function()
@@ -125,7 +151,10 @@ local function run()
     end
     sibling = qjson.fork(body)
     sibling.model = "independent"
-    local original_model, sibling_model = body.model, sibling.model
+    original_view = body.model
+    local original_model, sibling_model = qjson.materialize(original_view), sibling.model
+    qjson.close(original_view)
+    original_view = nil
     if ngx.var.uri == "/io-failure" then
         local source = assert(ngx.req.get_body_file())
         assert(io.open(source, "wb")):close() -- real source truncation, no mocked reader

@@ -94,6 +94,122 @@ check("fixed-length incremental upload waits for the final duplicate", function(
     assert(result.input.other_model == "last" and result.input.other_status == "READY")
     assert(capture(result).model == "rewritten")
 end)
+
+for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
+    for _, model in ipairs { { name = "scalar", raw = '"old"' }, { name = "object", raw = '{"nested":1}' },
+        { name = "array", raw = '[1,2]' } } do
+        check(endpoint:sub(2) .. " releases " .. model.name .. " query holders and the owned spool without GC", function()
+            get("/gc?action=stop")
+            local ok, err = xpcall(function()
+                local case = endpoint:sub(2) .. "-query-" .. model.name
+                local status, result = request(endpoint .. "?case=" .. case, '{"model":' .. model.raw .. ',"prompt":"x"}')
+                assert(status == 200, cjson.encode(result))
+                local probe = get("/lifecycle/probe?case=" .. case)
+                assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+            end, debug.traceback)
+            get("/gc?action=restart")
+            assert(ok, err)
+        end)
+    end
+
+    check(endpoint:sub(2) .. " releases container query holders after output abort without GC", function()
+        get("/gc?action=stop")
+        local ok, err = xpcall(function()
+            local case = endpoint:sub(2) .. "-query-abort"
+            local marker = os.getenv("QJSON_TEST_PREFIX") .. "/mutation-" .. case
+            local sock = assert(ngx.socket.tcp())
+            assert(sock:connect("127.0.0.1", port))
+            local raw = '{"model":{"nested":1},"prompt":"' .. ("p"):rep(200000) .. '"}'
+            assert(sock:send("POST " .. endpoint .. "?case=" .. case .. "&fault=pause HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
+                #raw .. "\r\n\r\n" .. raw))
+            local paused
+            for _ = 1, 100 do
+                local file = io.open(marker, "r")
+                if file then file:close(); paused = true; break end
+                ngx.sleep(0.01)
+            end
+            assert(paused, "output never reached a source read")
+            sock:close()
+            ngx.sleep(0.3)
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.paused and probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+        end, debug.traceback)
+        get("/gc?action=restart")
+        assert(ok, err)
+    end)
+
+    check(endpoint:sub(2) .. " releases container query holders after a real connection error without GC", function()
+        get("/gc?action=stop")
+        local ok, err = xpcall(function()
+            local case = endpoint:sub(2) .. "-query-error"
+            local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", '{"model":[1,2],"prompt":"x"}')
+            assert((status == 500 or status == 502) and result.error, cjson.encode(result))
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+        end, debug.traceback)
+        get("/gc?action=restart")
+        assert(ok, err)
+    end)
+end
+
+check("an intentionally retained query child survives session close until its own close", function()
+    get("/gc?action=stop")
+    local ok, err = xpcall(function()
+        for _, model in ipairs { '{"nested":1}', '[1,2]' } do
+            local case = "retained-query-" .. #model
+            local status, result = request("/lifecycle/retained?case=" .. case, '{"model":' .. model .. '}')
+            assert(status == 200 and result.alive_after_close and type(result.value) == "table", cjson.encode(result))
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+        end
+    end, debug.traceback)
+    get("/gc?action=restart")
+    assert(ok, err)
+end)
+
+check("HTTP depth policy has identical memory, file, feed and fallback verdicts", function()
+    for _, incremental in ipairs { false, true } do
+        for _, large in ipairs { false, true } do
+            for _, fallback in ipairs { false, true } do
+                local endpoint = incremental and "/policy/incremental" or "/policy/completed"
+                local raw = '{"a":{}' .. (large and ',"pad":"' .. ("p"):rep(200000) .. '"' or '') .. '}'
+                local headers
+                if fallback then
+                    raw = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+                    headers = { ["Transfer-Encoding"] = "chunked" }
+                end
+                for _, limit in ipairs { 1, 2, 0, 4294967295 } do
+                    local status, result = request(endpoint .. "?depth=" .. limit, raw, nil, headers)
+                    assert(status == 200 and result.accepted == (limit ~= 1), cjson.encode(result))
+                    if incremental and not fallback then assert(result.mode == "incremental", cjson.encode(result))
+                    else assert(result.mode == (large and "completed-file" or "completed-memory"), cjson.encode(result)) end
+                end
+            end
+        end
+    end
+end)
+
+check("HTTP rejects invalid depth, lazy and source options in every input mode", function()
+    local invalid = { "depth=-1", "depth=1.5", "depth=nan", "depth=infinity", "depth=string", "depth=boolean",
+        "depth=table", "depth=4294967296", "lazy=true", "lazy=invalid", "options=false", "options=decode-false",
+        "options=chunk-false", "options=hook-false", "options=temp-false" }
+    for _, endpoint in ipairs { "/policy/completed", "/policy/incremental" } do
+        for _, large in ipairs { false, true } do
+            for _, fallback in ipairs { false, true } do
+                local raw = '{"a":1' .. (large and ',"pad":"' .. ("p"):rep(100000) .. '"' or '') .. '}'
+                local headers
+                if fallback then
+                    raw = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+                    headers = { ["Transfer-Encoding"] = "chunked" }
+                end
+                for _, option in ipairs(invalid) do
+                    local status, result = request(endpoint .. "?" .. option, raw, nil, headers)
+                    assert(status == 200 and not result.accepted and result.error, cjson.encode(result))
+                end
+            end
+        end
+    end
+end)
 check("HTTP forwarding normalizes duplicate keys in untouched nested containers", function()
     local status, result = request("/completed", '{"model":"original","nested":{"key":"first","key":"last"}}', "duplicates")
     assert(status == 200, cjson.encode(result))
@@ -174,7 +290,7 @@ for _, endpoint in ipairs { "/example", "/connect-failure" } do
         local ok, err = xpcall(function()
             local case = endpoint:sub(2) .. "-connection-error"
             local raw = '{"model":"old","prompt":"' .. ("c"):rep(200000) .. '"}'
-            local status, result = request(endpoint .. "?case=" .. case, raw)
+            local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", raw)
             assert((status == 500 or status == 502) and result.error, cjson.encode(result))
             local probe = get("/lifecycle/probe?case=" .. case)
             assert(probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))

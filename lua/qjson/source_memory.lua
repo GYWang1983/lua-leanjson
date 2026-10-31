@@ -82,8 +82,13 @@ function Memory:read(offset, length)
     return self.doc._hold:sub(offset + 1, offset + length)
 end
 
-function M.open(raw)
-    local doc = require("qjson").parse(raw)
+function M.open(raw, opts)
+    local policy
+    if opts ~= nil then
+        local normalized = require("qjson.options").normalize(opts)
+        policy = { max_depth = normalized.max_depth, lazy = false }
+    end
+    local doc = require("qjson").parse(raw, policy)
     local backend = setmetatable({ doc = doc }, Memory)
     local root = ffi.new("qjson_cursor[1]")
     check(backend, C.qjson_open(doc._ptr, "", 0, root))

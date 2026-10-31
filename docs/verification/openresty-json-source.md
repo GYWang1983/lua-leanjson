@@ -17,7 +17,7 @@ qjson.close(value) -- branch retains the source independently
 
 `read_body(opts)` calls `ngx.req.read_body` once, then selects `get_body_data` or `get_body_file`. It catches the core's decode/I/O errors and returns `nil, error, info`. JSON false and null are successful values. File input uses `qjson.decode_file`, never a complete-body `read("*a")`. Nginx owns its file; qjson owns an open descriptor lease and does not unlink the Nginx pathname. Close each returned proxy explicitly; children, forks, and readers retain their own leases.
 
-`opts.chunk_size` defaults to 65536. `opts.decode` supplies core decode options. Lazy validation is rejected for HTTP input. `opts.on_chunk(bytes_sofar)` runs in Lua between bounded file/parser steps and may yield; the default yields with `ngx.sleep(0)`. Reads remain synchronous disk I/O. This API does not promise constant memory for every JSON shape: structural indexes, selected long values, and overlays consume memory.
+`opts.chunk_size` defaults to 65536. `opts.decode` supplies the same parsing policy in completed-memory, completed-file, incremental and fallback modes. `max_depth` must be an integer from 0 through 4294967295: zero selects 1024, and values above 4096 clamp to 4096. Negative, fractional, nonfinite and non-number values are rejected in every mode. Lazy validation is rejected for HTTP input. `opts.on_chunk(bytes_sofar)` runs in Lua between bounded file/parser steps and may yield; the default yields with `ngx.sleep(0)`. Memory decoding validates the options but does not invoke file callbacks or create a spool. `temp_dir` controls incremental spools only. Reads remain synchronous disk I/O. This API does not promise constant memory for every JSON shape: structural indexes, selected long values, and overlays consume memory.
 
 ## Incremental input
 
@@ -29,20 +29,37 @@ local session, err, info = input.start_body {
     wait_timeout = 30,  -- semaphore seconds
 }
 if err then return fail(err) end
-local model, status, get_err = session:get("model") -- can yield
-if status == "ERROR" then session:close(); return fail(get_err) end
-local value, finish_err = session:finish()
-if finish_err then session:close(); return fail(finish_err) end
-local branch = qjson.fork(value)
-session:close() -- closes the session's root; branch remains usable
--- Only now may the application create external side effects.
+local model, branch
+local function cleanup()
+    qjson.close(model) -- a container query result owns an independent lease
+    qjson.close(branch)
+    session:close()
+end
+local unregister, abort_err = input.on_abort(cleanup)
+if not unregister then cleanup(); return fail(abort_err) end
+local ok, work_err = pcall(function()
+    local status, get_err
+    model, status, get_err = session:get("model") -- can yield
+    if status == "ERROR" then error(get_err) end
+    -- Inspect model here, then release its view, even if it is an object/array.
+    qjson.close(model)
+    model = nil
+    local value, finish_err = session:finish()
+    if finish_err then error(finish_err) end
+    branch = qjson.fork(value)
+    session:close() -- branch remains usable
+    -- Only now may the application use branch for external side effects.
+end)
+unregister()
+cleanup() -- normal completion and ordinary errors release every owned holder
+if not ok then return fail(work_err) end
 ```
 
 `start_body` returns `session, nil, info` or `nil, error, info`. Live socket mode is restricted to HTTP/1.1 with a valid Content-Length and no Transfer-Encoding. Other inputs take `read_body`; `info.fallback` reports `http-version`, `transfer-encoding`, or `content-length`. `info.mode` reports `incremental`, `completed-memory`, or `completed-file`.
 
 One producer owns the input socket. Every waiter shares one decoder and semaphore notifications. `get(path)` returns `value, "READY"`, `nil, "ABSENT"`, or `nil, "ERROR", error`; it waits through NEED_INPUT. Paths use the core's dot/zero-based-bracket syntax. Last-wins field values are not final until their object closes; the current eager source decoder publishes values at finish. The adapter does not promise early values.
 
-`finish()` waits for one producer-owned decoder finish and full validation. `abort(reason)` stops unfinished input and wakes waiters. `close()` is idempotent, closes session ownership, and preserves independently held forks/children/readers. `temp_dir` is passed to the owned decoder spool and must be writable; cleanup occurs at the final lease. The producer never yields through Rust FFI or mixes `ngx.req.socket` with `read_body`/`discard_body`. Configure `lua_check_client_abort on`; the adapter coordinates one `ngx.on_abort` hook per request.
+`finish()` waits for one producer-owned decoder finish and full validation. `abort(reason)` stops unfinished input and wakes waiters. `close()` is idempotent, closes session ownership, and preserves independently held forks/children/readers. Every container returned by `get`, including a value used only for a check, must be explicitly closed by its owner; skip the query when its value is unused. Scalars need no resource cleanup. `temp_dir` is passed to the owned decoder spool and must be writable; cleanup occurs at the final lease. The producer never yields through Rust FFI or mixes `ngx.req.socket` with `read_body`/`discard_body`. Configure `lua_check_client_abort on`; the adapter coordinates one `ngx.on_abort` hook per request.
 
 Register cleanup for application-owned forks with `local unregister, err = input.on_abort(function() qjson.close(branch) end)`. This joins the adapter's single abort callback and returns an unregister function for normal completion. Closing the input root or session alone intentionally preserves those forks; their owner must close them too. Callbacks must not yield.
 
@@ -105,7 +122,7 @@ QJSON_BENCH_CASES=prompt QJSON_BENCH_BYTES=1048576 make openresty-bench
 QJSON_BENCH_CASES='prompt messages' QJSON_BENCH_BYTES=8388608 QJSON_BENCH_CONCURRENCY=4 QJSON_BENCH_BRANCHES=2 make openresty-bench
 ```
 
-Each method/scenario uses a fresh qjson worker so process RSS high water never carries over from its pair. Both methods receive identical payloads, make the same branch count and model change, and send to the same bounded sink. The cjson baseline intentionally allocates a complete source string, Lua object tree, branch container copies, and encoded output. Its immutable long Lua strings are shared across branch copies. The qjson path reads only model in lazy cases and uses normalized bounded output. The `explicit` case deliberately accesses the long value and is reported separately.
+Each method/scenario uses a fresh qjson worker so process RSS high water never carries over from its pair. Both methods receive identical payloads, make the same branch count and model change, and send to the same bounded sink. The cjson baseline intentionally allocates a complete source string, Lua object tree, branch container copies, and encoded output. Its immutable long Lua strings are shared across branch copies. The qjson path changes model without reading long values and uses normalized bounded output. The `explicit` case deliberately accesses the long value and is reported separately.
 
 Input generation uses fixed key order and records SHA256 so paired payload identity is checkable. `requests` counts timed transfers only. After elapsed time and worker health/CPU/I/O snapshots are frozen, each method makes one additional untimed disk-capture request. The separate client checks its SHA256 and complete JSON semantics against the input with `model="rewritten-1"`; the result appears under `oracle`. Timed requests do not enable capture or full output parsing.
 

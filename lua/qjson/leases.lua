@@ -14,15 +14,25 @@ local function release_entries(entries)
     for _, entry in ipairs(entries) do entry[1]:release(entry[2]) end
 end
 
-local function acquire_entries(node)
-    local found, entries = {}, {}
+local function acquire_entries(node, owner)
+    local found, entries = {}, owner and owner.entries or {}
     if node then dependencies(node, found) end
     local ok, err = pcall(function()
         for backend in pairs(found) do
-            if backend.retain then entries[#entries + 1] = { backend, backend:retain() } end
+            if backend.retain then
+                local token = backend:retain()
+                if owner and owner.closed then
+                    backend:release(token)
+                    error("qjson: holder closed", 0)
+                end
+                entries[#entries + 1] = { backend, token }
+            end
         end
     end)
-    if not ok then release_entries(entries); error(err, 0) end
+    if not ok then
+        if owner then M.release(owner) else release_entries(entries) end
+        error(err, 0)
+    end
     return entries
 end
 
@@ -42,6 +52,7 @@ function M.check(scope)
             local backend = entry[1]
             if backend.check_open then backend:check_open() end
         end
+        if scope.closed then error("qjson: holder closed", 0) end
     end
 end
 
@@ -68,17 +79,29 @@ function M.release(scope)
     scope.entries = {}
 end
 
-function M.retarget(scope, node)
+-- Prepared dependencies are cancellable by the initiating holder. Adoption is
+-- a non-yielding transfer after the caller has validated its logical versions.
+function M.prepare(scope, node)
     M.check(scope)
-    local next_entries = acquire_entries(node)
+    local prepared = { entries = {}, active = {} }
+    local record = M.track(scope, function() M.release(prepared) end)
+    local ok, err = pcall(function()
+        acquire_entries(node, prepared)
+        M.check(scope)
+    end)
+    if not ok then M.finish(scope, record); error(err, 0) end
+    return prepared, record
+end
+
+function M.adopt(scope, prepared)
     local previous = scope.entries
-    scope.entries = next_entries
+    scope.entries, prepared.entries = prepared.entries, {}
     release_entries(previous)
 end
 
 function M.pin(scope, node)
-    local held = M.acquire(node)
-    return M.track(scope, function() M.release(held) end)
+    local _, record = M.prepare(scope, node)
+    return record
 end
 
 function M.guard(scope, node, fn)

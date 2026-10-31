@@ -31,8 +31,8 @@ _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
 _M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
 _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
-function _M.decode(raw)
-    local backend, root = require("qjson.source_memory").open(raw)
+function _M.decode(raw, opts)
+    local backend, root = require("qjson.source_memory").open(raw, opts)
     return proxy.from_backend(backend, root)
 end
 

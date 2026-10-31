@@ -37,7 +37,7 @@ fn bytes_of_string_value_is_quoted_span() {
     unsafe {
         let (doc, root) = open_root(json);
         let mut child: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_cursor_field(&root, b"k".as_ptr() as *const i8, 1, &mut child);
+        let rc = qjson_cursor_field(&root, b"k".as_ptr() as *const std::ffi::c_char, 1, &mut child);
         assert_eq!(rc, 0);
         let mut bs: usize = 0;
         let mut be: usize = 0;
@@ -54,7 +54,7 @@ fn bytes_of_number_value_strips_separators() {
     unsafe {
         let (doc, root) = open_root(json);
         let mut child: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_cursor_field(&root, b"k".as_ptr() as *const i8, 1, &mut child);
+        let rc = qjson_cursor_field(&root, b"k".as_ptr() as *const std::ffi::c_char, 1, &mut child);
         assert_eq!(rc, 0);
         let mut bs: usize = 0;
         let mut be: usize = 0;

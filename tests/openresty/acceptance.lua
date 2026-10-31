@@ -45,6 +45,25 @@ local function capture(result)
     assert(require("resty.string").to_hex(hash:final()) == result.sink.sha256)
     return cjson.decode(raw), raw
 end
+local function wait_source(case, event, sock)
+    local client = http.new()
+    client:set_timeout(6000)
+    local res, err = client:request_uri("http://127.0.0.1:" .. port .. "/lifecycle/wait?case=" .. case .. "&event=" .. event,
+        { keepalive = false })
+    local result = res and cjson.decode(res.body) or { error = err }
+    if not result.ready then
+        local response
+        if sock then
+            sock:settimeout(100)
+            local status, receive_err, partial = sock:receive("*l")
+            local body, body_err, tail
+            if status then body, body_err, tail = sock:receive("*a") end
+            response = { status = status, body = body or tail, error = receive_err or body_err, partial = partial }
+        end
+        error("source-read " .. event .. " watchdog: " .. cjson.encode { probe = result, response = response })
+    end
+    return result
+end
 check("memory source rewrites a field and sends exact bounded bytes", function()
     local status, result = request("/completed", '{"model":"original","prompt":"hello"}', "memory")
     assert(status == 200, cjson.encode(result))
@@ -112,28 +131,28 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
         end)
     end
 
-    check(endpoint:sub(2) .. " releases container query holders after output abort without GC", function()
+    check(endpoint:sub(2) .. " releases container query holders after a post-fork source-read abort without GC", function()
         get("/gc?action=stop")
+        local sock
         local ok, err = xpcall(function()
             local case = endpoint:sub(2) .. "-query-abort"
-            local marker = os.getenv("QJSON_TEST_PREFIX") .. "/mutation-" .. case
-            local sock = assert(ngx.socket.tcp())
+            sock = assert(ngx.socket.tcp())
             assert(sock:connect("127.0.0.1", port))
             local raw = '{"model":{"nested":1},"prompt":"' .. ("p"):rep(200000) .. '"}'
-            assert(sock:send("POST " .. endpoint .. "?case=" .. case .. "&fault=pause HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
+            local delay = endpoint == "/incremental" and "&prepare_delay=1" or ""
+            assert(sock:send("POST " .. endpoint .. "?case=" .. case .. "&fault=await-abort" .. delay .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
                 #raw .. "\r\n\r\n" .. raw))
-            local paused
-            for _ = 1, 100 do
-                local file = io.open(marker, "r")
-                if file then file:close(); paused = true; break end
-                ngx.sleep(0.01)
-            end
-            assert(paused, "output never reached a source read")
+            local paused = wait_source(case, "paused", sock)
+            assert(paused.state.pause_waiting and not paused.state.aborted and paused.fcntl ~= -1
+                and paused.path_exists, cjson.encode(paused))
             sock:close()
-            ngx.sleep(0.3)
-            local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.paused and probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+            sock = nil
+            local probe = wait_source(case, "aborted")
+            assert(probe.state.aborted and not probe.state.pause_timed_out and probe.paused and probe.owned
+                and probe.state.close_fcntl == -1 and probe.state.close_errno == 9
+                and probe.state.close_unlinked and not probe.path_exists, cjson.encode(probe))
         end, debug.traceback)
+        if sock then sock:close() end
         get("/gc?action=restart")
         assert(ok, err)
     end)
@@ -151,6 +170,47 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
         assert(ok, err)
     end)
 end
+
+check("isolated incremental requests wake both query waiters and finish without control traffic", function()
+    get("/gc?action=stop")
+    local client
+    local ok, err = xpcall(function()
+        for _, route in ipairs { { endpoint = "/example-incremental" }, { endpoint = "/incremental" },
+            { endpoint = "/incremental", delay = true } } do
+            local case = route.endpoint:sub(2) .. "-isolated" .. (route.delay and "-delay" or "")
+            client = http.new()
+            client:set_timeout(5000)
+            assert(client:connect { scheme = "http", host = "127.0.0.1", port = port })
+            local raw = '{"model":{"nested":1},"prompt":"' .. ("p"):rep(200000) .. '"}'
+            local path = route.endpoint .. "?case=" .. case .. "&fault=pause" .. (route.delay and "&prepare_delay=1" or "")
+            assert(client.sock:send("POST " .. path .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
+                #raw .. "\r\n\r\n" .. raw))
+            -- Only receive this response until it is complete: no ping, marker
+            -- polling or lifecycle/control request may wake the source worker.
+            local res, response_err = client:read_response { method = "POST", headers = {} }
+            local body, read_err
+            if res then body, read_err = res:read_body() end
+            if not res or res.status ~= 200 or not body then
+                error(cjson.encode { error = response_err or read_err, status = res and res.status, response = body,
+                    probe = get("/lifecycle/probe?case=" .. case) })
+            end
+            client:close()
+            client = nil
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.state.finish_end and probe.state.paused_at and probe.owned
+                and probe.state.close_fcntl == -1 and probe.state.close_errno == 9
+                and probe.state.close_unlinked and not probe.path_exists, cjson.encode(probe))
+            if route.endpoint == "/incremental" then
+                assert(probe.state.phases["main-READY"] and probe.state.phases["waiter-READY"], cjson.encode(probe))
+                local result = cjson.decode(body)
+                assert(result.input.model.nested == 1 and result.input.other_model.nested == 1, body)
+            end
+        end
+    end, debug.traceback)
+    if client then client:close() end
+    get("/gc?action=restart")
+    assert(ok, err)
+end)
 
 check("an intentionally retained query child survives session close until its own close", function()
     get("/gc?action=stop")

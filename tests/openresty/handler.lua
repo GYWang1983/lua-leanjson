@@ -10,6 +10,12 @@ end
 local started = ngx.now()
 local opts = { chunk_size = 16384, temp_dir = os.getenv("QJSON_TEST_PREFIX") .. "/decoder" }
 local output_phase = "input"
+if ngx.var.arg_prepare_delay == "1" then
+    local delayed = false
+    opts.on_chunk = function()
+        if not delayed then delayed = true; ngx.sleep(1.05) else ngx.sleep(0) end
+    end
+end
 if ngx.var.arg_hook == "1" then opts.on_chunk = function() error("intentional source hook failure") end end
 if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/qjson-unwritable-spool" end
 if ngx.var.uri == "/external-abort" then assert(ngx.on_abort(function() end)) end
@@ -35,6 +41,16 @@ if ngx.var.uri == "/abort-output-length" or ngx.var.uri == "/output-hook-failure
 end
 local body, session, branch, sibling, nested, httpc, unregister
 local model_view, other_view, original_view
+local function phase(name)
+    local records = package.loaded["qjson.test_state"]
+    local record = records and records[ngx.var.arg_case]
+    if record then
+        record.phase = name
+        record.phase_at = ngx.now()
+        record.phases = record.phases or {}
+        record.phases[name] = ngx.now()
+    end
+end
 local function close(fn, value)
     local ok, err = pcall(fn, value)
     if not ok then ngx.log(ngx.ERR, "test handler cleanup failed: ", tostring(err)) end
@@ -56,6 +72,7 @@ local function run()
     local err, info
     if ngx.var.uri == "/incremental" or ngx.var.uri == "/close-waiters" then
         session, err, info = adapter.start_body(opts)
+        phase("input-started")
         if session then unregister = assert(adapter.on_abort(cleanup)) end
         if session and ngx.var.uri == "/close-waiters" then
             local first = ngx.thread.spawn(function()
@@ -82,16 +99,22 @@ local function run()
             -- the first duplicate while a later upload chunk is still pending.
             local waiter = ngx.thread.spawn(function()
                 local status, get_err
+                phase("waiter-get")
                 other_view, status, get_err = session:get("model")
+                phase("waiter-" .. status)
                 return status, get_err
             end)
             local status, get_err
+            phase("main-get")
             model_view, status, get_err = session:get("model")
+            phase("main-" .. status)
             if status == "ERROR" then err = get_err end
             local waited, other_status, other_err = ngx.thread.wait(waiter)
+            phase("queries-ready")
             if not waited then err = other_status elseif other_status == "ERROR" then err = other_err end
             info.other_status = other_status
             if not err then
+                phase("materialize-query")
                 info.model = qjson.materialize(model_view)
                 info.other_model = qjson.materialize(other_view)
             end
@@ -100,6 +123,7 @@ local function run()
             qjson.close(model_view)
             qjson.close(other_view)
             model_view, other_view = nil, nil
+            phase("queries-closed")
             if not err then body, err = session:finish() end
         end
     else
@@ -140,6 +164,7 @@ local function run()
         return
     end
     branch = qjson.fork(body)
+    phase("forked")
     branch.model = "rewritten"
     if ngx.var.arg_mixed == "1" then
         branch.remove_me = nil
@@ -152,9 +177,11 @@ local function run()
     sibling = qjson.fork(body)
     sibling.model = "independent"
     original_view = body.model
+    phase("materialize-original")
     local original_model, sibling_model = qjson.materialize(original_view), sibling.model
     qjson.close(original_view)
     original_view = nil
+    phase("original-closed")
     if ngx.var.uri == "/io-failure" then
         local source = assert(ngx.req.get_body_file())
         assert(io.open(source, "wb")):close() -- real source truncation, no mocked reader
@@ -170,6 +197,7 @@ local function run()
     local ok
     ok, err = httpc:connect { scheme = "http", host = "127.0.0.1", port = ngx.var.uri == "/connect-failure" and 1 or tonumber(os.getenv("QJSON_SINK_PORT")) }
     if not ok then error(err) end
+    phase("connected")
     local headers = { ["Content-Length"] = "1", ["Transfer-Encoding"] = "chunked",
         ["x-capture-id"] = ngx.req.get_headers()["x-capture-id"] }
     local res, transfer
@@ -180,12 +208,14 @@ local function run()
     res, err, transfer = adapter.request(httpc, {
         method = "POST", path = ngx.var.arg_disconnect == "1" and "/disconnect" or "/sink", headers = headers,
     }, branch, opts)
+    phase("request-returned")
     local result
     if res then
         local raw, read_err = res:read_body()
         if not raw then err = read_err else result = cjson.decode(raw) end
     end
     cleanup()
+    phase("cleaned")
     if err then ngx.status = 502 end
     ngx.say(cjson.encode { error = err and tostring(err), sink = result, transfer = transfer,
         input = info, original_model = original_model, sibling_model = sibling_model,
@@ -195,6 +225,7 @@ end
 local ok, err = pcall(run)
 cleanup()
 if not ok then
+    phase("failed")
     if ngx.headers_sent then
         ngx.log(ngx.ERR, "test handler request failed: ", tostring(err))
         return ngx.exit(ngx.ERROR)

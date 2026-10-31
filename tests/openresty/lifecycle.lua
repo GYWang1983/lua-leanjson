@@ -2,16 +2,35 @@ local cjson = require "cjson"
 local ffi = require "ffi"
 ffi.cdef[[int fcntl(int, int, ...);]]
 ngx.header.content_type = "application/json"
+local function probe(record)
+    if not record then return { present = false } end
+    ffi.errno(0)
+    local result = ffi.C.fcntl(record.fd, 1)
+    return { fd = record.fd, fcntl = result, errno = ffi.errno(),
+        paused = record.paused, truncated = record.truncated, owned = record.owned,
+        path_exists = require("lfs").attributes(record.filename) ~= nil, state = record }
+end
+if ngx.var.uri == "/lifecycle/wait" then
+    local records = require("qjson.test_state")
+    local deadline = ngx.now() + 5
+    local record, ready
+    repeat
+        record = records[ngx.var.arg_case]
+        ready = record and (ngx.var.arg_event == "aborted" and record.aborted
+            or ngx.var.arg_event ~= "aborted" and record.pause_waiting and not record.aborted)
+        if ready or (record and (record.closed_at or record.pause_timed_out)) then break end
+        ngx.sleep(0.01)
+    until ngx.now() >= deadline
+    local result = probe(record)
+    result.ready = ready or false
+    ngx.say(cjson.encode(result))
+    return
+end
 if ngx.var.uri == "/lifecycle/probe" then
     if ngx.var.arg_gc == "1" then
         for _ = 1, 3 do collectgarbage("collect") end
     end
-    local record = assert(require("qjson.test_state")[ngx.var.arg_case], "source fd was not recorded")
-    ffi.errno(0)
-    local result = ffi.C.fcntl(record.fd, 1)
-    ngx.say(cjson.encode { fd = record.fd, fcntl = result, errno = ffi.errno(),
-        paused = record.paused, truncated = record.truncated, owned = record.owned,
-        path_exists = require("lfs").attributes(record.filename) ~= nil })
+    ngx.say(cjson.encode(probe(require("qjson.test_state")[ngx.var.arg_case])))
     return
 end
 

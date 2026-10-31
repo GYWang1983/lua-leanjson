@@ -21,6 +21,14 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Status
 
+This fork adds mutable copy-on-write proxies, independent forks, bounded JSON
+readers, file sources and incremental input under native OpenResty. See the
+[proxy API](docs/source-proxy-api.md), [source API](docs/file-source-api.md),
+and [verified scope and measured limits](docs/verification/openresty-json-source.md).
+Incremental queries publish after full validation; disk I/O is synchronous.
+Long-string workloads can use less memory, but many short objects currently
+use substantially more memory and CPU than cjson.
+
 Initial implementation complete: scalar, AVX2/PCLMUL, and ARM64 NEON/PMULL structural scanners (runtime-dispatched); root-path and cursor APIs; escape-decoded strings; integer/float/bool/typeof/len accessors; FFI panic barrier; and a LuaJIT wrapper. Rust unit/integration tests and Lua busted tests run in CI. The benchmark harness compares against lua-cjson and lua-resty-simdjson on x86_64; ARM64 NEON/PMULL is correctness-tested via the scanner cross-check suite, with a parse + access benchmark on Apple M4 reported in `docs/benchmarks.md` (cjson comparison only).
 
 ## Building
@@ -33,6 +41,18 @@ cargo build --release
 A `Makefile` wraps the common workflows; run `make help` to see `build`, `test`, `lint`, `bench`, and `clean` targets. Override `LUAJIT` / `LUA_CPATH` per invocation if your environment differs from the defaults.
 
 ## Installing
+
+To install this fork's source/reader APIs, build from the reviewed branch
+(pin its commit for deployment):
+
+```sh
+git clone --branch feat/openresty-json-source https://github.com/GYWang1983/lua-qjson.git
+cd lua-qjson
+luarocks --lua-version=5.1 make rockspec/lua-qjson-0.1.0-1.rockspec
+```
+
+The following registry command installs the upstream release, which does not
+include this fork's additions:
 
 ```sh
 luarocks --lua-version=5.1 install lua-qjson
@@ -71,7 +91,7 @@ The runtime file set is small:
 | `/usr/local/share/lua/5.1/qjson/lib.lua` | FFI loader |
 | `/usr/local/share/lua/5.1/qjson/table.lua` | Lazy table API and encoder |
 | `/usr/local/share/lua/5.1/qjson/{proxy,reader,source_memory}.lua` | Immutable nodes, bounded output and memory source adapter |
-| `/usr/local/share/lua/5.1/qjson/{leases,path,source,source_io}.lua` | Holder ownership, shared paths and file/incremental source support |
+| `/usr/local/share/lua/5.1/qjson/{leases,options,path,source,source_io}.lua` | Holder ownership, shared parsing policy, paths and file/incremental source support |
 | `/usr/local/share/lua/5.1/qjson/openresty.lua` | Explicit native OpenResty input/output adapter |
 
 The runtime also needs OpenResty LuaJIT (preferred) or LuaJIT, plus the normal

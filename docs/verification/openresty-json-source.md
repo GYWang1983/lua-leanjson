@@ -132,30 +132,32 @@ Cold cases call Linux `fsync` and `posix_fadvise(POSIX_FADV_DONTNEED)` before fi
 
 ## Measured status
 
-Verified locally on 2026-10-31 at source commit `e44eb74362129ee0d26256dcc08bdc9da0a1f3b1`. This is the implemented fork, including the lifecycle review fixes. The exact runtime image was built from that commit and passed installed-module loading, no-Rust checks, four memory/file/incremental length/SHA cases, malformed-input rejection and clean Nginx startup.
+Verified locally on 2026-10-31 at final code commit `92aefc0e107dd62dd32e3b5ffd7a6c91487862f9`. This includes the final review fixes for query-holder cleanup, consistent memory/file/feed decode policy and coherent mutation publication across yields. The exact runtime image was built from that commit and passed installed-module loading (including `qjson.options`), no-Rust checks, four memory/file/incremental length/SHA cases, malformed-input rejection, direct and HTTP completed-memory depth-policy checks, and clean Nginx startup. Later documentation-only commits do not change that tested code.
 
 | Gate | Result |
 | --- | --- |
 | Rust release default / scalar / panic-barrier | 412 / 412 / 413 tests passed |
 | Clippy | Passed with warnings denied |
-| Lua suite / lint | 351 tests passed; 49 files, no warnings/errors |
+| Lua suite / lint | 388 tests passed; 53 files, no warnings/errors |
 | Extended properties | 2,000 encode cases; 1,000 mutation cases × 100 steps |
 | Seeded source stress | 500 valid + 500 byte-mutated cases, seed 760076 |
 | New-source JSONTestSuite | All 318 files via file + 17/65536-byte feeds; 95 valid, 188 invalid, 35 implementation-defined (11 accepted/24 rejected) |
-| Native HTTP acceptance | 36 checks passed |
-| Installed LuaRocks package | Isolated tree, workspace paths unset; memory/file/feed/fork/linked get/reader and OpenResty module smoke passed |
+| Native HTTP acceptance | 49 checks passed, including stopped-GC query ownership and input-mode policy parity |
+| Installed LuaRocks package | Isolated tree, workspace paths unset; memory/file/feed/fork/linked get/reader, options policy and OpenResty module smoke passed |
 | Bounded ASan/libFuzzer | Six targets × 30 seconds passed; new-source target included |
 | Source FFI under ASan | 8 tests passed, no sanitizer findings |
 
-The dev image used for gates and measurements was `sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47`. The runtime image was `sha256:ddacbf73c2b65cd29221e3cd2fc6c62190066de7c7073c7b2493e079dddecd61`, with the exact source commit in its revision label.
+The dev image used for gates and measurements was `sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47`. The final runtime image was `sha256:14d94f94b4465c5bc24e34137bedf8443689d67faebbe3c68d6494f03cd35b90`, with the exact final code commit in its revision label.
 
-The supplemental sanitizer image was `sha256:c4c8f06d4c8552c7d91a01da676966d4975d801efc1fb7a55dbb0887a37951c5`, adding nightly `1.101.0-nightly (92b5b8c87 2026-10-29)` and cargo-fuzz 0.13.2 to the dev environment. The fuzz/ASan-tested Rust sources are unchanged in the measured commit. On this ARM64 image, the additional source-FFI command was:
+The supplemental sanitizer image was `sha256:c4c8f06d4c8552c7d91a01da676966d4975d801efc1fb7a55dbb0887a37951c5`, adding nightly `1.101.0-nightly (92b5b8c87 2026-10-29)` and cargo-fuzz 0.13.2 to the dev environment. The fuzz/ASan-tested Rust sources are unchanged in both the measured and final code commits. On this ARM64 image, the additional source-FFI command was:
 
 ```sh
 RUSTFLAGS='-Zsanitizer=address' CARGO_TARGET_DIR=target/source-asan cargo +nightly test --locked --release --target aarch64-unknown-linux-gnu --no-default-features --features test-panic --test source_ffi
 ```
 
 ### Paired local measurements
+
+These measurements were taken at `e44eb74362129ee0d26256dcc08bdc9da0a1f3b1`, before the final Lua ownership/policy/mutation fixes. The benchmark workload and raw records are unchanged; the matrix was not rerun at `92aefc0`. They establish the observed workload limits of that measured baseline, not exact final-revision timings.
 
 [Raw benchmark JSONL](openresty-json-source-benchmarks.jsonl) contains one environment record and all 18 measured method/scenario records, including current RSS, HWM, sampled Lua heap, CPU, I/O, input digest, output bounds, latency, first sink body chunk, ping delay and the untimed semantic oracle. All nine pairs have byte-identical input SHA256 and passing complete-output semantic/SHA checks. Each method/scenario starts fresh workers. The default output bound is 64 KiB; the separate sink reads at most 16 KiB. No body capture or full output parsing occurs during timed requests.
 

@@ -49,6 +49,8 @@ qjson.close(body)
 
 `finish()` confirms EOF and returns `value` or `nil, error`. Strings, numbers, booleans, null and containers all require successful completion. Repeated successful `finish()` calls create views of the same immutable source. Feeding after completion is rejected without invalidating completed values.
 
+`feed()` and `finish()` reject overlapping calls with `nil, error` while an earlier input/completion operation is suspended in a callback. Rejection does not abort the source or accept any bytes from the overlapping call. Resume/complete the current operation before feeding or finishing again; `close()` and `abort()` remain available for cancellation.
+
 `get(path)` returns one of:
 
 | Result | Meaning |
@@ -64,7 +66,7 @@ The native `NEED_READ` status is handled internally through bounded file windows
 
 ## Paths, proxies and explicit reads
 
-`qjson.get(value, path)` follows the existing Doc path grammar: dot keys and zero-based uint32 bracket indexes, such as `messages[0].role`. Proxy array indexing remains one-based. Invalid paths and type mismatches raise; an absent value returns nil. Returned container proxies remain linked to their live ancestors just like ordinary indexing, until a parent path is replaced/deleted/closed. The accessor creates no hidden intermediate proxy leases.
+`qjson.get(value, path)` follows the existing Doc path grammar: dot keys and zero-based uint32 bracket indexes, such as `messages[0].role`. Proxy array indexing remains one-based. Invalid paths and type mismatches raise; an absent value returns nil. Returned container proxies remain linked to their live ancestors just like ordinary indexing, until a parent path is replaced/deleted/closed. Path and ordinary indexing share canonical private cells, including across array insert/remove; repeated attached-child reads return the same live proxy. The accessor creates no hidden intermediate public proxies or leases.
 
 File/incremental proxies use the same overlays, duplicate-key last-wins lookup, snapshots, array helpers and reader as memory proxies. Untouched scalar output preserves its raw numeric/string spelling, including integers above the Lua exact-number range. Explicit scalar access can materialize one entire string or numeric token; numeric access converts to a Lua number and rejects nonfinite results. Explicit `qjson.encode` and `qjson.materialize` can allocate complete outputs/trees.
 
@@ -78,7 +80,7 @@ All native source offsets are uint64. Before Lua file I/O or span arithmetic, of
 
 Each holder retains every backend referenced by its logical value. Replacing a node acquires its new dependencies before releasing old ones. Dependency collection stops at immutable raw subtrees and walks only synthetic overlay nodes; it does not read/materialize source descendants. Removing the last source dependency can close a file while a fully synthetic proxy remains usable.
 
-Active backend operations belong to the initiating holder's cancellation scope. Explicit holder close cancels only its own operations and releases their leases immediately, even if its coroutine remains suspended/killed and GC is stopped. True source I/O errors invalidate all consumers of that source and remain errors rather than normal EOF. GC finalizers are fallback cleanup for omitted closes and avoid weak-table key/value cycles.
+Active backend operations belong to the initiating public holder's cancellation scope, including through private path ancestors. Explicit holder close cancels only its own operations and releases their leases immediately, even if its coroutine remains suspended/killed and GC is stopped. True source I/O errors invalidate all consumers of that source and remain errors rather than normal EOF. GC finalizers are fallback resource cleanup for omitted closes and avoid weak-table key/value cycles. Collecting a public wrapper releases its leases without changing canonical logical links needed by a live root and descendant; explicit close retains its detach semantics.
 
 The final lease closes the descriptor and unlinks an owned spool deterministically. An original `decode_file` path is never unlinked. Reader EOF, error and close release only that reader's scope; other holders remain valid.
 

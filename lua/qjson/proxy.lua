@@ -7,12 +7,18 @@ local META = setmetatable({}, { __mode = "k" })
 local GC_TOKENS = setmetatable({}, { __mode = "k" })
 local Object, Array = {}, {}
 local config
-local close_cell
+local function live_holder(cell)
+    local value = cell.public and cell.public[1]
+    local holder = value and META[value]
+    if holder and not holder.closed then return holder, value end
+end
 
 local function watch_resources(cell)
-    local value = cell.public and cell.public[1]
-    if value and #cell.scope.entries > 0 and not GC_TOKENS[value] then
-        GC_TOKENS[value] = ffi.gc(ffi.new("uint8_t[1]"), function() close_cell(cell) end)
+    local holder, value = live_holder(cell)
+    if holder and #holder.scope.entries > 0 and not GC_TOKENS[value] then
+        local scope = holder.scope
+        -- GC releases this public holder only. It never changes logical links.
+        GC_TOKENS[value] = ffi.gc(ffi.new("uint8_t[1]"), function() leases.release(scope) end)
     end
 end
 
@@ -71,82 +77,70 @@ local function changed(node, key, value, scope)
     return { kind = node.kind, keys = new_keys, values = new_values }
 end
 
-local function sync_cached(cell, old, node)
-    if not old.values or not node.values then return end
-    for key, cached in pairs(cell.cache) do
-        local child = META[cached]
-        local next_node = node.values[key]
-        if child and not child.closed and child.node == old.values[key] and child.node ~= next_node then
-            if next_node == nil then child.parent = nil; cell.cache[key] = nil
-            else
-                if not child.borrowed then leases.retarget(child.scope, next_node); watch_resources(child) end
-                sync_cached(child, child.node, next_node)
-                child.node, child.version = next_node, child.version + 1
-            end
-        end
-    end
-end
-
-local function replace(cell, node)
-    leases.check(cell.scope)
-    if not cell.borrowed then leases.retarget(cell.scope, node); watch_resources(cell) end
+local function replace(cell, node, scope)
+    leases.check(scope)
+    if cell.closed then error("qjson: holder closed", 0) end
+    local holder = live_holder(cell)
+    if holder then leases.retarget(holder.scope, node); watch_resources(cell) end
     local old = cell.node
-    sync_cached(cell, old, node)
     cell.node, cell.version = node, cell.version + 1
     local parent = cell.parent
     if parent and not parent.closed then
-        local cached = parent.cache[cell.key]
-        local cached_cell = cached and META[cached]
-        if cell.borrowed and cached_cell and cached_cell ~= cell and cached_cell.node == old then
-            replace(cached_cell, node)
-            return
-        end
-        local _, values = M.members(parent.node, parent.scope)
+        local _, values = M.members(parent.node, scope)
         if parent.closed then cell.parent = nil; return end
         if values[cell.key] == old then
-            replace(parent, changed(parent.node, cell.key, node, parent.scope))
+            replace(parent, changed(parent.node, cell.key, node, scope), scope)
         elseif cell.lexical then
             -- Earlier duplicate occurrences may be traversed for compatibility,
             -- but only the last occurrence participates in the logical value.
-            replace(parent, changed(parent.node, cell.key, values[cell.key], parent.scope))
+            replace(parent, changed(parent.node, cell.key, values[cell.key], scope), scope)
         end
     end
 end
 
-local function wrap(node, parent, key, lexical)
-    local proxy = setmetatable({}, node.kind == "array" and Array or Object)
-    local cell = { node = node, parent = parent, key = key, cache = setmetatable({}, { __mode = "v" }),
-        version = 0, lexical = lexical, scope = leases.acquire(node), public = setmetatable({ proxy }, { __mode = "v" }) }
-    META[proxy] = cell
-    -- The cell never stores this token and contains no strong public proxy.
-    -- A held child's parent cell therefore cannot retain a dead parent's lease.
-    watch_resources(cell)
-    return proxy
+local function new_cell(node, parent, key, lexical)
+    return { node = node, parent = parent, key = key, children = {}, version = 0, lexical = lexical }
 end
 
-local function expose(node, parent, key, lexical)
-    if node == nil then return nil end
-    if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, parent and parent.scope) end
+local function wrap(cell)
+    local holder, value = live_holder(cell)
+    if holder then return value end
+    value = setmetatable({}, cell.node.kind == "array" and Array or Object)
+    META[value] = { cell = cell, scope = leases.acquire(cell.node) }
+    cell.public = setmetatable({ value }, { __mode = "v" })
+    watch_resources(cell)
+    return value
+end
+
+local function child_cell(node, parent, key, lexical, scope)
     if parent and not lexical then
         -- A metadata load can yield while the mutable parent cell is replaced.
         -- Only attach/cache the child if it still belongs to the current node;
         -- otherwise the in-flight read returns its detached old snapshot.
         while true do
-            leases.check(parent.scope)
+            leases.check(scope)
+            if parent.closed then return new_cell(node) end
             local current, version = parent.node, parent.version
-            local _, values = M.members(current, parent.scope)
+            local _, values = M.members(current, scope)
             if parent.node == current and parent.version == version then
-                if values[key] ~= node then return wrap(node) end
+                if values[key] ~= node then return new_cell(node) end
                 break
             end
         end
-        local cached = parent.cache[key]
-        if cached then return cached end
-        local proxy = wrap(node, parent, key)
-        parent.cache[key] = proxy
-        return proxy
+        local cached = parent.children[key]
+        if cached and cached.node == node and not cached.closed then return cached end
+        if cached then cached.parent = nil end
+        local cell = new_cell(node, parent, key)
+        parent.children[key] = cell
+        return cell
     end
-    return wrap(node, parent, key, lexical)
+    return new_cell(node, parent, key, lexical)
+end
+
+local function expose(node, parent, key, lexical, scope)
+    if node == nil then return nil end
+    if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, scope) end
+    return wrap(child_cell(node, parent, key, lexical, scope))
 end
 
 local function array_length(node, scope)
@@ -159,8 +153,8 @@ end
 local snapshot
 snapshot = function(value, active, depth)
     if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
-    local cell = META[value]
-    if cell then leases.check(cell.scope); return cell.node end
+    local holder = META[value]
+    if holder then leases.check(holder.scope); return holder.cell.node end
     local tv = type(value)
     if tv ~= "table" then return { kind = tv, value = value } end
     if active[value] then error("qjson.encode: circular reference", 0) end
@@ -191,8 +185,8 @@ end
 function M.snapshot(value) return snapshot(value, {}, 1) end
 function M.is_proxy(value) return META[value] ~= nil end
 function M.node(value)
-    local cell = META[value]
-    if cell then leases.check(cell.scope); return cell.node end
+    local holder = META[value]
+    if holder then leases.check(holder.scope); return holder.cell.node end
 end
 function M.scope(value) return META[value] and META[value].scope end
 function M.from_backend(backend, handle) return expose(raw_node(backend, handle)) end
@@ -202,57 +196,49 @@ function M.fork(value) return expose(M.snapshot(value)) end
 function M.get_path(value, segments)
     if #segments == 0 then return value end
     local owner = META[value]
-    return leases.guard(owner.scope, owner.node, function()
-        local cell, node = owner, owner.node
+    return leases.guard(owner.scope, owner.cell.node, function()
+        local cell, node = owner.cell, owner.cell.node
         for i, segment in ipairs(segments) do
             if node.kind ~= segment.kind then error("qjson.get: type mismatch", 0) end
             local _, values = M.members(node, owner.scope)
             leases.check(owner.scope)
             node = values[segment.key]
             if node == nil then return nil end
-            if i == #segments then return expose(node, cell, segment.key) end
-            local cached = cell.cache[segment.key]
-            local cached_cell = cached and META[cached]
-            if cached_cell and cached_cell.node == node then cell = cached_cell
-            else
-                -- These path ancestors are internal links, not public proxies.
-                -- They own no lease: the returned child owns its source, while
-                -- a still-linked live ancestor owns all sibling dependencies.
-                cell = { node = node, parent = cell, key = segment.key, borrowed = true,
-                    cache = setmetatable({}, { __mode = "v" }), version = 0 }
-            end
+            if i == #segments then return expose(node, cell, segment.key, false, owner.scope) end
+            if node.kind ~= "object" and node.kind ~= "array" then error("qjson.get: type mismatch", 0) end
+            -- Intermediate cells are canonical logical links, not public
+            -- holders. Every yielded operation still uses the initiating scope.
+            cell = child_cell(node, cell, segment.key, false, owner.scope)
         end
     end)
 end
 
-close_cell = function(cell)
-    if cell.closed then return end
+local function close_cell(cell)
     cell.closed, cell.version = true, cell.version + 1
     local parent = cell.parent
-    if parent and parent.cache then
-        local cached = parent.cache[cell.key]
-        if cached and META[cached] == cell then parent.cache[cell.key] = nil end
+    if parent and parent.children[cell.key] == cell then
+        parent.children[cell.key] = nil
     end
-    for _, child in pairs(cell.cache) do
-        local child_cell = META[child]
-        if child_cell and child_cell.parent == cell then child_cell.parent = nil end
+    for _, child in pairs(cell.children) do
+        if child.parent == cell then child.parent = nil end
     end
-    cell.parent, cell.node, cell.cache = nil, nil, {}
-    leases.release(cell.scope)
+    cell.parent, cell.node, cell.children = nil, nil, {}
 end
 
 function M.close(value)
-    local cell = META[value]
-    if not cell or cell.closed then return end
+    local holder = META[value]
+    if not holder or holder.closed then return end
+    holder.closed = true
     local token = GC_TOKENS[value]
     if token then ffi.gc(token, nil); GC_TOKENS[value] = nil end
-    close_cell(cell)
+    close_cell(holder.cell)
+    leases.release(holder.scope)
 end
 
 function M.type(value)
     if rawequal(value, config.null) then return "null" end
-    local cell = META[value]
-    if cell then leases.check(cell.scope); return cell.node.kind end
+    local holder = META[value]
+    if holder then leases.check(holder.scope); return holder.cell.node.kind end
     if type(value) == "table" then
         local kind = config.classify(value)
         return kind
@@ -261,38 +247,40 @@ function M.type(value)
 end
 
 local function read(proxy, key)
-    local cell = META[proxy]
-    return leases.guard(cell.scope, cell.node, function()
-    if cell.node.kind == "object" then
-        if type(key) ~= "string" then return nil end
-    elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) then
-        return nil
-    end
-    local _, values = M.members(cell.node, cell.scope)
-    leases.check(cell.scope)
-    return expose(values[key], cell, key)
+    local holder = META[proxy]
+    local cell = holder.cell
+    return leases.guard(holder.scope, cell.node, function()
+        if cell.node.kind == "object" then
+            if type(key) ~= "string" then return nil end
+        elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) then
+            return nil
+        end
+        local _, values = M.members(cell.node, holder.scope)
+        leases.check(holder.scope)
+        return expose(values[key], cell, key, false, holder.scope)
     end)
 end
 
 local function write(proxy, key, value)
-    local cell = META[proxy]
-    return leases.guard(cell.scope, cell.node, function()
-    if cell.node.kind == "object" then
-        if type(key) ~= "string" then error("qjson: object key must be a string, got " .. type(key), 0) end
-    elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key == math.huge then
-        error("qjson: array index must be a positive integer", 0)
-    end
-    local present = type(value) ~= "nil"
-    if cell.node.kind == "array" then
-        local n = array_length(cell.node, cell.scope)
-        if (present and key > n + 1) or (not present and key < n) then
-            error("qjson: sparse proxy arrays require explicit materialization", 0)
+    local holder = META[proxy]
+    local cell = holder.cell
+    return leases.guard(holder.scope, cell.node, function()
+        if cell.node.kind == "object" then
+            if type(key) ~= "string" then error("qjson: object key must be a string, got " .. type(key), 0) end
+        elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key == math.huge then
+            error("qjson: array index must be a positive integer", 0)
         end
-    end
-    local node = present and M.snapshot(value) or nil
-    local cached = cell.cache[key]
-    if cached then META[cached].parent = nil; cell.cache[key] = nil end
-    replace(cell, changed(cell.node, key, node, cell.scope))
+        local present = type(value) ~= "nil"
+        if cell.node.kind == "array" then
+            local n = array_length(cell.node, holder.scope)
+            if (present and key > n + 1) or (not present and key < n) then
+                error("qjson: sparse proxy arrays require explicit materialization", 0)
+            end
+        end
+        local node = present and M.snapshot(value) or nil
+        local cached = cell.children[key]
+        if cached then cached.parent = nil; cell.children[key] = nil end
+        replace(cell, changed(cell.node, key, node, holder.scope), holder.scope)
     end)
 end
 
@@ -300,23 +288,25 @@ Object.__index, Array.__index = read, read
 Object.__newindex, Array.__newindex = write, write
 
 function M.len(value)
-    local cell = META[value]
-    if not cell then return #value end
-    return leases.guard(cell.scope, cell.node, function()
-    if cell.node.kind == "array" then return array_length(cell.node, cell.scope) end
-    local keys = M.members(cell.node, cell.scope)
-    return #keys
+    local holder = META[value]
+    if not holder then return #value end
+    local cell = holder.cell
+    return leases.guard(holder.scope, cell.node, function()
+        if cell.node.kind == "array" then return array_length(cell.node, holder.scope) end
+        local keys = M.members(cell.node, holder.scope)
+        return #keys
     end)
 end
 Object.__len, Array.__len = M.len, M.len
 
 function M.ipairs(value)
-    local cell = META[value]
-    if not cell then return ipairs(value) end
-    leases.check(cell.scope)
+    local holder = META[value]
+    if not holder then return ipairs(value) end
+    local cell = holder.cell
+    leases.check(holder.scope)
     local index, version = 0, cell.version
     return function()
-        leases.check(cell.scope)
+        leases.check(holder.scope)
         if cell.version ~= version then error("qjson: invalid argument", 0) end
         index = index + 1
         local child = read(value, index)
@@ -325,13 +315,14 @@ function M.ipairs(value)
 end
 
 function M.pairs(value)
-    local cell = META[value]
-    if not cell then return pairs(value) end
-    leases.check(cell.scope)
+    local holder = META[value]
+    if not holder then return pairs(value) end
+    local cell = holder.cell
+    leases.check(holder.scope)
     if cell.node.kind == "array" then return M.ipairs(value) end
-    local pin = leases.pin(cell.scope, cell.node)
-    local fallback = leases.fallback(cell.scope, pin)
-    local keys, values, entries = M.members(cell.node, cell.scope)
+    local pin = leases.pin(holder.scope, cell.node)
+    local fallback = leases.fallback(holder.scope, pin)
+    local keys, values, entries = M.members(cell.node, holder.scope)
     local lexical_entries = cell.node.backend and entries
     local index = 0
     return function()
@@ -348,21 +339,21 @@ function M.pairs(value)
             if key ~= nil then node = values[key] end
         end
         if key ~= nil then
-            local _, current = M.members(cell.node, cell.scope)
+            local _, current = M.members(cell.node, holder.scope)
             local lexical = current[key] ~= node
-            return key, expose(node, cell, key, lexical)
+            return key, expose(node, cell, key, lexical, holder.scope)
         end
-        leases.finish(cell.scope, pin)
+        leases.finish(holder.scope, pin)
         fallback = nil
     end, nil, nil
 end
 Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs
 
 local function check_array(value, index, inserting)
-    local cell = META[value]
+    local holder = META[value]
     if M.type(value) ~= "array" then error("qjson: expected array", 0) end
     local n = M.len(value)
-    if not cell then
+    if not holder then
         local count = 0
         for key in pairs(value) do
             if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > n then
@@ -375,42 +366,44 @@ local function check_array(value, index, inserting)
     if type(index) ~= "number" or index ~= math.floor(index) or index < 1
         or index > n + (inserting and 1 or 0)
     then error("qjson: array index out of range", 0) end
-    return cell, n
+    return holder, n
 end
 
 function M.array_insert(value, index, child)
-    local cell, n = check_array(value, index, true)
+    local holder, n = check_array(value, index, true)
     if type(child) == "nil" then error("qjson: array_insert requires a value", 0) end
-    if not cell then table.insert(value, index, child); return end
+    if not holder then table.insert(value, index, child); return end
+    local cell = holder.cell
     local inserted = M.snapshot(child)
-    local _, old = M.members(cell.node)
+    local _, old = M.members(cell.node, holder.scope)
     local values, keys = copy_map(old), {}
     for i = n, index, -1 do
         values[i + 1] = values[i]
-        cell.cache[i + 1] = cell.cache[i]
-        if cell.cache[i + 1] then META[cell.cache[i + 1]].key = i + 1 end
+        cell.children[i + 1] = cell.children[i]
+        if cell.children[i + 1] then cell.children[i + 1].key = i + 1 end
     end
-    cell.cache[index] = nil
+    cell.children[index] = nil
     values[index] = inserted
     for i = 1, n + 1 do keys[i] = i end
-    replace(cell, { kind = "array", keys = keys, values = values })
+    replace(cell, { kind = "array", keys = keys, values = values }, holder.scope)
 end
 
 function M.array_remove(value, index)
-    local cell, n = check_array(value, index, false)
-    if not cell then return table.remove(value, index) end
+    local holder, n = check_array(value, index, false)
+    if not holder then return table.remove(value, index) end
+    local cell = holder.cell
     local removed = read(value, index)
-    if META[removed] then META[removed].parent = nil end
-    local _, old = M.members(cell.node)
+    if META[removed] then META[removed].cell.parent = nil end
+    local _, old = M.members(cell.node, holder.scope)
     local values, keys = copy_map(old), {}
     for i = index, n - 1 do
         values[i] = values[i + 1]
-        cell.cache[i] = cell.cache[i + 1]
-        if cell.cache[i] then META[cell.cache[i]].key = i end
+        cell.children[i] = cell.children[i + 1]
+        if cell.children[i] then cell.children[i].key = i end
     end
-    values[n], cell.cache[n] = nil, nil
+    values[n], cell.children[n] = nil, nil
     for i = 1, n - 1 do keys[i] = i end
-    replace(cell, { kind = "array", keys = keys, values = values })
+    replace(cell, { kind = "array", keys = keys, values = values }, holder.scope)
     return removed
 end
 

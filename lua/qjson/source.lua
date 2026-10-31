@@ -342,10 +342,14 @@ end
 
 function Decoder:feed(chunk)
     if self.failure then return nil, self.failure end
-    if self.closed or self.finished then return nil, "qjson.decoder: closed for input" end
+    if self.closed then return nil, "qjson.decoder: closed for input" end
+    if self.input_busy then return nil, "qjson.decoder: input operation in progress" end
+    if self.finished then return nil, "qjson.decoder: closed for input" end
     local lease = self.backend:retain()
     local record = leases.track(self.scope, function() self.backend:release(lease) end)
+    self.input_busy = true
     local ok, err = pcall(feed_bytes, self.backend, chunk, true, self.scope)
+    self.input_busy = nil
     leases.finish(self.scope, record)
     if not ok then return self:fail(err) end
     return true
@@ -354,11 +358,16 @@ end
 function Decoder:finish()
     if self.failure then return nil, self.failure end
     if self.closed then return nil, "qjson.decoder: closed" end
+    if self.input_busy then return nil, "qjson.decoder: input operation in progress" end
+    self.input_busy = true
     local ok, value = pcall(function()
         leases.check(self.scope)
-        if not self.finished then self.node = finish_backend(self.backend); self.finished = true end
-        return path.from_node(self.node, {}, self.scope)
+        if not self.finished then self.node = finish_backend(self.backend) end
+        local completed = path.from_node(self.node, {}, self.scope)
+        self.finished = true
+        return completed
     end)
+    self.input_busy = nil
     if not ok then return self:fail(value) end
     return value
 end

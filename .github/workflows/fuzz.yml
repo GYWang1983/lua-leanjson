@@ -46,12 +46,13 @@ jobs:
       - name: Install cargo-fuzz
         run: |
           if ! command -v cargo-fuzz >/dev/null 2>&1; then
-            cargo install --locked cargo-fuzz
+            cargo +nightly install --version 0.13.2 --locked cargo-fuzz
           fi
 
       - name: Run timed fuzz targets
         env:
           DISPATCH_MAX_TOTAL_TIME: ${{ github.event.inputs.max_total_time }}
+          QJSON_FUZZ_OUTPUT_DIR: ${{ runner.temp }}/qjson-fuzz
         run: |
           set -euo pipefail
           max_total_time="${DISPATCH_MAX_TOTAL_TIME:-}"
@@ -63,8 +64,12 @@ jobs:
               exit 1
           fi
 
-          cargo +nightly fuzz run fuzz_parse_eager -- -max_total_time="$max_total_time"
-          cargo +nightly fuzz run fuzz_depth -- -max_total_time="$max_total_time"
-          cargo +nightly fuzz run fuzz_ffi_ops -- -max_total_time="$max_total_time"
-          cargo +nightly fuzz run fuzz_numbers -- -max_total_time="$max_total_time"
-          cargo +nightly fuzz run fuzz_parse_lazy -- -max_total_time="$max_total_time"
+          QJSON_FUZZ_SECONDS="$max_total_time" make bounded-fuzz
+
+      - name: Preserve failing fuzz artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-failure-artifacts
+          path: ${{ runner.temp }}/qjson-fuzz/**/artifacts/
+          if-no-files-found: ignore

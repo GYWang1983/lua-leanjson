@@ -27,6 +27,14 @@ local function get(path, target_port)
 end
 local function sink_count() return get("/stats", sink_port).requests end
 local initial_health = get("/health")
+local function empty_directory(name)
+    local directory = os.getenv("QJSON_TEST_PREFIX") .. "/" .. name
+    local quoted = "'" .. directory:gsub("'", "'\\''") .. "'"
+    local listing = assert(io.popen("ls -A " .. quoted, "r"))
+    local entries = listing:read("*a")
+    assert(listing:close())
+    assert(entries == "", "leaked body/spool files in " .. name .. ": " .. entries)
+end
 local function capture(result)
     local file = assert(io.open(assert(result.sink.capture), "rb"))
     local raw = assert(file:read("*a")) -- client-side semantic oracle, not the upstream sink
@@ -223,10 +231,7 @@ check("aborted uploads release resources and the same worker stays alive", funct
     assert(after.pid == health.pid)
     assert(after.fd_count <= health.fd_count + 2, cjson.encode { before = health, after = after })
     assert(sink_count() == before)
-    local lfs = require "lfs"
-    for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/decoder") do
-        assert(name == "." or name == "..", "leaked decoder file: " .. name)
-    end
+    empty_directory("decoder")
 end)
 check("client abort during yielding completed-file scanning closes its fd without GC", function()
     local before = get("/health")
@@ -349,12 +354,8 @@ check("all completed and failed paths clean file leases without forcing GC", fun
     local final = get("/health")
     assert(final.pid == initial_health.pid)
     assert(final.fd_count <= initial_health.fd_count + 2, cjson.encode { initial = initial_health, final = final })
-    local lfs = require "lfs"
-    for _, directory in ipairs { "client-body", "decoder" } do
-        for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/" .. directory) do
-            assert(name == "." or name == "..", "leaked body/spool file: " .. directory .. "/" .. name)
-        end
-    end
+    empty_directory("client-body")
+    empty_directory("decoder")
 end)
 print("1.." .. count)
 assert(failures == 0, failures .. " native OpenResty acceptance checks failed")

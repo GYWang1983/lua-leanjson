@@ -313,7 +313,7 @@ jobs:
       - name: Install cargo-fuzz
         run: |
           if ! command -v cargo-fuzz >/dev/null 2>&1; then
-            cargo install --locked cargo-fuzz
+            cargo +nightly install --version 0.13.2 --locked cargo-fuzz
           fi
 
       - name: Replay fuzz corpora
@@ -322,6 +322,9 @@ jobs:
           cargo +nightly fuzz run fuzz_depth -- -runs=0
           cargo +nightly fuzz run fuzz_ffi_ops -- -runs=0
           cargo +nightly fuzz run fuzz_parse_lazy -- -runs=0
+          mkdir -p /tmp/qjson-source-corpus
+          cp -R fuzz/corpus/fuzz_parse_eager/. /tmp/qjson-source-corpus/
+          cargo +nightly fuzz run fuzz_source_windows /tmp/qjson-source-corpus -- -runs=0 -max_len=16384
 
   sanitizers:
     name: Sanitizers (Rust nightly)

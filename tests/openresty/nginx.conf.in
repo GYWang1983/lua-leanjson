@@ -10,6 +10,7 @@ env QJSON_SINK_PORT;
 events { worker_connections 1024; }
 http {
     access_log off;
+    init_by_lua_block { require "lfs" }
     lua_package_path '@ROOT@/lua/?.lua;@ROOT@/examples/openresty/?.lua;@ROOT@/tests/openresty/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;';
     lua_check_client_abort on;
     client_max_body_size 256m;

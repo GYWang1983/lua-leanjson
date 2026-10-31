@@ -4,9 +4,12 @@ repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo"
 # A separate nightly gate. Never silently replace libFuzzer with a smoke test.
 seconds=${QJSON_FUZZ_SECONDS:-30}
-scratch=$(mktemp -d "${TMPDIR:-/tmp}/qjson-fuzz.XXXXXX")
+output_dir=${QJSON_FUZZ_OUTPUT_DIR:-${TMPDIR:-/tmp}}
+mkdir -p "$output_dir"
+scratch=$(mktemp -d "$output_dir/qjson-fuzz.XXXXXX")
 cleanup() {
-    if [[ ${QJSON_KEEP_FUZZ_OUTPUT:-0} == 1 ]]; then echo "Fuzz artifacts: $scratch";
+    local result=$?
+    if [[ "$result" != 0 || ${QJSON_KEEP_FUZZ_OUTPUT:-0} == 1 ]]; then echo "Fuzz artifacts: $scratch";
     else rm -rf "$scratch"; fi
 }
 trap cleanup EXIT

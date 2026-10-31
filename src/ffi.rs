@@ -120,7 +120,7 @@ pub unsafe extern "C" fn qjson_format_error(
         let input = if buf.is_null() || buf_len == 0 {
             &[][..]
         } else {
-            std::slice::from_raw_parts(buf as *const u8, buf_len)
+            std::slice::from_raw_parts(buf.cast::<u8>(), buf_len)
         };
         let msg = match err_from_i32(code) {
             Some(err) => crate::error::format_error(err, offset, extra, input),
@@ -130,8 +130,8 @@ pub unsafe extern "C" fn qjson_format_error(
         if out_len <= needed || out.is_null() {
             return needed;
         }
-        ptr::copy_nonoverlapping(msg.as_ptr(), out as *mut u8, needed);
-        *(out as *mut u8).add(needed) = 0;
+        ptr::copy_nonoverlapping(msg.as_ptr(), out.cast::<u8>(), needed);
+        *out.cast::<u8>().add(needed) = 0;
         needed
     }));
     r.unwrap_or_default()
@@ -260,7 +260,7 @@ unsafe fn resolve_root_path(
     let p: &[u8] = if path.is_null() {
         &[]
     } else {
-        std::slice::from_raw_parts(path as *const u8, path_len)
+        std::slice::from_raw_parts(path.cast::<u8>(), path_len)
     };
     let cur = Cursor::root(d).resolve(d, p)?;
     Ok((std::mem::transmute::<&Document<'_>, &'static Document<'static>>(d), cur))
@@ -718,7 +718,7 @@ pub unsafe extern "C" fn qjson_cursor_open(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         match cur.resolve(d, p) {
             Ok(child) => { *out = internal_to_cursor((*c).doc, child); qjson_err::QJSON_OK as c_int }
@@ -749,7 +749,7 @@ pub unsafe extern "C" fn qjson_cursor_field(
             return qjson_err::QJSON_INVALID_ARG as c_int;
         }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
-        let k = if key.is_null() { &[][..] } else { std::slice::from_raw_parts(key as *const u8, key_len) };
+        let k = if key.is_null() { &[][..] } else { std::slice::from_raw_parts(key.cast::<u8>(), key_len) };
         let child = match crate::cursor::resolve_single_key(d, cur, k) {
             Ok(x) => x,
             Err(e) => {
@@ -815,7 +815,7 @@ pub unsafe extern "C" fn qjson_cursor_get_str(
         }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -860,7 +860,7 @@ pub unsafe extern "C" fn qjson_cursor_get_i64(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -904,7 +904,7 @@ pub unsafe extern "C" fn qjson_cursor_get_u64(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -947,7 +947,7 @@ pub unsafe extern "C" fn qjson_cursor_get_f64(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -991,7 +991,7 @@ pub unsafe extern "C" fn qjson_cursor_get_bool(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -1035,7 +1035,7 @@ pub unsafe extern "C" fn qjson_cursor_typeof(
         if type_out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,
@@ -1072,7 +1072,7 @@ pub unsafe extern "C" fn qjson_cursor_len(
         if out.is_null() { return qjson_err::QJSON_INVALID_ARG as c_int; }
         let (d, cur) = match cursor_to_internal(c) { Ok(x) => x, Err(e) => return e as c_int };
         let p: &[u8] = if path.is_null() { &[] } else {
-            std::slice::from_raw_parts(path as *const u8, path_len)
+            std::slice::from_raw_parts(path.cast::<u8>(), path_len)
         };
         let cur = match cur.resolve(d, p) {
             Ok(x) => x,

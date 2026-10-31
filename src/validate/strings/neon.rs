@@ -1,5 +1,3 @@
-#![cfg(target_arch = "aarch64")]
-
 //! NEON ASCII fast path for string-content validation.
 //!
 //! For each 16-byte chunk, compute a single "needs-attention" mask covering

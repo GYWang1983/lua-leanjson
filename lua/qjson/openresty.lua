@@ -57,21 +57,24 @@ local function completed(opts, json)
     local data = ngx.req.get_body_data()
     local file = data == nil and ngx.req.get_body_file() or nil
     local info = { mode = file and "completed-file" or "completed-memory", source = file and "file" or "memory" }
-    local holder = { aborted = false }
+    local cancellation = { aborted = false }
+    local value
     local unregister, err = on_abort(function()
-        holder.aborted = true
-        release(holder.value)
+        cancellation.aborted = true
+        release(value)
     end)
     if not unregister then return nil, err, info end
     -- Register before file decoding: decode_file may yield while it still owns
     -- an in-progress Source and has not returned a proxy for us to close yet.
     local chunk_hook = json.on_chunk
     json.on_chunk = function(bytes)
-        if holder.aborted then error("client aborted") end
+        -- The backend retains this hook. Capture cancellation state only: a
+        -- reference to the public root here would keep its weak-key owner alive.
+        if cancellation.aborted then error("client aborted") end
         chunk_hook(bytes)
-        if holder.aborted then error("client aborted") end
+        if cancellation.aborted then error("client aborted") end
     end
-    local ok, value
+    local ok
     if file then
         -- decode_file keeps an open fd; the Nginx-owned pathname is never removed
         -- or read into a full Lua string by this adapter.
@@ -80,8 +83,7 @@ local function completed(opts, json)
         ok, value = pcall(qjson.decode, data or "", json)
     end
     if not ok then unregister(); return nil, value, info end
-    holder.value = value
-    if holder.aborted then release(value); unregister(); return nil, "client aborted", info end
+    if cancellation.aborted then release(value); unregister(); return nil, "client aborted", info end
     -- read_body transfers normal-path ownership to its caller. The abort hook
     -- is a fallback for cancellation and remains idempotent after caller close.
     return value, nil, info

@@ -71,6 +71,7 @@ The runtime file set is small:
 | `/usr/local/share/lua/5.1/qjson/lib.lua` | FFI loader |
 | `/usr/local/share/lua/5.1/qjson/table.lua` | Lazy table API and encoder |
 | `/usr/local/share/lua/5.1/qjson/{proxy,reader,source_memory}.lua` | Immutable nodes, bounded output and memory source adapter |
+| `/usr/local/share/lua/5.1/qjson/{leases,path,source,source_io}.lua` | Holder ownership, shared paths and file/incremental source support |
 | `/usr/local/share/lua/5.1/qjson/openresty.lua` | Explicit native OpenResty input/output adapter |
 
 The runtime also needs OpenResty LuaJIT (preferred) or LuaJIT, plus the normal

@@ -7,10 +7,14 @@ env LD_LIBRARY_PATH;
 env QJSON_TEST_PREFIX;
 env QJSON_TEST_PORT;
 env QJSON_SINK_PORT;
+env QJSON_RUN_MODE;
 events { worker_connections 1024; }
 http {
     access_log off;
-    init_by_lua_block { require "lfs" }
+    init_by_lua_block {
+        require "lfs"
+        if os.getenv("QJSON_RUN_MODE") ~= "benchmark" then require "instrumentation" end
+    }
     lua_package_path '@ROOT@/lua/?.lua;@ROOT@/examples/openresty/?.lua;@ROOT@/tests/openresty/?.lua;/usr/local/share/lua/5.1/?.lua;/usr/local/share/lua/5.1/?/init.lua;;';
     lua_check_client_abort on;
     client_max_body_size 256m;
@@ -24,6 +28,7 @@ http {
         location = /ping { content_by_lua_block { ngx.say("{}") } }
         location = /benchmark { content_by_lua_file @ROOT@/tests/openresty/benchmark-handler.lua; }
         location = /example { content_by_lua_file @ROOT@/examples/openresty/handler.lua; }
+        location /lifecycle/ { content_by_lua_file @ROOT@/tests/openresty/lifecycle.lua; }
         location / { content_by_lua_file @ROOT@/tests/openresty/handler.lua; }
     }
 }

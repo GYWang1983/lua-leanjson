@@ -120,6 +120,86 @@ check("the example rejects an array root and releases both root and fork", funct
     get("/gc?action=restart")
     assert(ok, err)
 end)
+for _, endpoint in ipairs { "/example", "/completed" } do
+    local name = endpoint:sub(2)
+    check(name .. " closes a fork cancelled during its first yielding write without GC", function()
+        local before = sink_count()
+        get("/gc?action=stop")
+        local ok, err = xpcall(function()
+            local case = name .. "-first-write-abort"
+            local marker = os.getenv("QJSON_TEST_PREFIX") .. "/mutation-" .. case
+            local sock = assert(ngx.socket.tcp())
+            assert(sock:connect("127.0.0.1", port))
+            local raw = '{"model":"old","prompt":"' .. ("p"):rep(200000) .. '"}'
+            local route = endpoint .. "?case=" .. case .. "&fault=pause"
+            assert(sock:send("POST " .. route .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
+                #raw .. "\r\n\r\n" .. raw))
+            local paused
+            for _ = 1, 100 do
+                local file = io.open(marker, "r")
+                if file then file:close(); paused = true; break end
+                ngx.sleep(0.01)
+            end
+            assert(paused, "first mutation never reached a source read")
+            sock:close()
+            ngx.sleep(0.3)
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.paused and probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+            assert(sink_count() == before)
+        end, debug.traceback)
+        get("/gc?action=restart")
+        assert(ok, err)
+    end)
+    check(name .. " unwinds a first-write source error and closes its fd without GC", function()
+        local before = sink_count()
+        get("/gc?action=stop")
+        local ok, err = xpcall(function()
+            local case = name .. "-first-write-error"
+            local raw = '{"model":"old","prompt":"' .. ("p"):rep(200000) .. '"}'
+            local client = http.new()
+            local response = assert(client:request_uri("http://127.0.0.1:" .. port .. endpoint ..
+                "?case=" .. case .. "&fault=truncate", { method = "POST", body = raw, keepalive = false }))
+            assert(response.status == 500, response.body)
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.truncated and probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+            assert(sink_count() == before)
+        end, debug.traceback)
+        get("/gc?action=restart")
+        assert(ok, err)
+    end)
+end
+for _, endpoint in ipairs { "/example", "/connect-failure" } do
+    check(endpoint:sub(2) .. " releases all file holders after an upstream connection failure without GC", function()
+        get("/gc?action=stop")
+        local ok, err = xpcall(function()
+            local case = endpoint:sub(2) .. "-connection-error"
+            local raw = '{"model":"old","prompt":"' .. ("c"):rep(200000) .. '"}'
+            local status, result = request(endpoint .. "?case=" .. case, raw)
+            assert((status == 500 or status == 502) and result.error, cjson.encode(result))
+            local probe = get("/lifecycle/probe?case=" .. case)
+            assert(probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+        end, debug.traceback)
+        get("/gc?action=restart")
+        assert(ok, err)
+    end)
+end
+for _, kind in ipairs { "core", "adapter", "fallback" } do
+    check(kind .. " completed-file roots release the real fd after request-end GC", function()
+        local raw = '{"model":"old","prompt":"' .. ("g"):rep(200000) .. '"}'
+        local case = "forgotten-" .. kind
+        local headers
+        if kind == "fallback" then
+            raw = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+            headers = { ["Transfer-Encoding"] = "chunked" }
+        end
+        local status, result = request("/lifecycle/" .. kind .. "?case=" .. case, raw, nil, headers)
+        assert(status == 200 and result.decoded and result.input.mode == "completed-file", cjson.encode(result))
+        if kind == "fallback" then assert(result.input.fallback == "transfer-encoding") end
+        ngx.sleep(0.05)
+        local probe = get("/lifecycle/probe?case=" .. case .. "&gc=1")
+        assert(probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+    end)
+end
 check("request body has one input owner", function()
     local status, result = request("/ownership", '{"model":"original"}')
     assert(status == 200 and result.error:find("already owned", 1, true))

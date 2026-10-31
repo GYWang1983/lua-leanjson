@@ -20,6 +20,8 @@ http {
         listen 127.0.0.1:@PORT@;
         http2 on;
         location = /health { content_by_lua_file @ROOT@/tests/openresty/health.lua; }
+        location = /ping { content_by_lua_block { ngx.say("{}") } }
+        location = /benchmark { content_by_lua_file @ROOT@/tests/openresty/benchmark-handler.lua; }
         location / { content_by_lua_file @ROOT@/tests/openresty/handler.lua; }
     }
 }

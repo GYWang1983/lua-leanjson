@@ -30,17 +30,25 @@ end
 local function on_abort(callback)
     local callbacks = ngx.ctx[ABORT]
     if not callbacks then
-        callbacks = {}
+        callbacks = { next_id = 0, active = {} }
         local ok, err = ngx.on_abort(function()
-            for _, fn in pairs(callbacks) do fn() end
+            for id = 1, callbacks.next_id do
+                local fn = callbacks.active[id]
+                if fn then
+                    local ran, callback_err = pcall(fn)
+                    if not ran then ngx.log(ngx.ERR, "qjson abort cleanup failed: ", tostring(callback_err)) end
+                end
+            end
         end)
         if not ok then return nil, "qjson.openresty: ngx.on_abort: " .. tostring(err) end
         ngx.ctx[ABORT] = callbacks
     end
-    local token = {}
-    callbacks[token] = callback
-    return function() callbacks[token] = nil end
+    callbacks.next_id = callbacks.next_id + 1
+    local id = callbacks.next_id
+    callbacks.active[id] = callback
+    return function() callbacks.active[id] = nil end
 end
+_M.on_abort = on_abort
 
 local function completed(opts, json)
     if ngx.ctx[OWNER] then return nil, "request body already owned by qjson.openresty" end
@@ -161,9 +169,9 @@ function _M.start_body(opts)
     local semaphore = require "ngx.semaphore"
     local session = setmetatable({ decoder = decoder, ready = semaphore.new(), waiters = 0,
         wait_timeout = normalized.wait_timeout or 30 }, Session)
-    session.unregister, err = on_abort(function() session:abort("client aborted") end)
+    session.unregister, err = on_abort(function() session:abort("client aborted"); session:close() end)
     if not session.unregister then decoder:close(); return nil, err end
-    session.producer = ngx.thread.spawn(function()
+    local function produce()
         local remaining = tonumber(length)
         while remaining > 0 and not session.done do
             local chunk, read_err = input:receive(math.min(size, remaining))
@@ -181,6 +189,10 @@ function _M.start_body(opts)
         session.value = value
         session.done = true
         session:_signal()
+    end
+    session.producer = ngx.thread.spawn(function()
+        local ran, producer_err = pcall(produce)
+        if not ran then session:_fail(producer_err) end
     end)
     return session, nil, { mode = "incremental", source = "decoder" }
 end
@@ -193,7 +205,7 @@ function _M.request(httpc, params, value, opts)
     local state = { attempts = 0, delivered_bytes = 0, max_chunk = 0,
         headers_may_have_been_sent = false, reader_closed = false, stage = "prepare" }
     local ok, reader = pcall(qjson.reader, value, { chunk_size = size, normalize_duplicates = true })
-    if not ok then return nil, reader, state end
+    if not ok then httpc:close(); return nil, reader, state end
     local function close_reader()
         if not state.reader_closed then reader:close(); state.reader_closed = true end
     end
@@ -253,7 +265,9 @@ function _M.request(httpc, params, value, opts)
     state.attempts = 1
     state.headers_may_have_been_sent = true
     state.stage = "send"
-    ok, err = httpc:send_request(request)
+    local sent
+    sent, ok, err = pcall(httpc.send_request, httpc, request)
+    if not sent then err = ok; ok = nil end
     if not ok or state.reader_error then
         unregister()
         return fail(state.reader_error or err, state.reader_error and "reader" or "send")
@@ -261,7 +275,9 @@ function _M.request(httpc, params, value, opts)
     close_reader()
     state.stage = "response"
     local response
-    response, err = httpc:read_response(request)
+    local read
+    read, response, err = pcall(httpc.read_response, httpc, request)
+    if not read then err = response; response = nil end
     unregister()
     if not response then return fail(err, "response") end
     state.stage = "complete"

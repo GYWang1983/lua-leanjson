@@ -24,11 +24,15 @@ if err then
     return bad(400, err)
 end
 local ok, branch = pcall(qjson.fork, body)
-if not ok or type(branch) ~= "table" then
+if not ok or qjson.type(branch) ~= "object" then
     if session then session:close() else qjson.close(body) end
     return bad(400, "example expects an object with a model field")
 end
 branch.model = ngx.var.arg_model or "example-model"
+local unregister = assert(adapter.on_abort(function()
+    qjson.close(branch)
+    if session then session:close() else qjson.close(body) end
+end))
 local httpc = http.new()
 httpc:set_timeouts(1000, 30000, 30000)
 ok, err = httpc:connect { scheme = "http", host = os.getenv("QJSON_UPSTREAM_HOST") or "127.0.0.1",
@@ -41,6 +45,7 @@ if ok then
 end
 qjson.close(branch)
 if session then session:close() else qjson.close(body) end
+unregister()
 if not response then httpc:close(); return bad(502, err) end
 ngx.status = response.status
 ngx.header.content_type = response.headers["Content-Type"]

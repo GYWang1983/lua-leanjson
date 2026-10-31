@@ -144,6 +144,25 @@ check("malformed incremental JSON wakes all waiters without forwarding", functio
     assert(status == 400 and result.error)
     assert(sink_count() == before)
 end)
+check("source hook failures wake waiters and never send upstream", function()
+    local before = sink_count()
+    local raw = '{"model":"original","prompt":"' .. ("h"):rep(200000) .. '"}'
+    for _, endpoint in ipairs { "/completed?hook=1", "/incremental?hook=1" } do
+        local status, result = request(endpoint, raw)
+        assert(status == 400 and result.error:find("intentional source hook failure", 1, true), cjson.encode(result))
+    end
+    assert(sink_count() == before)
+end)
+check("spool creation failure is explicit without an in-memory fallback", function()
+    local before = sink_count()
+    local status, result = request("/incremental?temp_error=1", '{"model":"original"}')
+    assert(status == 400 and result.error, cjson.encode(result))
+    assert(sink_count() == before)
+end)
+check("an external abort callback conflict is reported explicitly", function()
+    local status, result = request("/external-abort", '{"model":"original"}')
+    assert(status == 400 and result.error:find("ngx.on_abort", 1, true), cjson.encode(result))
+end)
 check("source read failure is preserved as failure instead of EOF", function()
     local status, result = request("/io-failure", '{"model":"original","prompt":"' .. ("x"):rep(200000) .. '"}')
     assert(status == 502 and result.error, cjson.encode(result))
@@ -181,6 +200,25 @@ check("aborted uploads release resources and the same worker stays alive", funct
     for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/decoder") do
         assert(name == "." or name == "..", "leaked decoder file: " .. name)
     end
+end)
+check("one failing abort callback cannot suppress other cleanup callbacks", function()
+    local marker = os.getenv("QJSON_TEST_PREFIX") .. "/abort-cleanup-ran"
+    local sock = assert(ngx.socket.tcp())
+    assert(sock:connect("127.0.0.1", port))
+    local raw = '{"model":"original"}'
+    assert(sock:send("POST /abort-callbacks HTTP/1.1\r\nHost: localhost\r\nContent-Length: " .. #raw .. "\r\n\r\n" .. raw))
+    while true do
+        local line = assert(sock:receive("*l"))
+        if line == "ready" then break end
+    end
+    sock:close()
+    local ran
+    for _ = 1, 100 do
+        local file = io.open(marker, "r")
+        if file then file:close(); ran = true; break end
+        ngx.sleep(0.01)
+    end
+    assert(ran, "cleanup following the throwing callback did not run")
 end)
 print("1.." .. count)
 assert(failures == 0, failures .. " native OpenResty acceptance checks failed")

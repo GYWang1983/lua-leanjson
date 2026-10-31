@@ -4,6 +4,9 @@ local adapter = require "qjson.openresty"
 local http = require "resty.http"
 local started = ngx.now()
 local opts = { chunk_size = 16384, temp_dir = os.getenv("QJSON_TEST_PREFIX") .. "/decoder" }
+if ngx.var.arg_hook == "1" then opts.on_chunk = function() error("intentional source hook failure") end end
+if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/qjson-unwritable-spool" end
+if ngx.var.uri == "/external-abort" then assert(ngx.on_abort(function() end)) end
 local body, err, info, session
 if ngx.var.uri == "/incremental" then
     session, err, info = adapter.start_body(opts)
@@ -29,6 +32,20 @@ if err then
     ngx.say(cjson.encode { error = tostring(err), input = info })
     return
 end
+if ngx.var.uri == "/abort-callbacks" then
+    assert(adapter.on_abort(function() error("intentional abort callback failure") end))
+    assert(adapter.on_abort(function()
+        local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/abort-cleanup-ran", "w"))
+        marker:write("closed")
+        marker:close()
+        qjson.close(body)
+    end))
+    ngx.say("ready")
+    ngx.flush(true)
+    ngx.sleep(2)
+    qjson.close(body)
+    return
+end
 if ngx.var.uri == "/scalar" then
     ngx.say(cjson.encode { value = body, input = info })
     qjson.close(body)
@@ -49,6 +66,12 @@ if ngx.var.arg_mixed == "1" then
 end
 local sibling = qjson.fork(body)
 sibling.model = "independent"
+local original_model, sibling_model = body.model, sibling.model
+local unregister = assert(adapter.on_abort(function()
+    qjson.close(branch)
+    qjson.close(sibling)
+    if session then session:close() else qjson.close(body) end
+end))
 if ngx.var.uri == "/io-failure" then
     local source = assert(ngx.req.get_body_file())
     assert(io.open(source, "wb")):close() -- real source truncation, no mocked reader
@@ -76,10 +99,10 @@ if res then
     if not raw then err = read_err else result = cjson.decode(raw) end
 end
 httpc:close()
-local original_model, sibling_model = body.model, sibling.model
 qjson.close(branch)
 qjson.close(sibling)
 if session then session:close() else qjson.close(body) end
+unregister()
 if err then ngx.status = 502 end
 ngx.say(cjson.encode { error = err and tostring(err), sink = result, transfer = transfer,
     input = info, original_model = original_model, sibling_model = sibling_model,

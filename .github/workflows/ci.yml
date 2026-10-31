@@ -16,6 +16,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  native-source:
+    name: Native OpenResty body sources and HTTP acceptance
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Build pinned native verification image
+        run: make openresty-dev-image
+      - name: Verify library and real HTTP paths
+        run: make openresty-docker-test
+
   changes:
     name: Detect CI scope
     runs-on: ubuntu-latest

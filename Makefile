@@ -14,6 +14,7 @@ QJSON_PROP_SEED  ?= 760076
 QJSON_MUT_PROP_CASES ?= 200
 QJSON_MUT_PROP_SEED  ?= 104104
 QJSON_MUT_PROP_STEPS ?= 24
+OPENRESTY_DEV_IMAGE ?= lua-qjson-dev:openresty-1.29.2.4-rust-1.90.0
 
 LIB_DIR := $(CURDIR)/target/release
 ifeq ($(shell uname),Darwin)
@@ -22,7 +23,7 @@ else
 LUA_ENV := LD_LIBRARY_PATH=$(LIB_DIR) LUA_PATH='$(LUA_PATH)' LUA_CPATH='$(LUA_CPATH)'
 endif
 
-.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean
+.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test bounded-fuzz
 
 help: ## Show this help
 	@# FS uses [^#]* (not .*) so a description containing `##` isn't truncated.
@@ -53,7 +54,26 @@ lua-lint: ## Run luacheck over Lua sources and tests
 		echo "luacheck not found. Install it with: luarocks install luacheck" >&2; \
 		exit 127; \
 	}
-	luacheck lua tests/lua
+	luacheck lua tests/lua tests/openresty examples/openresty
+
+openresty-test: build ## Run real native OpenResty HTTP acceptance tests
+	RESTY='$(RESTY)' scripts/verify-openresty.sh
+
+openresty-bench: build ## Compare cjson/qjson in fresh native OpenResty workers
+	RESTY='$(RESTY)' scripts/benchmark-openresty.sh
+
+openresty-verify: ## Run library modes, corpora, properties, lint, and native HTTP tests
+	scripts/verify-openresty-library.sh
+
+openresty-dev-image: ## Build the pinned Rust/native OpenResty verification image
+	docker build --target dev -f examples/openresty/Dockerfile -t '$(OPENRESTY_DEV_IMAGE)' .
+
+openresty-docker-test: ## Run the complete native verification gate in the pinned image
+	docker run --rm -v '$(CURDIR):/workspace' -v qjson-cargo-registry:/usr/local/cargo/registry \
+		-w /workspace '$(OPENRESTY_DEV_IMAGE)' make openresty-verify
+
+bounded-fuzz: ## Run bounded nightly libFuzzer sessions (cargo-fuzz required)
+	scripts/verify-bounded-fuzz.sh
 
 BENCH_SCENARIOS := small medium github-100k 100k 200k 500k 1m 2m 5m 10m interleaved
 

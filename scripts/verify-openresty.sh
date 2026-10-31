@@ -38,7 +38,9 @@ for attempt in {1..100}; do
         curl -fsS "http://127.0.0.1:$QJSON_SINK_PORT/stats" > /dev/null 2>&1; then break; fi
     sleep 0.05
 done
-if ! "$resty" "$repo/tests/openresty/acceptance.lua"; then
+test_script=acceptance.lua
+if [[ ${QJSON_RUN_MODE:-acceptance} == benchmark ]]; then test_script=benchmark.lua; fi
+if ! "$resty" "$repo/tests/openresty/$test_script"; then
     cat "$QJSON_TEST_PREFIX/error.log" >&2
     exit 1
 fi

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Add a native OpenResty memory/file and single-owner incremental input adapter, fixed-length bounded HTTP output, and explicit transfer error/cleanup reporting.
+- Add a pinned native OpenResty/Rust example image, real worker HTTP acceptance tests, reproducible library gates, and cjson/qjson process-memory and latency benchmarks.
 - Add a standalone GitHub Actions supply-chain audit job using `cargo-audit`.
 - Add this changelog as the canonical human-readable release history.
 - Use versioned `CHANGELOG.md` entries as GitHub Release notes and document the changelog update policy for public behavior changes.

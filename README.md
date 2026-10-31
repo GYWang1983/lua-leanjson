@@ -14,6 +14,10 @@ See [CHANGELOG.md](CHANGELOG.md) for release notes.
   `cjson.*` calls to qjson and calls out behavior differences.
 - [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, tests, linting, and
   release/contribution conventions.
+- [Native OpenResty example](examples/openresty/README.md) receives validated
+  memory/file bodies and sends bounded JSON readers, with a reproducible image.
+- [OpenResty source verification](docs/verification/openresty-json-source.md)
+  documents adapters, ownership, real HTTP acceptance tests, and benchmarks.
 
 ## Status
 
@@ -67,6 +71,7 @@ The runtime file set is small:
 | `/usr/local/share/lua/5.1/qjson/lib.lua` | FFI loader |
 | `/usr/local/share/lua/5.1/qjson/table.lua` | Lazy table API and encoder |
 | `/usr/local/share/lua/5.1/qjson/{proxy,reader,source_memory}.lua` | Immutable nodes, bounded output and memory source adapter |
+| `/usr/local/share/lua/5.1/qjson/openresty.lua` | Explicit native OpenResty input/output adapter |
 
 The runtime also needs OpenResty LuaJIT (preferred) or LuaJIT, plus the normal
 OS shared libraries required by LuaJIT and the native module.

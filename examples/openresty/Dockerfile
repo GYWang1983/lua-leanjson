@@ -41,6 +41,6 @@ COPY --from=build /workspace/lua/ /opt/qjson/lua/
 COPY --from=build /workspace/examples/openresty/ /opt/qjson/examples/
 COPY --from=build /workspace/LICENSE /opt/qjson/LICENSE
 COPY --from=build /usr/local/share/lua/5.1/resty/ /usr/local/openresty/site/lualib/resty/
-RUN mkdir -p /tmp/qjson-body /tmp/qjson-logs && chmod 777 /tmp/qjson-body /tmp/qjson-logs
+RUN mkdir -p /tmp/qjson-body /tmp/qjson-logs/logs && chmod 777 /tmp/qjson-body /tmp/qjson-logs
 EXPOSE 8080
 CMD ["/usr/local/openresty/nginx/sbin/nginx", "-p", "/tmp/qjson-logs/", "-c", "/opt/qjson/examples/nginx.conf"]

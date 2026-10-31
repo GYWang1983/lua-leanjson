@@ -6,12 +6,15 @@ Build a runtime image from a committed fork revision:
 
 ```sh
 scripts/build-openresty-image.sh HEAD lua-qjson-openresty:local
+scripts/verify-openresty-image.sh lua-qjson-openresty:local
 docker run --rm -p 8080:8080 -v qjson-body:/tmp/qjson-body lua-qjson-openresty:local
 curl -i --data-binary '{"model":"original","prompt":"hello"}' http://localhost:8080/
 curl -i --data-binary '{"model":"original","prompt":"hello"}' http://localhost:8080/incremental
 ```
 
 The builder archives the exact resolved 40-character commit, excluding uncommitted edits, and records it in the image revision label. The Dockerfile pins native OpenResty 1.29.2.4 and Rust 1.90.0 by manifest digest. The runtime stage contains the library, Lua modules, and lua-resty-http 0.17.2; Rust is confined to build/dev stages. Preserve the included Apache-2.0 license.
+
+The image verification script checks installed-module loading, absence of Rust, memory/file/incremental HTTP input, exact rewritten length/SHA256, malformed-input rejection, and clean Nginx startup. It starts and removes a private container with an anonymous disk volume and does not publish a port.
 
 `client_body_buffer_size 64k` selects buffering; it is separate from the 256 MiB example request limit. Larger completed requests use Nginx disk files. Use a disk-backed Docker volume for `/tmp/qjson-body`, size its budget for concurrent uploads, and monitor it. This path must not be mounted as tmpfs for memory experiments. The library retains a file descriptor rather than relying on Nginx's temporary pathname. Nginx owns and cleans its original files.
 

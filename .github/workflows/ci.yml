@@ -30,6 +30,10 @@ jobs:
         run: make openresty-dev-image
       - name: Verify library and real HTTP paths
         run: make openresty-docker-test
+      - name: Build and verify exact-commit runtime image
+        run: |
+          scripts/build-openresty-image.sh "$GITHUB_SHA" lua-qjson-openresty:ci
+          scripts/verify-openresty-image.sh lua-qjson-openresty:ci
 
   changes:
     name: Detect CI scope

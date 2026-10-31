@@ -49,3 +49,10 @@ path = "fuzz_targets/fuzz_numbers.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fuzz_source_windows"
+path = "fuzz_targets/fuzz_source_windows.rs"
+test = false
+doc = false
+bench = false

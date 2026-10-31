@@ -79,7 +79,7 @@ local function drop(state)
 end
 
 function Backend:retain()
-    if self.state.fd == nil then error("qjson: source closed", 0) end
+    self:check_open()
     local state = self.state
     state.leases = state.leases + 1
     -- The finalizer closes over resource state only, never this token, backend,
@@ -323,12 +323,13 @@ function M.new_decoder(opts)
     local fd, spool_path = io_source.spool(opts.temp_dir)
     if fd == nil then error(spool_path, 0) end
     local backend, owner = backend_new(fd, spool_path, opts)
-    return setmetatable({ backend = backend, owner = owner, scope = leases.acquire() }, Decoder)
+    local scope = leases.acquire()
+    scope.entries = { { backend, owner } }
+    return setmetatable({ backend = backend, scope = scope }, Decoder)
 end
 
 function Decoder:close()
     leases.release(self.scope)
-    if self.owner then self.backend:release(self.owner); self.owner = nil end
     self.closed, self.node = true, nil
 end
 
@@ -354,6 +355,7 @@ function Decoder:finish()
     if self.failure then return nil, self.failure end
     if self.closed then return nil, "qjson.decoder: closed" end
     local ok, value = pcall(function()
+        leases.check(self.scope)
         if not self.finished then self.node = finish_backend(self.backend); self.finished = true end
         return path.from_node(self.node, {}, self.scope)
     end)
@@ -366,6 +368,8 @@ function Decoder:get(query)
     if self.closed then return nil, "ERROR", "qjson.decoder: closed" end
     local ok, segments = pcall(path.parse, query)
     if not ok then return nil, "ERROR", tostring(segments) end
+    local usable, source_error = pcall(leases.check, self.scope)
+    if not usable then return nil, "ERROR", tostring(source_error) end
     if not self.finished then return nil, "NEED_INPUT" end
     local found, value = pcall(path.from_node, self.node, segments, self.scope)
     if not found then return nil, "ERROR", tostring(value) end

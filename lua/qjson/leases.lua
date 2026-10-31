@@ -37,6 +37,12 @@ end
 
 function M.check(scope)
     if scope and scope.closed then error("qjson: holder closed", 0) end
+    if scope then
+        for _, entry in ipairs(scope.entries) do
+            local backend = entry[1]
+            if backend.check_open then backend:check_open() end
+        end
+    end
 end
 
 function M.finish(scope, record)

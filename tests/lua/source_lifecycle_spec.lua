@@ -1,9 +1,12 @@
 local qjson = require("qjson")
 local lfs = require("lfs")
 local io_source = require("qjson.source_io")
+local ffi = require("ffi")
+ffi.cdef[[int fcntl(int, int, ...);]]
 
 describe("source resource leases", function()
     local directory
+    local descriptors, original_spool
     local function files()
         local names = {}
         for name in lfs.dir(directory) do
@@ -18,12 +21,26 @@ describe("source resource leases", function()
         assert.is_true(value:feed(raw))
         return value, assert(value:finish())
     end
+    local function closed()
+        assert.are.equal(0, #files())
+        for _, fd in ipairs(descriptors) do
+            assert.are.equal(-1, ffi.C.fcntl(fd, 1), "descriptor remained open after the last lease")
+            assert.are.equal(9, ffi.errno()) -- EBADF, not a live inherited descriptor
+        end
+    end
     before_each(function()
+        descriptors, original_spool = {}, io_source.spool
+        io_source.spool = function(temp_dir)
+            local fd, path = original_spool(temp_dir)
+            if fd then descriptors[#descriptors + 1] = fd end
+            return fd, path
+        end
         directory = os.tmpname()
         os.remove(directory)
         assert(lfs.mkdir(directory))
     end)
     after_each(function()
+        io_source.spool = original_spool
         collectgarbage("collect")
         collectgarbage("collect")
         for _, name in ipairs(files()) do os.remove(name) end
@@ -48,7 +65,7 @@ describe("source resource leases", function()
         assert.are.equal(1, #files())
         assert.are.equal(19, reader:length())
         reader:close()
-        assert.are.equal(0, #files())
+        closed()
         reader:close()
         input:close()
     end)
@@ -68,7 +85,7 @@ describe("source resource leases", function()
         assert.are.equal(7, fresh.x)
         input:close()
         qjson.close(fresh)
-        assert.are.equal(0, #files())
+        closed()
     end)
 
     it("retains each mixed-source dependency until its last holder closes", function()
@@ -94,7 +111,7 @@ describe("source resource leases", function()
             parts[#parts + 1] = chunk
         end
         assert.are.equal('{"a":{"x":1},"b":{"x":2}}', table.concat(parts))
-        assert.are.equal(0, #files())
+        closed()
     end)
 
     it("releases removed source dependencies when an overlay becomes independent", function()
@@ -102,7 +119,7 @@ describe("source resource leases", function()
         local input, root = decoder('{"a":1}')
         input:close()
         root.a = 2
-        assert.are.equal(0, #files())
+        closed()
         assert.are.equal('{"a":2}', qjson.encode(root))
         qjson.close(root)
     end)
@@ -114,29 +131,29 @@ describe("source resource leases", function()
         qjson.close(root)
         assert.are.equal(1, child.x)
         qjson.close(child)
-        assert.are.equal(0, #files())
+        closed()
     end)
 
     it("cleans unfinished input immediately on abort, close, parse failure and hook failure", function()
         local input = qjson.new_decoder({ temp_dir = directory })
         assert.are.equal(1, #files())
         input:abort("cancelled")
-        assert.are.equal(0, #files())
+        closed()
         input = qjson.new_decoder({ temp_dir = directory })
         input:close()
-        assert.are.equal(0, #files())
+        closed()
         local _, status = input:get("missing")
         assert.are.equal("ERROR", status)
         input = qjson.new_decoder({ temp_dir = directory })
         assert.is_true(input:feed('{"x":'))
         assert.is_nil(input:finish())
-        assert.are.equal(0, #files())
+        closed()
         input = qjson.new_decoder({ temp_dir = directory, chunk_size = 2,
             on_chunk = function() error("hook cancelled") end })
         local ok, err = input:feed('{}')
         assert.is_nil(ok)
         assert.matches("hook cancelled", err, 1, true)
-        assert.are.equal(0, #files())
+        closed()
     end)
 
     it("rejects abort after finish while frozen values remain usable", function()
@@ -148,7 +165,7 @@ describe("source resource leases", function()
         input:close()
         assert.is_false(root.x)
         qjson.close(root)
-        assert.are.equal(0, #files())
+        closed()
         qjson.close(false)
         qjson.close(qjson.null)
         qjson.close({ x = 1 })
@@ -168,7 +185,7 @@ describe("source resource leases", function()
         assert.is_true(abandon())
         collectgarbage("collect")
         collectgarbage("collect")
-        assert.are.equal(0, #files())
+        closed()
     end)
 
     it("collects a forgotten parent lease while an independently held child survives", function()
@@ -202,6 +219,7 @@ describe("source resource leases", function()
     it("releases a failed reader's leases and propagates the source I/O error", function()
         assert.is_function(qjson.close)
         local input, root = decoder('{"x":1}')
+        assert.are.equal(1, root.x) -- cache the complete member index before the failure
         local reader = qjson.reader(root)
         local original = io_source.read
         io_source.read = function() return nil, "injected disk failure" end
@@ -210,6 +228,10 @@ describe("source resource leases", function()
         assert.is_nil(chunk)
         assert.matches("injected disk failure", err, 1, true)
         assert.has_error(function() return root.x end)
+        assert.has_error(function() return root.missing end)
+        local _, status, lookup_error = input:get("missing")
+        assert.are.equal("ERROR", status)
+        assert.are.equal(err, lookup_error)
         input:close()
         qjson.close(root)
         assert.are.equal(0, #files())

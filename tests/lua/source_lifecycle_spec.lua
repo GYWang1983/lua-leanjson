@@ -125,13 +125,15 @@ describe("source resource leases", function()
     end)
 
     it("holds a path child without hidden intermediate proxy leases", function()
+        for _, wrapped in ipairs({ false, true }) do
         local input, root = decoder('{"a":{"b":{"x":1}}}')
-        local child = qjson.get(root, "a.b")
+        local child = wrapped and qjson.get({ value = root }, "value.a.b") or qjson.get(root, "a.b")
         input:close()
         qjson.close(root)
         assert.are.equal(1, child.x)
         qjson.close(child)
         closed()
+        end
     end)
 
     it("cleans unfinished input immediately on abort, close, parse failure and hook failure", function()

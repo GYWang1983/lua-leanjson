@@ -47,7 +47,12 @@ function M.get(value, path)
     local segments = M.parse(path)
     local node = proxy.node(value)
     if node then return proxy.get_path(value, segments) end
-    for _, segment in ipairs(segments) do
+    for i, segment in ipairs(segments) do
+        if proxy.is_proxy(value) then
+            local rest = {}
+            for j = i, #segments do rest[#rest + 1] = segments[j] end
+            return proxy.get_path(value, rest)
+        end
         if proxy.type(value) ~= segment.kind then error("qjson.get: type mismatch", 0) end
         value = value[segment.key]
         if type(value) == "nil" then return nil end

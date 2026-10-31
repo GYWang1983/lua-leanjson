@@ -232,6 +232,95 @@ describe("qjson.encode_sparse_array lua-cjson compatible controls", function()
         assert_json_equal(qjson.encode(value), cjson.encode(value))
     end)
 
+    local function reader_output(value)
+        local reader, parts = qjson.reader(value, { chunk_size = 17 }), {}
+        local length, err = reader:length()
+        assert.is_nil(err)
+        while true do
+            local chunk, read_err = reader:next()
+            assert.is_nil(read_err)
+            if chunk == nil then break end
+            parts[#parts + 1] = chunk
+        end
+        local output = table.concat(parts)
+        assert.are.equal(#output, length)
+        return output
+    end
+
+    it("preserves materialized sparse members in encode, reader, fork and assignment", function()
+        qjson.encode_sparse_array(true, 2, 10)
+        for _, keep in ipairs({ false, true }) do
+            local value = qjson.materialize(qjson.decode('[1,2,3]'), { keep_origin = keep })
+            value[2], value[100] = nil, 100
+            local fork = qjson.fork(value)
+            local body = qjson.decode('{}')
+            body.value = value
+            local expected = '{"1":1,"3":3,"100":100}'
+            assert_json_equal(qjson.encode(value), expected)
+            assert_json_equal(reader_output(value), expected)
+            assert_json_equal(qjson.encode(fork), expected)
+            assert_json_equal(qjson.encode(body), '{"value":' .. expected .. '}')
+            value[100] = 999
+            assert.are.equal(100, fork["100"])
+            assert.are.equal(100, body.value["100"])
+        end
+    end)
+
+    it("fills allowed materialized holes with null across every snapshot path", function()
+        qjson.encode_sparse_array(false, 0, 10)
+        for _, keep in ipairs({ false, true }) do
+            local value = qjson.materialize(qjson.decode('[1,2,3]'), { keep_origin = keep })
+            value[2], value[5] = nil, 5
+            local body = qjson.decode('{}')
+            body.value = value
+            assert.are.equal('[1,null,3,null,5]', qjson.encode(value))
+            assert.are.equal('[1,null,3,null,5]', reader_output(value))
+            assert.are.equal('[1,null,3,null,5]', qjson.encode(qjson.fork(value)))
+            assert.are.equal('{"value":[1,null,3,null,5]}', qjson.encode(body))
+        end
+    end)
+
+    it("rejects excessive materialized sparsity consistently without partial assignment", function()
+        qjson.encode_sparse_array(false, 2, 10)
+        for _, keep in ipairs({ false, true }) do
+            local value = qjson.materialize(qjson.decode('[1,2,3]'), { keep_origin = keep })
+            value[100] = 100
+            local expected = "Cannot serialise table: excessively sparse array"
+            assert.has_error(function() qjson.encode(value) end, expected)
+            assert.has_error(function() qjson.fork(value) end, expected)
+            local reader = qjson.reader(value)
+            local length, err = reader:length()
+            assert.is_nil(length)
+            assert.is_truthy(err:find(expected, 1, true))
+            local chunk, read_err = reader:next()
+            assert.is_nil(chunk)
+            assert.are.equal(err, read_err)
+            local body = qjson.decode('{}')
+            assert.has_error(function() body.value = value end, expected)
+            assert.are.equal('{}', qjson.encode(body))
+            assert.are.equal(100, value[100])
+        end
+    end)
+
+    it("retains empty materialized array identity while classifying later members", function()
+        qjson.encode_sparse_array(true, 2, 10)
+        for _, keep in ipairs({ false, true }) do
+            for _, source in ipairs({ '[]', '[1]' }) do
+                local value = qjson.materialize(qjson.decode(source), { keep_origin = keep })
+                value[1] = nil
+                assert.are.equal('[]', qjson.encode(value))
+                assert.are.equal('[]', reader_output(value))
+                value[100] = 100
+                assert.are.equal('{"100":100}', qjson.encode(value))
+                assert.are.equal('{"100":100}', reader_output(value))
+                assert.are.equal('{"100":100}', qjson.encode(qjson.fork(value)))
+                local body = qjson.decode('{}')
+                body.value = value
+                assert.are.equal('{"value":{"100":100}}', qjson.encode(body))
+            end
+        end
+    end)
+
     it("does not let strict sparse settings affect empty_array_mt or lazy-array paths", function()
         qjson.encode_sparse_array(false, 1, 0)
 

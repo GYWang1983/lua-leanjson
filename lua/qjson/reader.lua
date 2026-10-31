@@ -91,15 +91,18 @@ local function string_frame(value) return { tag = "string", value = value, pos =
 local function next_chunk(self)
     local stack, parts, room = self.stack, {}, self.chunk_size
     while room > 0 and #stack > 0 do
+        if self.closed then return nil end
         local frame = stack[#stack]
         local tag, fragment = frame.tag
         if tag == "value" then
             local node = frame.node
             local backend, first, last = raw_span(node, self.normalize)
+            if self.closed then return nil end
             if backend then
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
                 local keys, values, n = container(node)
+                if self.closed then return nil end
                 stack[#stack] = { tag = "container", node = node, keys = keys, values = values,
                     n = n, index = 0, open = true }
             elseif node.kind == "string" then
@@ -112,6 +115,7 @@ local function next_chunk(self)
             if wanted == 0 then stack[#stack] = nil
             else
                 local chunk, err = frame.backend:read(frame.pos, wanted)
+                if self.closed then return nil end
                 if type(chunk) ~= "string" then error(err or "qjson.reader: source read failed", 0) end
                 if #chunk == 0 then error("qjson.reader: unexpected source EOF", 0) end
                 if #chunk > wanted then error("qjson.reader: source exceeded read bound", 0) end
@@ -190,6 +194,9 @@ function Reader:next()
         return nil, self.failure
     end
     local ok, result = pcall(next_chunk, self)
+    -- close() can run while a backend operation is suspended. Cancellation
+    -- wins over late bytes/errors and no buffered prefix may be published.
+    if self.closed then return nil, CLOSED end
     if not ok then
         self.failure = tostring(result)
         self:close()

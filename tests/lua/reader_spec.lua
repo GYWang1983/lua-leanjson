@@ -282,6 +282,63 @@ describe("bounded snapshot reader", function()
         end
     end)
 
+    it("cancels pending source output after close including buffered prefixes", function()
+        for _, normalize in ipairs({ false, true }) do
+            for _, outcome in ipairs({ "bytes", "error" }) do
+                local backend, root = require("qjson.source_memory").open('{"a":"source"}')
+                local original, reads = backend.read, 0
+                function backend:read(offset, length)
+                    reads = reads + 1
+                    coroutine.yield("source read pending")
+                    if outcome == "error" then error("late read error", 0) end
+                    return original(self, offset, length)
+                end
+                local value = require("qjson.proxy").from_backend(backend, root)
+                local reader = qjson.reader(value, { chunk_size = 64, normalize_duplicates = normalize })
+                local co = coroutine.create(function() return reader:next() end)
+                local ok, pending = coroutine.resume(co)
+                assert.is_true(ok)
+                assert.are.equal("source read pending", pending)
+                reader:close()
+                local resumed, chunk, err = coroutine.resume(co)
+                assert.is_true(resumed)
+                assert.is_nil(chunk)
+                assert.are.equal("qjson.reader: closed", err)
+                assert.are.equal(1, reads)
+                assert.are.equal(14, reader:length())
+                local after, closed = reader:next()
+                assert.is_nil(after)
+                assert.are.equal("qjson.reader: closed", closed)
+            end
+        end
+    end)
+
+    it("does not start a source read after close during yielding span metadata", function()
+        local backend, spans, reads = {}, 0, 0
+        function backend:type() return "object" end
+        function backend:span()
+            spans = spans + 1
+            if spans == 2 then coroutine.yield("span pending") end
+            return 0, 2
+        end
+        function backend:read(offset, length)
+            reads = reads + 1
+            return ("{}"):sub(offset + 1, offset + length)
+        end
+        local value = require("qjson.proxy").from_backend(backend, {})
+        local reader = qjson.reader(value, { chunk_size = 2 })
+        local co = coroutine.create(function() return reader:next() end)
+        local ok, pending = coroutine.resume(co)
+        assert.is_true(ok)
+        assert.are.equal("span pending", pending)
+        reader:close()
+        local resumed, chunk, err = coroutine.resume(co)
+        assert.is_true(resumed)
+        assert.is_nil(chunk)
+        assert.are.equal("qjson.reader: closed", err)
+        assert.are.equal(0, reads)
+    end)
+
     it("validates reader options", function()
         for _, size in ipairs({ 0, -1, 0.5, math.huge }) do
             assert.has_error(function() qjson.reader({}, { chunk_size = size }) end)

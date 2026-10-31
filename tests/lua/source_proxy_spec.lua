@@ -175,6 +175,51 @@ describe("source proxy overlays", function()
         assert.are.equal('{"a":{"x":9}}', qjson.encode(body))
     end)
 
+    it("detaches pending old reads after object or array replacement and deletion", function()
+        local cases = {
+            { source = '{"a":{"x":1}}', key = "a", replaced = '{"a":{"x":3}}', deleted = '{}' },
+            { source = '[{"x":1}]', key = 1, replaced = '[{"x":3}]', deleted = '[]' },
+        }
+        for _, case in ipairs(cases) do
+            for _, action in ipairs({ "replace", "delete" }) do
+                local backend, root = require("qjson.source_memory").open(case.source)
+                local original, pause = backend.children, true
+                function backend:children(handle)
+                    local iter = original(self, handle)
+                    return function()
+                        if handle == root and pause then
+                            pause = false
+                            coroutine.yield("read pending")
+                        end
+                        return iter()
+                    end
+                end
+                local body = require("qjson.proxy").from_backend(backend, root)
+                local co = coroutine.create(function() return body[case.key] end)
+                local ok, pending = coroutine.resume(co)
+                assert.is_true(ok)
+                assert.are.equal("read pending", pending)
+                if action == "replace" then body[case.key] = { x = 2 }
+                else body[case.key] = nil end
+                local resumed, old = coroutine.resume(co)
+                assert.is_true(resumed)
+                assert.are.equal(1, old.x)
+                old.x = 9
+                if action == "replace" then
+                    assert.are.equal(2, body[case.key].x)
+                    body[case.key].x = 3
+                    assert.are.equal(case.replaced, qjson.encode(body))
+                else
+                    assert.is_nil(body[case.key])
+                    assert.are.equal(case.deleted, qjson.encode(body))
+                    body[case.key] = { x = 3 }
+                    assert.are.equal(case.replaced, qjson.encode(body))
+                end
+                assert.are.equal(9, old.x)
+            end
+        end
+    end)
+
     it("does not confuse null-pointer cdata assignments with nil deletion", function()
         local body = qjson.decode('{}')
         body.unsupported = ffi.cast("void *", 0)

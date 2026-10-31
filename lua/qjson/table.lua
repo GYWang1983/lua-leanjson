@@ -11,15 +11,20 @@ local TABLE_ORIGIN = setmetatable({}, { __mode = "k" })
 local LazyObject, LazyArray = proxy.Object, proxy.Array
 local classify_plain_table
 
-proxy.configure({
-    null = _M.null,
-    classify = function(value)
-        local hint = TABLE_TYPE_HINT[value]
-        if getmetatable(value) == _M.empty_array_mt or hint == "array" then return "array", #value end
-        if hint == "object" then return "object" end
+local function classify_table(value)
+    local hint = TABLE_TYPE_HINT[value]
+    if hint == "object" then return "object" end
+    if hint == "array" then
+        -- Materialization preserves empty-array identity, but later ordinary
+        -- table edits must still pass the same sparse policy as other tables.
+        if next(value) == nil then return "array", 0 end
         return classify_plain_table(value)
-    end,
-})
+    end
+    if getmetatable(value) == _M.empty_array_mt then return "array", #value end
+    return classify_plain_table(value)
+end
+
+proxy.configure({ null = _M.null, classify = classify_table })
 
 _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
 _M.fork, _M.type = proxy.fork, proxy.type
@@ -457,7 +462,7 @@ local function encode_array_with_origin(t, depth, active, origin)
     if origin.complete == true and origin_array_fully_matches(t, origin, depth, active) then
         return origin_table_slice(origin)
     end
-    local kind, max = classify_plain_table(t)
+    local kind, max = classify_table(t)
     if kind == "array" then
         return encode_array(t, depth, active, max)
     end
@@ -477,18 +482,7 @@ local function encode_plain_table(v, depth, active)
         end
     end
 
-    local mt = getmetatable(v)
-    if mt == _M.empty_array_mt then
-        return encode_array(v, depth, active, #v)
-    end
-    local hint = TABLE_TYPE_HINT[v]
-    if hint == "object" then
-        return encode_object(v, depth, active)
-    end
-    if hint == "array" then
-        return encode_array(v, depth, active, #v)
-    end
-    local kind, max = classify_plain_table(v)
+    local kind, max = classify_table(v)
     if kind == "array" then
         return encode_array(v, depth, active, max)
     end

@@ -86,6 +86,17 @@ local function expose(node, parent, key, lexical)
     if node == nil then return nil end
     if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node) end
     if parent and not lexical then
+        -- A metadata load can yield while the mutable parent cell is replaced.
+        -- Only attach/cache the child if it still belongs to the current node;
+        -- otherwise the in-flight read returns its detached old snapshot.
+        while true do
+            local current, version = parent.node, parent.version
+            local _, values = M.members(current)
+            if parent.node == current and parent.version == version then
+                if values[key] ~= node then return wrap(node) end
+                break
+            end
+        end
         local cached = parent.cache[key]
         if cached then return cached end
         local proxy = wrap(node, parent, key)

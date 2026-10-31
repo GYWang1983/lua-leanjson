@@ -14,5 +14,5 @@ cargo test --locked --release --no-default-features
 cargo test --locked --release --features test-panic
 cargo clippy --locked --release --all-targets -- -D warnings
 cargo build --locked --release
-make test lua-lint lua-property-test lua-mutation-property-test openresty-source-stress
+make test lua-lint lua-property-test lua-mutation-property-test openresty-source-stress openresty-source-corpus
 "$repo/scripts/verify-openresty.sh"

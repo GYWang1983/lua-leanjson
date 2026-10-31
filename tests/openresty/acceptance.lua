@@ -64,6 +64,15 @@ local function wait_source(case, event, sock)
     end
     return result
 end
+local function closed_source(probe)
+    -- Check the actual close before a later HTTP connection can reuse its fd.
+    -- A still-live holder has no successful close record, including after GC.
+    local state = probe.state
+    assert(state and state.closed_at and state.close_fcntl == -1 and state.close_errno == 9, cjson.encode(probe))
+    if probe.owned then
+        assert(state.close_unlinked and not probe.path_exists, cjson.encode(probe))
+    end
+end
 check("memory source rewrites a field and sends exact bounded bytes", function()
     local status, result = request("/completed", '{"model":"original","prompt":"hello"}', "memory")
     assert(status == 200, cjson.encode(result))
@@ -124,7 +133,8 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
                 local status, result = request(endpoint .. "?case=" .. case, '{"model":' .. model.raw .. ',"prompt":"x"}')
                 assert(status == 200, cjson.encode(result))
                 local probe = get("/lifecycle/probe?case=" .. case)
-                assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+                assert(probe.owned, cjson.encode(probe))
+                closed_source(probe)
             end, debug.traceback)
             get("/gc?action=restart")
             assert(ok, err)
@@ -148,9 +158,8 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
             sock:close()
             sock = nil
             local probe = wait_source(case, "aborted")
-            assert(probe.state.aborted and not probe.state.pause_timed_out and probe.paused and probe.owned
-                and probe.state.close_fcntl == -1 and probe.state.close_errno == 9
-                and probe.state.close_unlinked and not probe.path_exists, cjson.encode(probe))
+            assert(probe.state.aborted and not probe.state.pause_timed_out and probe.paused and probe.owned, cjson.encode(probe))
+            closed_source(probe)
         end, debug.traceback)
         if sock then sock:close() end
         get("/gc?action=restart")
@@ -164,7 +173,8 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
             local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", '{"model":[1,2],"prompt":"x"}')
             assert((status == 500 or status == 502) and result.error, cjson.encode(result))
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+            assert(probe.owned, cjson.encode(probe))
+            closed_source(probe)
         end, debug.traceback)
         get("/gc?action=restart")
         assert(ok, err)
@@ -197,9 +207,8 @@ check("isolated incremental requests wake both query waiters and finish without 
             client:close()
             client = nil
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.state.finish_end and probe.state.paused_at and probe.owned
-                and probe.state.close_fcntl == -1 and probe.state.close_errno == 9
-                and probe.state.close_unlinked and not probe.path_exists, cjson.encode(probe))
+            assert(probe.state.finish_end and probe.state.paused_at and probe.owned, cjson.encode(probe))
+            closed_source(probe)
             if route.endpoint == "/incremental" then
                 assert(probe.state.phases["main-READY"] and probe.state.phases["waiter-READY"], cjson.encode(probe))
                 local result = cjson.decode(body)
@@ -220,7 +229,8 @@ check("an intentionally retained query child survives session close until its ow
             local status, result = request("/lifecycle/retained?case=" .. case, '{"model":' .. model .. '}')
             assert(status == 200 and result.alive_after_close and type(result.value) == "table", cjson.encode(result))
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.owned and probe.fcntl == -1 and probe.errno == 9 and not probe.path_exists, cjson.encode(probe))
+            assert(probe.owned, cjson.encode(probe))
+            closed_source(probe)
         end
     end, debug.traceback)
     get("/gc?action=restart")
@@ -320,7 +330,8 @@ for _, endpoint in ipairs { "/example", "/completed" } do
             sock:close()
             ngx.sleep(0.3)
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.paused and probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+            assert(probe.paused, cjson.encode(probe))
+            closed_source(probe)
             assert(sink_count() == before)
         end, debug.traceback)
         get("/gc?action=restart")
@@ -337,7 +348,8 @@ for _, endpoint in ipairs { "/example", "/completed" } do
                 "?case=" .. case .. "&fault=truncate", { method = "POST", body = raw, keepalive = false }))
             assert(response.status == 500, response.body)
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.truncated and probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+            assert(probe.truncated, cjson.encode(probe))
+            closed_source(probe)
             assert(sink_count() == before)
         end, debug.traceback)
         get("/gc?action=restart")
@@ -353,7 +365,7 @@ for _, endpoint in ipairs { "/example", "/connect-failure" } do
             local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", raw)
             assert((status == 500 or status == 502) and result.error, cjson.encode(result))
             local probe = get("/lifecycle/probe?case=" .. case)
-            assert(probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+            closed_source(probe)
         end, debug.traceback)
         get("/gc?action=restart")
         assert(ok, err)
@@ -373,7 +385,7 @@ for _, kind in ipairs { "core", "adapter", "fallback" } do
         if kind == "fallback" then assert(result.input.fallback == "transfer-encoding") end
         ngx.sleep(0.05)
         local probe = get("/lifecycle/probe?case=" .. case .. "&gc=1")
-        assert(probe.fcntl == -1 and probe.errno == 9, cjson.encode(probe))
+        closed_source(probe)
     end)
 end
 check("request body has one input owner", function()

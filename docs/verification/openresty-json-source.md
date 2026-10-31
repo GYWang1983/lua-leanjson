@@ -86,7 +86,7 @@ Bounded libFuzzer sessions are a separate nightly gate:
 
 ```sh
 rustup toolchain install nightly --profile minimal
-cargo install cargo-fuzz --locked
+cargo +nightly install cargo-fuzz --version 0.13.2 --locked
 QJSON_FUZZ_SECONDS=30 make bounded-fuzz
 ```
 

@@ -25,6 +25,7 @@ if err then
 end
 local ok, branch = pcall(qjson.fork, body)
 if not ok or qjson.type(branch) ~= "object" then
+    if ok then qjson.close(branch) end
     if session then session:close() else qjson.close(body) end
     return bad(400, "example expects an object with a model field")
 end

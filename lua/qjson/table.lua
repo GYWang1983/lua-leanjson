@@ -2,6 +2,7 @@
 local ffi = require("ffi")
 local proxy = require("qjson.proxy")
 local bounded_reader = require("qjson.reader")
+local leases = require("qjson.leases")
 local has_cjson, cjson = pcall(require, "cjson")
 local _M = {}
 _M.null = has_cjson and cjson.null or setmetatable({}, { __tostring = function() return "null" end })
@@ -13,6 +14,7 @@ local classify_plain_table
 
 local function classify_table(value)
     local hint = TABLE_TYPE_HINT[value]
+    if getmetatable(value) == _M.empty_array_mt and hint ~= "array" then return "array", #value end
     if hint == "object" then return "object" end
     if hint == "array" then
         -- Materialization preserves empty-array identity, but later ordinary
@@ -20,14 +22,13 @@ local function classify_table(value)
         if next(value) == nil then return "array", 0 end
         return classify_plain_table(value)
     end
-    if getmetatable(value) == _M.empty_array_mt then return "array", #value end
     return classify_plain_table(value)
 end
 
 proxy.configure({ null = _M.null, classify = classify_table })
 
 _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
-_M.fork, _M.type = proxy.fork, proxy.type
+_M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
 _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
 function _M.decode(raw)
@@ -37,11 +38,11 @@ end
 
 -- Full reads exist only in explicitly materializing/complete-encode paths.
 -- The bounded reader uses backend:read directly and never calls this helper.
-local function read_all(backend, first, last)
+local function read_all(backend, first, last, scope)
     local parts = {}
     while first < last do
         local wanted = math.min(65536, last - first)
-        local chunk, err = backend:read(first, wanted)
+        local chunk, err = backend:read(first, wanted, scope)
         if type(chunk) ~= "string" then error(err or "qjson: source read failed", 0) end
         if #chunk == 0 then error("qjson: unexpected source EOF", 0) end
         if #chunk > wanted then error("qjson: source exceeded read bound", 0) end
@@ -52,9 +53,9 @@ local function read_all(backend, first, last)
 end
 
 local materialize_node
-materialize_node = function(node, keep_origin)
-    if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node) end
-    local keys, values, entries = proxy.members(node)
+materialize_node = function(node, keep_origin, scope)
+    if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, scope) end
+    local keys, values, entries = proxy.members(node, scope)
     local out, records = {}, {}
     local complete = true
     keep_origin = keep_origin and node.backend ~= nil
@@ -66,13 +67,13 @@ materialize_node = function(node, keep_origin)
     for i = 1, n do
         local key = node.kind == "array" and i or keys[i]
         local child = values[key]
-        local value = materialize_node(child, keep_origin)
+        local value = materialize_node(child, keep_origin, scope)
         out[key] = value
         if keep_origin then
             local backend, first, last = proxy.span(child)
             local record
             if backend and child.kind == "string" and last - first > 24 then
-                record = { tag = "string", value = value, raw = read_all(backend, first, last) }
+                record = { tag = "string", value = value, raw = read_all(backend, first, last, scope) }
             elseif backend and (child.kind == "object" or child.kind == "array") then
                 local origin = TABLE_ORIGIN[value]
                 if origin and origin.complete and last - first > 64 then
@@ -99,7 +100,14 @@ function _M.materialize(value, options)
     local keep = options and options.keep_origin
     if keep ~= nil and type(keep) ~= "boolean" then error("qjson.materialize: opts.keep_origin must be a boolean", 0) end
     local node = proxy.node(value)
-    if node then return materialize_node(node, keep == true) end
+    if node then
+        if keep and leases.managed(node) then
+            error("qjson.materialize: keep_origin is unsupported for file and incremental sources", 0)
+        end
+        return leases.guard(proxy.scope(value), node, function()
+            return materialize_node(node, keep == true, proxy.scope(value))
+        end)
+    end
     return value
 end
 

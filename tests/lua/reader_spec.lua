@@ -208,7 +208,7 @@ describe("bounded snapshot reader", function()
         assert.is_nil(weak[1])
     end)
 
-    it("releases snapshot references immediately on construction failure", function()
+    it("releases snapshot references immediately on length failure", function()
         local function failed_reader()
             local backend = {}
             function backend:type() return "object" end
@@ -218,9 +218,9 @@ describe("bounded snapshot reader", function()
             return qjson.reader(value), weak
         end
         local reader, weak = failed_reader()
+        local length, err = reader:length()
         collectgarbage("collect"); collectgarbage("collect")
         assert.is_nil(weak[1])
-        local length, err = reader:length()
         assert.is_nil(length)
         assert.is_truthy(err:find("span unavailable", 1, true))
         local _, first = reader:next()

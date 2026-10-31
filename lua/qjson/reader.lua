@@ -1,6 +1,7 @@
 -- Streaming encoder over immutable logical nodes. The stack stores traversal
 -- state, never encoded subtrees; every string operation is bounded by room.
 local proxy = require("qjson.proxy")
+local leases = require("qjson.leases")
 local M = {}
 local Reader = {}; Reader.__index = Reader
 local ESCAPES = {
@@ -23,8 +24,8 @@ local function string_length(value)
     return length
 end
 
-local function container(node)
-    local keys, values = proxy.members(node)
+local function container(node, scope)
+    local keys, values = proxy.members(node, scope)
     local n = #keys
     if node.kind == "array" then
         n = 0
@@ -48,7 +49,7 @@ local function token(node, codec)
     error("qjson.encode: unsupported value type: " .. kind, 0)
 end
 
-local function count_length(root, normalize, codec)
+local function count_length(root, normalize, codec, scope)
     local stack, length = { { node = root, depth = codec.depth or 1 } }, 0
     while #stack > 0 do
         local frame = stack[#stack]
@@ -65,12 +66,14 @@ local function count_length(root, normalize, codec)
             end
         else
             local backend, first, last = raw_span(node, normalize)
+            leases.check(scope)
             if backend then
                 length = length + last - first
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
                 if frame.depth > 1000 then error("qjson.encode: max depth exceeded", 0) end
-                frame.keys, frame.values, frame.n = container(node)
+                frame.keys, frame.values, frame.n = container(node, scope)
+                leases.check(scope)
                 frame.index = 0
                 length = length + 2
             elseif node.kind == "string" then
@@ -101,7 +104,7 @@ local function next_chunk(self)
             if backend then
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
-                local keys, values, n = container(node)
+                local keys, values, n = container(node, self.scope)
                 if self.closed then return nil end
                 stack[#stack] = { tag = "container", node = node, keys = keys, values = values,
                     n = n, index = 0, open = true }
@@ -114,7 +117,7 @@ local function next_chunk(self)
             local wanted = math.min(room, frame.last - frame.pos)
             if wanted == 0 then stack[#stack] = nil
             else
-                local chunk, err = frame.backend:read(frame.pos, wanted)
+                local chunk, err = frame.backend:read(frame.pos, wanted, self.scope)
                 if self.closed then return nil end
                 if type(chunk) ~= "string" then error(err or "qjson.reader: source read failed", 0) end
                 if #chunk == 0 then error("qjson.reader: unexpected source EOF", 0) end
@@ -179,15 +182,28 @@ end
 function Reader:length()
     if self.failure then return nil, self.failure end
     if self.output_length ~= nil then return self.output_length end
-    return nil, CLOSED
+    if self.closed then return nil, CLOSED end
+    local ok, result = pcall(count_length, self.root, self.normalize, self.codec, self.scope)
+    if self.closed then return nil, CLOSED end
+    if not ok then
+        self.failure = tostring(result)
+        self.root, self.stack, self.codec = nil, nil, nil
+        leases.release(self.scope)
+        return nil, self.failure
+    end
+    self.output_length = result
+    return result
 end
 
 function Reader:close()
     self.closed = true
-    self.stack, self.codec = nil, nil
+    self.root, self.stack, self.codec = nil, nil, nil
+    leases.release(self.scope)
 end
 
 function Reader:next()
+    if self.closed then return nil, CLOSED end
+    if not self.failure and self.output_length == nil then self:length() end
     if self.closed then return nil, CLOSED end
     if self.failure then
         self:close()
@@ -220,13 +236,15 @@ function M.new(value, options, codec)
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local ok, result = pcall(function()
         local root = proxy.snapshot(value)
+        self.scope = leases.acquire(root)
+        self.root = root
         self.stack = { { tag = "value", node = root } }
-        return count_length(root, self.normalize, codec)
+        return true
     end)
-    if ok then self.output_length = result
-    else
+    if not ok then
         self.failure = tostring(result)
-        self.stack, self.codec = nil, nil
+        self.root, self.stack, self.codec = nil, nil, nil
+        leases.release(self.scope)
     end
     return self
 end

@@ -1,0 +1,82 @@
+local qjson = require("qjson")
+
+describe("incremental JSON source", function()
+    it("waits for explicit finish before exposing final last-wins values", function()
+        assert.is_function(qjson.new_decoder)
+        local decoder = qjson.new_decoder({ chunk_size = 1 })
+        for byte in ('{"a":1,"a":false,"items":[null,{"x":"\\uD83D\\uDE00"}]}'):gmatch(".") do
+            assert.is_true(decoder:feed(byte))
+            local value, status = decoder:get("a")
+            assert.is_nil(value)
+            assert.are.equal("NEED_INPUT", status)
+        end
+        local body, err = decoder:finish()
+        assert.is_nil(err)
+        assert.is_false(body.a)
+        assert.are.equal("😀", body.items[2].x)
+        local value, status = decoder:get("a")
+        assert.is_false(value)
+        assert.are.equal("READY", status)
+        value, status = decoder:get("missing")
+        assert.is_nil(value)
+        assert.are.equal("ABSENT", status)
+        assert.are.equal(qjson.null, qjson.get(body, "items[0]"))
+        assert.are.equal("😀", qjson.get(body, "items[1].x"))
+    end)
+
+    it("returns false and null roots without confusing them with failure", function()
+        assert.is_function(qjson.new_decoder)
+        for _, case in ipairs({ { "false", false }, { "null", qjson.null }, { '""', "" } }) do
+            local decoder = qjson.new_decoder()
+            assert.is_true(decoder:feed(case[1]))
+            local value, err = decoder:finish()
+            assert.is_nil(err)
+            assert.are.equal(case[2], value)
+            local found, status = decoder:get("")
+            assert.are.equal(case[2], found)
+            assert.are.equal("READY", status)
+        end
+    end)
+
+    it("preserves malformed and aborted status instead of claiming absence", function()
+        assert.is_function(qjson.new_decoder)
+        local decoder = qjson.new_decoder()
+        assert.is_true(decoder:feed('{"a":'))
+        local value, err = decoder:finish()
+        assert.is_nil(value)
+        assert.is_string(err)
+        local _, status, get_error = decoder:get("missing")
+        assert.are.equal("ERROR", status)
+        assert.are.equal(err, get_error)
+        decoder = qjson.new_decoder()
+        decoder:abort("client cancelled")
+        local _, aborted_status, aborted_error = decoder:get("missing")
+        assert.are.equal("ERROR", aborted_status)
+        assert.matches("client cancelled", aborted_error, 1, true)
+    end)
+
+    it("uses the existing zero-based bracket and dot path grammar", function()
+        assert.is_function(qjson.get)
+        local body = qjson.decode('{"a":[{"b":false}],"x]":3}')
+        assert.is_false(qjson.get(body, ".a[00]..b"))
+        assert.are.equal(3, qjson.get(body, "x]"))
+        for _, path in ipairs({ "a[]", "a[-1]", "a[4294967296]", "a[1", "a." }) do
+            assert.has_error(function() qjson.get(body, path) end)
+        end
+        assert.has_error(function() qjson.get(body, "a.b") end)
+    end)
+
+    it("links common path results to live ancestors until their path is replaced", function()
+        local root = qjson.decode('{"a":{"b":{"x":1},"sibling":2}}')
+        local ancestor, same_child = root.a, root.a.b
+        local child = qjson.get(root, "a.b")
+        child.x = 7
+        assert.are.equal(7, root.a.b.x)
+        assert.are.equal(7, ancestor.b.x)
+        assert.are.equal(7, same_child.x)
+        root.a = { b = { x = 3 } }
+        child.x = 9
+        assert.are.equal(3, root.a.b.x)
+        assert.are.equal(9, child.x)
+    end)
+end)

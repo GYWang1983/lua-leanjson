@@ -1,9 +1,20 @@
 -- Immutable logical nodes and mutable proxy cells. Only this weak side table
 -- associates a public (always empty) Lua table with its private state.
 local M = {}
+local ffi = require("ffi")
+local leases = require("qjson.leases")
 local META = setmetatable({}, { __mode = "k" })
+local GC_TOKENS = setmetatable({}, { __mode = "k" })
 local Object, Array = {}, {}
 local config
+local close_cell
+
+local function watch_resources(cell)
+    local value = cell.public and cell.public[1]
+    if value and #cell.scope.entries > 0 and not GC_TOKENS[value] then
+        GC_TOKENS[value] = ffi.gc(ffi.new("uint8_t[1]"), function() close_cell(cell) end)
+    end
+end
 
 function M.configure(options) config = options end
 
@@ -11,10 +22,10 @@ local function raw_node(backend, handle)
     return { backend = backend, handle = handle, kind = backend:type(handle) }
 end
 
-function M.members(node)
+function M.members(node, scope)
     if node.values then return node.keys, node.values, node.entries end
     local keys, values, entries = {}, {}, {}
-    for key, handle in node.backend:children(node.handle) do
+    for key, handle in node.backend:children(node.handle, scope) do
         local child = raw_node(node.backend, handle)
         if values[key] == nil then keys[#keys + 1] = key end
         values[key] = child
@@ -27,9 +38,9 @@ function M.members(node)
     return keys, values, entries
 end
 
-function M.scalar(node)
+function M.scalar(node, scope)
     if node.kind == "null" then return config.null end
-    if node.backend then return node.backend:scalar(node.handle) end
+    if node.backend then return node.backend:scalar(node.handle, scope) end
     return node.value
 end
 
@@ -49,8 +60,8 @@ local function copy_map(original)
     return out
 end
 
-local function changed(node, key, value)
-    local keys, values = M.members(node)
+local function changed(node, key, value, scope)
+    local keys, values = M.members(node, scope)
     local new_keys, new_values = {}, copy_map(values)
     for _, k in ipairs(keys) do
         if k ~= key or value ~= nil then new_keys[#new_keys + 1] = k end
@@ -60,38 +71,70 @@ local function changed(node, key, value)
     return { kind = node.kind, keys = new_keys, values = new_values }
 end
 
+local function sync_cached(cell, old, node)
+    if not old.values or not node.values then return end
+    for key, cached in pairs(cell.cache) do
+        local child = META[cached]
+        local next_node = node.values[key]
+        if child and not child.closed and child.node == old.values[key] and child.node ~= next_node then
+            if next_node == nil then child.parent = nil; cell.cache[key] = nil
+            else
+                if not child.borrowed then leases.retarget(child.scope, next_node); watch_resources(child) end
+                sync_cached(child, child.node, next_node)
+                child.node, child.version = next_node, child.version + 1
+            end
+        end
+    end
+end
+
 local function replace(cell, node)
+    leases.check(cell.scope)
+    if not cell.borrowed then leases.retarget(cell.scope, node); watch_resources(cell) end
     local old = cell.node
+    sync_cached(cell, old, node)
     cell.node, cell.version = node, cell.version + 1
     local parent = cell.parent
-    if parent then
-        local _, values = M.members(parent.node)
+    if parent and not parent.closed then
+        local cached = parent.cache[cell.key]
+        local cached_cell = cached and META[cached]
+        if cell.borrowed and cached_cell and cached_cell ~= cell and cached_cell.node == old then
+            replace(cached_cell, node)
+            return
+        end
+        local _, values = M.members(parent.node, parent.scope)
+        if parent.closed then cell.parent = nil; return end
         if values[cell.key] == old then
-            replace(parent, changed(parent.node, cell.key, node))
+            replace(parent, changed(parent.node, cell.key, node, parent.scope))
         elseif cell.lexical then
             -- Earlier duplicate occurrences may be traversed for compatibility,
             -- but only the last occurrence participates in the logical value.
-            replace(parent, changed(parent.node, cell.key, values[cell.key]))
+            replace(parent, changed(parent.node, cell.key, values[cell.key], parent.scope))
         end
     end
 end
 
 local function wrap(node, parent, key, lexical)
     local proxy = setmetatable({}, node.kind == "array" and Array or Object)
-    META[proxy] = { node = node, parent = parent, key = key, cache = setmetatable({}, { __mode = "v" }), version = 0, lexical = lexical }
+    local cell = { node = node, parent = parent, key = key, cache = setmetatable({}, { __mode = "v" }),
+        version = 0, lexical = lexical, scope = leases.acquire(node), public = setmetatable({ proxy }, { __mode = "v" }) }
+    META[proxy] = cell
+    -- The cell never stores this token and contains no strong public proxy.
+    -- A held child's parent cell therefore cannot retain a dead parent's lease.
+    watch_resources(cell)
     return proxy
 end
 
 local function expose(node, parent, key, lexical)
     if node == nil then return nil end
-    if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node) end
+    if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, parent and parent.scope) end
     if parent and not lexical then
         -- A metadata load can yield while the mutable parent cell is replaced.
         -- Only attach/cache the child if it still belongs to the current node;
         -- otherwise the in-flight read returns its detached old snapshot.
         while true do
+            leases.check(parent.scope)
             local current, version = parent.node, parent.version
-            local _, values = M.members(current)
+            local _, values = M.members(current, parent.scope)
             if parent.node == current and parent.version == version then
                 if values[key] ~= node then return wrap(node) end
                 break
@@ -106,8 +149,8 @@ local function expose(node, parent, key, lexical)
     return wrap(node, parent, key, lexical)
 end
 
-local function array_length(node)
-    local _, values = M.members(node)
+local function array_length(node, scope)
+    local _, values = M.members(node, scope)
     local n = 0
     while values[n + 1] ~= nil do n = n + 1 end
     return n
@@ -117,7 +160,7 @@ local snapshot
 snapshot = function(value, active, depth)
     if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
     local cell = META[value]
-    if cell then return cell.node end
+    if cell then leases.check(cell.scope); return cell.node end
     local tv = type(value)
     if tv ~= "table" then return { kind = tv, value = value } end
     if active[value] then error("qjson.encode: circular reference", 0) end
@@ -147,15 +190,69 @@ end
 
 function M.snapshot(value) return snapshot(value, {}, 1) end
 function M.is_proxy(value) return META[value] ~= nil end
-function M.node(value) return META[value] and META[value].node end
+function M.node(value)
+    local cell = META[value]
+    if cell then leases.check(cell.scope); return cell.node end
+end
+function M.scope(value) return META[value] and META[value].scope end
 function M.from_backend(backend, handle) return expose(raw_node(backend, handle)) end
 function M.from_node(node) return expose(node) end
 function M.fork(value) return expose(M.snapshot(value)) end
 
+function M.get_path(value, segments)
+    if #segments == 0 then return value end
+    local owner = META[value]
+    return leases.guard(owner.scope, owner.node, function()
+        local cell, node = owner, owner.node
+        for i, segment in ipairs(segments) do
+            if node.kind ~= segment.kind then error("qjson.get: type mismatch", 0) end
+            local _, values = M.members(node, owner.scope)
+            leases.check(owner.scope)
+            node = values[segment.key]
+            if node == nil then return nil end
+            if i == #segments then return expose(node, cell, segment.key) end
+            local cached = cell.cache[segment.key]
+            local cached_cell = cached and META[cached]
+            if cached_cell and cached_cell.node == node then cell = cached_cell
+            else
+                -- These path ancestors are internal links, not public proxies.
+                -- They own no lease: the returned child owns its source, while
+                -- a still-linked live ancestor owns all sibling dependencies.
+                cell = { node = node, parent = cell, key = segment.key, borrowed = true,
+                    cache = setmetatable({}, { __mode = "v" }), version = 0 }
+            end
+        end
+    end)
+end
+
+close_cell = function(cell)
+    if cell.closed then return end
+    cell.closed, cell.version = true, cell.version + 1
+    local parent = cell.parent
+    if parent and parent.cache then
+        local cached = parent.cache[cell.key]
+        if cached and META[cached] == cell then parent.cache[cell.key] = nil end
+    end
+    for _, child in pairs(cell.cache) do
+        local child_cell = META[child]
+        if child_cell and child_cell.parent == cell then child_cell.parent = nil end
+    end
+    cell.parent, cell.node, cell.cache = nil, nil, {}
+    leases.release(cell.scope)
+end
+
+function M.close(value)
+    local cell = META[value]
+    if not cell or cell.closed then return end
+    local token = GC_TOKENS[value]
+    if token then ffi.gc(token, nil); GC_TOKENS[value] = nil end
+    close_cell(cell)
+end
+
 function M.type(value)
     if rawequal(value, config.null) then return "null" end
     local cell = META[value]
-    if cell then return cell.node.kind end
+    if cell then leases.check(cell.scope); return cell.node.kind end
     if type(value) == "table" then
         local kind = config.classify(value)
         return kind
@@ -165,17 +262,21 @@ end
 
 local function read(proxy, key)
     local cell = META[proxy]
+    return leases.guard(cell.scope, cell.node, function()
     if cell.node.kind == "object" then
         if type(key) ~= "string" then return nil end
     elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) then
         return nil
     end
-    local _, values = M.members(cell.node)
+    local _, values = M.members(cell.node, cell.scope)
+    leases.check(cell.scope)
     return expose(values[key], cell, key)
+    end)
 end
 
 local function write(proxy, key, value)
     local cell = META[proxy]
+    return leases.guard(cell.scope, cell.node, function()
     if cell.node.kind == "object" then
         if type(key) ~= "string" then error("qjson: object key must be a string, got " .. type(key), 0) end
     elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key == math.huge then
@@ -183,7 +284,7 @@ local function write(proxy, key, value)
     end
     local present = type(value) ~= "nil"
     if cell.node.kind == "array" then
-        local n = array_length(cell.node)
+        local n = array_length(cell.node, cell.scope)
         if (present and key > n + 1) or (not present and key < n) then
             error("qjson: sparse proxy arrays require explicit materialization", 0)
         end
@@ -191,7 +292,8 @@ local function write(proxy, key, value)
     local node = present and M.snapshot(value) or nil
     local cached = cell.cache[key]
     if cached then META[cached].parent = nil; cell.cache[key] = nil end
-    replace(cell, changed(cell.node, key, node))
+    replace(cell, changed(cell.node, key, node, cell.scope))
+    end)
 end
 
 Object.__index, Array.__index = read, read
@@ -200,17 +302,21 @@ Object.__newindex, Array.__newindex = write, write
 function M.len(value)
     local cell = META[value]
     if not cell then return #value end
-    if cell.node.kind == "array" then return array_length(cell.node) end
-    local keys = M.members(cell.node)
+    return leases.guard(cell.scope, cell.node, function()
+    if cell.node.kind == "array" then return array_length(cell.node, cell.scope) end
+    local keys = M.members(cell.node, cell.scope)
     return #keys
+    end)
 end
 Object.__len, Array.__len = M.len, M.len
 
 function M.ipairs(value)
     local cell = META[value]
     if not cell then return ipairs(value) end
+    leases.check(cell.scope)
     local index, version = 0, cell.version
     return function()
+        leases.check(cell.scope)
         if cell.version ~= version then error("qjson: invalid argument", 0) end
         index = index + 1
         local child = read(value, index)
@@ -221,11 +327,17 @@ end
 function M.pairs(value)
     local cell = META[value]
     if not cell then return pairs(value) end
+    leases.check(cell.scope)
     if cell.node.kind == "array" then return M.ipairs(value) end
-    local keys, values, entries = M.members(cell.node)
+    local pin = leases.pin(cell.scope, cell.node)
+    local fallback = leases.fallback(cell.scope, pin)
+    local keys, values, entries = M.members(cell.node, cell.scope)
     local lexical_entries = cell.node.backend and entries
     local index = 0
     return function()
+        -- The iterator is itself a live use of the public source proxy.
+        leases.check(META[value].scope)
+        if not fallback then return nil end
         index = index + 1
         local key, node
         if lexical_entries then
@@ -236,10 +348,12 @@ function M.pairs(value)
             if key ~= nil then node = values[key] end
         end
         if key ~= nil then
-            local _, current = M.members(cell.node)
+            local _, current = M.members(cell.node, cell.scope)
             local lexical = current[key] ~= node
             return key, expose(node, cell, key, lexical)
         end
+        leases.finish(cell.scope, pin)
+        fallback = nil
     end, nil, nil
 end
 Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs

@@ -258,6 +258,7 @@ local _lazy = require("qjson.table")
 _M.decode         = _lazy.decode
 _M.encode         = _lazy.encode
 _M.fork           = _lazy.fork
+_M.close          = _lazy.close
 _M.type           = _lazy.type
 _M.array_insert   = _lazy.array_insert
 _M.array_remove   = _lazy.array_remove
@@ -272,5 +273,8 @@ _M.null           = _lazy.null
 _M.empty_array_mt = _lazy.empty_array_mt
 _M._LazyObject    = _lazy._LazyObject
 _M._LazyArray     = _lazy._LazyArray
+_M.decode_file    = require("qjson.source").decode_file
+_M.new_decoder    = require("qjson.source").new_decoder
+_M.get            = require("qjson.path").get
 
 return _M

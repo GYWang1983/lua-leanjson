@@ -37,7 +37,7 @@ body.x = 1                 -- output still contains 9007199254740993
 body.n = n                 -- replacement now uses Lua number encoding
 ```
 
-`qjson.materialize(value, { keep_origin = true })` remains an explicit full tree conversion with optional provenance reuse. `qjson.encode(value)` remains the convenience API that allocates a complete output string.
+`qjson.materialize(value, { keep_origin = true })` remains an explicit full tree conversion with optional memory-source provenance reuse. File/incremental sources reject `keep_origin=true`; default materialization returns independent ordinary values. `qjson.encode(value)` remains the convenience API that allocates a complete output string.
 
 ```lua
 local reader = qjson.reader(body, {
@@ -55,10 +55,10 @@ end
 reader:close()
 ```
 
-Reader construction freezes proxy and ordinary Lua values, including mixed trees. `length()` counts the actual encoded bytes without building output or advancing the output cursor. Each nonempty chunk is at most `chunk_size` bytes. Original spans and newly assigned Lua strings are emitted with bounded buffers, including JSON escapes. The reader does not call the complete encoder for scalar strings or documents.
+Reader construction freezes proxy and ordinary Lua values, including mixed trees, and acquires source leases without source I/O. `length()` validates/counts the actual encoded bytes without building output or advancing the output cursor. `next()` ensures that complete validation/count first when needed. Each nonempty chunk is at most `chunk_size` bytes. Original spans and newly assigned Lua strings are emitted with bounded buffers, including JSON escapes. The reader does not call the complete encoder for scalar strings or documents.
 
 A successfully computed length remains available after EOF or `close()` without keeping the source alive. Construction/counting failures release snapshot references immediately; `length()` and the first `next()` report the original error.
 
 Normal EOF is `nil, nil`. Encoding/source failures are `nil, error`; preserve this error when adapting a reader to an HTTP body iterator. EOF, failure, and explicit `close()` are terminal; later `next()` returns a closed error. `close()` is idempotent and drops only the reader's references. A fork, proxy, or other reader continues to keep shared source resources alive. A new reader is needed for another traversal.
 
-These APIs are independent of `ngx`. This phase retains the complete input string and its structural index; it reduces extra decoding/output allocations but does not implement file or incremental input.
+`qjson.close(proxy)` drops that proxy's source leases, detaches its cache slot and rejects later access. Held children, forks and readers remain independently usable. These APIs are independent of `ngx`. Memory input retains the complete source string; [file and incremental sources](file-source-api.md) use bounded disk windows with explicit ownership and cancellation.

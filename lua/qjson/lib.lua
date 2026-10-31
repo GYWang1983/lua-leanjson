@@ -60,6 +60,41 @@ int qjson_iter_init(const qjson_cursor*, qjson_iter* it);
 int qjson_iter_next(qjson_iter* it,
                     const uint8_t** key_ptr, size_t* key_len,
                     qjson_cursor* value_out);
+
+typedef struct qjson_source_v1 qjson_source_v1;
+typedef struct qjson_source_v1_op qjson_source_v1_op;
+typedef struct qjson_source_v1_iter qjson_source_v1_iter;
+typedef struct { const qjson_source_v1 *source; uint64_t node_id; } qjson_source_v1_node;
+typedef struct {
+    uint32_t status, detail;
+    int32_t code;
+    uint64_t offset, length;
+} qjson_source_v1_result;
+typedef struct { uint32_t api_version, mode, max_depth, window_size; } qjson_source_v1_options;
+typedef struct {
+    uint32_t kind, complete;
+    uint64_t raw_start, raw_end, child_count;
+} qjson_source_v1_node_info;
+typedef struct {
+    uint64_t ordinal, key_start, key_end;
+    qjson_source_v1_node value;
+} qjson_source_v1_member;
+qjson_source_v1 *qjson_source_v1_new(const qjson_source_v1_options *, qjson_source_v1_result *);
+int qjson_source_v1_feed(qjson_source_v1 *, uint64_t, const uint8_t *, size_t, qjson_source_v1_result *);
+int qjson_source_v1_finish(qjson_source_v1 *, uint64_t, qjson_source_v1_result *);
+int qjson_source_v1_abort(qjson_source_v1 *, uint32_t, qjson_source_v1_result *);
+void qjson_source_v1_retain(qjson_source_v1 *);
+void qjson_source_v1_release(qjson_source_v1 *);
+int qjson_source_v1_root(const qjson_source_v1 *, qjson_source_v1_node *, qjson_source_v1_result *);
+int qjson_source_v1_node_get_info(qjson_source_v1_node, qjson_source_v1_node_info *, qjson_source_v1_result *);
+int qjson_source_v1_iter_begin(qjson_source_v1_node, qjson_source_v1_iter **, qjson_source_v1_result *);
+int qjson_source_v1_iter_next(qjson_source_v1_iter *, qjson_source_v1_member *, qjson_source_v1_result *);
+void qjson_source_v1_iter_release(qjson_source_v1_iter *);
+int qjson_source_v1_node_raw_begin(qjson_source_v1_node, qjson_source_v1_op **, qjson_source_v1_result *);
+int qjson_source_v1_node_scalar_begin(qjson_source_v1_node, qjson_source_v1_op **, qjson_source_v1_result *);
+int qjson_source_v1_op_step(qjson_source_v1_op *, const uint8_t **, size_t *, qjson_source_v1_result *);
+int qjson_source_v1_provide_window(qjson_source_v1_op *, uint64_t, const uint8_t *, size_t, qjson_source_v1_result *);
+void qjson_source_v1_op_release(qjson_source_v1_op *);
 ]]
 
 local tried = {}
@@ -95,6 +130,12 @@ local required_symbols = {
     "qjson_cursor_object_entry_at",
     "qjson_iter_init",
     "qjson_iter_next",
+    "qjson_source_v1_new", "qjson_source_v1_feed", "qjson_source_v1_finish",
+    "qjson_source_v1_abort", "qjson_source_v1_retain", "qjson_source_v1_release",
+    "qjson_source_v1_root", "qjson_source_v1_node_get_info", "qjson_source_v1_iter_begin",
+    "qjson_source_v1_iter_next", "qjson_source_v1_iter_release", "qjson_source_v1_node_raw_begin",
+    "qjson_source_v1_node_scalar_begin", "qjson_source_v1_op_step",
+    "qjson_source_v1_provide_window", "qjson_source_v1_op_release",
 }
 
 local function try_load(name)

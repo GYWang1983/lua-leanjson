@@ -34,6 +34,11 @@ build = {
         cp lua/qjson/proxy.lua "$(LUADIR)/qjson/proxy.lua"
         cp lua/qjson/reader.lua "$(LUADIR)/qjson/reader.lua"
         cp lua/qjson/source_memory.lua "$(LUADIR)/qjson/source_memory.lua"
+        cp lua/qjson/source.lua "$(LUADIR)/qjson/source.lua"
+        cp lua/qjson/source_io.lua "$(LUADIR)/qjson/source_io.lua"
+        cp lua/qjson/path.lua "$(LUADIR)/qjson/path.lua"
+        cp lua/qjson/leases.lua "$(LUADIR)/qjson/leases.lua"
+        cp lua/qjson/openresty.lua "$(LUADIR)/qjson/openresty.lua"
         lib=target/release/libqjson.so
         if [ ! -f "$lib" ]; then lib=target/release/libqjson.dylib; fi
         if [ ! -f "$lib" ]; then echo "qjson native library not found"; exit 1; fi

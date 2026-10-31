@@ -23,7 +23,7 @@ else
 LUA_ENV := LD_LIBRARY_PATH=$(LIB_DIR) LUA_PATH='$(LUA_PATH)' LUA_CPATH='$(LUA_CPATH)'
 endif
 
-.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test bounded-fuzz
+.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test openresty-source-stress bounded-fuzz
 
 help: ## Show this help
 	@# FS uses [^#]* (not .*) so a description containing `##` isn't truncated.
@@ -61,6 +61,9 @@ openresty-test: build ## Run real native OpenResty HTTP acceptance tests
 
 openresty-bench: build ## Compare cjson/qjson in fresh native OpenResty workers
 	RESTY='$(RESTY)' scripts/benchmark-openresty.sh
+
+openresty-source-stress: build ## Run seeded source/contiguous mutation stress under native LuaJIT
+	$(LUA_ENV) $(RESTY) tests/openresty/source-stress.lua
 
 openresty-verify: ## Run library modes, corpora, properties, lint, and native HTTP tests
 	scripts/verify-openresty-library.sh

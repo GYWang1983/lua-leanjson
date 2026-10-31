@@ -2,14 +2,52 @@ local cjson = require "cjson"
 local qjson = require "qjson"
 local adapter = require "qjson.openresty"
 local http = require "resty.http"
+if ngx.var.uri == "/gc" then
+    collectgarbage(ngx.var.arg_action == "stop" and "stop" or "restart")
+    ngx.say("{}")
+    return
+end
 local started = ngx.now()
 local opts = { chunk_size = 16384, temp_dir = os.getenv("QJSON_TEST_PREFIX") .. "/decoder" }
+local output_phase = "input"
 if ngx.var.arg_hook == "1" then opts.on_chunk = function() error("intentional source hook failure") end end
 if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/qjson-unwritable-spool" end
 if ngx.var.uri == "/external-abort" then assert(ngx.on_abort(function() end)) end
+if ngx.var.uri == "/abort-file-parse" then
+    opts.on_chunk = function()
+        local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/file-parse-started", "w"))
+        marker:write("scanning")
+        marker:close()
+        ngx.sleep(0.03)
+    end
+end
+if ngx.var.uri == "/abort-output-length" or ngx.var.uri == "/output-hook-failure" then
+    opts.on_chunk = function()
+        if output_phase == "length" and ngx.var.uri == "/abort-output-length" then
+            local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/output-length-started", "w"))
+            marker:write("counting")
+            marker:close()
+            ngx.sleep(0.03)
+        elseif output_phase == "body" then
+            error("intentional output hook failure")
+        else ngx.sleep(0) end
+    end
+end
 local body, err, info, session
-if ngx.var.uri == "/incremental" then
+if ngx.var.uri == "/incremental" or ngx.var.uri == "/close-waiters" then
     session, err, info = adapter.start_body(opts)
+    if session and ngx.var.uri == "/close-waiters" then
+        local first = ngx.thread.spawn(function() return session:get("model") end)
+        local second = ngx.thread.spawn(function() return session:get("model") end)
+        ngx.sleep(0.01)
+        session:close()
+        local ok1, _, status1, err1 = ngx.thread.wait(first)
+        local ok2, _, status2, err2 = ngx.thread.wait(second)
+        ngx.header.content_type = "application/json"
+        ngx.say(cjson.encode { first = { ok = ok1, status = status1, error = err1 },
+            second = { ok = ok2, status = status2, error = err2 } })
+        return
+    end
     if session then
         -- This may yield until last-wins has a final value. It must not return
         -- the first duplicate while a later upload chunk is still pending.
@@ -62,7 +100,9 @@ branch.model = "rewritten"
 if ngx.var.arg_mixed == "1" then
     branch.remove_me = nil
     branch.added = { enabled = true, value = qjson.null }
-    branch.nested.flag = false
+    local nested = branch.nested
+    nested.flag = false
+    qjson.close(nested)
 end
 local sibling = qjson.fork(body)
 sibling.model = "independent"
@@ -90,6 +130,10 @@ if not ok then error(err) end
 local headers = { ["Content-Length"] = "1", ["Transfer-Encoding"] = "chunked",
     ["x-capture-id"] = ngx.req.get_headers()["x-capture-id"] }
 local res, transfer
+output_phase = "length"
+if ngx.var.uri == "/output-hook-failure" then
+    opts.cancelled = function() output_phase = "body"; return false end
+end
 res, err, transfer = adapter.request(httpc, {
     method = "POST", path = ngx.var.arg_disconnect == "1" and "/disconnect" or "/sink", headers = headers,
 }, branch, opts)

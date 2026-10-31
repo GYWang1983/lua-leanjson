@@ -57,6 +57,20 @@ local function completed(opts, json)
     local data = ngx.req.get_body_data()
     local file = data == nil and ngx.req.get_body_file() or nil
     local info = { mode = file and "completed-file" or "completed-memory", source = file and "file" or "memory" }
+    local holder = { aborted = false }
+    local unregister, err = on_abort(function()
+        holder.aborted = true
+        release(holder.value)
+    end)
+    if not unregister then return nil, err, info end
+    -- Register before file decoding: decode_file may yield while it still owns
+    -- an in-progress Source and has not returned a proxy for us to close yet.
+    local chunk_hook = json.on_chunk
+    json.on_chunk = function(bytes)
+        if holder.aborted then error("client aborted") end
+        chunk_hook(bytes)
+        if holder.aborted then error("client aborted") end
+    end
     local ok, value
     if file then
         -- decode_file keeps an open fd; the Nginx-owned pathname is never removed
@@ -65,9 +79,9 @@ local function completed(opts, json)
     else
         ok, value = pcall(qjson.decode, data or "", json)
     end
-    if not ok then return nil, value, info end
-    local unregister, err = on_abort(function() release(value) end)
-    if not unregister then release(value); return nil, err, info end
+    if not ok then unregister(); return nil, value, info end
+    holder.value = value
+    if holder.aborted then release(value); unregister(); return nil, "client aborted", info end
     -- read_body transfers normal-path ownership to its caller. The abort hook
     -- is a fallback for cancellation and remains idempotent after caller close.
     return value, nil, info
@@ -209,14 +223,28 @@ function _M.request(httpc, params, value, opts)
     local function close_reader()
         if not state.reader_closed then reader:close(); state.reader_closed = true end
     end
+    local unregister
     local function fail(err, stage)
         state.stage = stage
+        if unregister then unregister(); unregister = nil end
         close_reader()
         httpc:close()
         return nil, err, state
     end
-    local length, err = reader:length()
-    if length == nil then state.reader_error = err; return fail(err, "length") end
+    local err
+    unregister, err = on_abort(function()
+        state.reader_error = "client aborted"
+        close_reader()
+        httpc:close()
+    end)
+    if not unregister then return fail(err, "prepare") end
+    local counted, length
+    counted, length, err = pcall(reader.length, reader)
+    if not counted then err = length; length = nil end
+    if length == nil or state.reader_error then
+        state.reader_error = state.reader_error or err
+        return fail(state.reader_error, "length")
+    end
     state.length = length
     local request = {}
     for key, item in pairs(params) do request[key] = item end
@@ -229,13 +257,17 @@ function _M.request(httpc, params, value, opts)
     request.headers = headers
     request.body = function()
         if state.reader_error then return nil, state.reader_error end
-        if opts.cancelled and opts.cancelled() then
-            state.reader_error = "request cancelled"
-            close_reader()
-            return nil, state.reader_error
+        if opts.cancelled then
+            local checked, cancelled = pcall(opts.cancelled)
+            if not checked or cancelled then
+                state.reader_error = checked and "request cancelled" or cancelled
+                close_reader()
+                return nil, state.reader_error
+            end
         end
         local next_ok, chunk, next_err = pcall(reader.next, reader)
         if not next_ok then next_err = chunk; chunk = nil end
+        if state.reader_error then close_reader(); return nil, state.reader_error end
         if chunk and (#chunk > size or state.delivered_bytes + #chunk > length) then
             chunk, next_err = nil, "reader exceeded declared output bounds"
         elseif chunk == nil and next_err == nil and state.delivered_bytes ~= length then
@@ -255,13 +287,6 @@ function _M.request(httpc, params, value, opts)
         end
         return chunk
     end
-    local unregister
-    unregister, err = on_abort(function()
-        state.reader_error = "client aborted"
-        close_reader()
-        httpc:close()
-    end)
-    if not unregister then return fail(err, "prepare") end
     state.attempts = 1
     state.headers_may_have_been_sent = true
     state.stage = "send"
@@ -269,7 +294,6 @@ function _M.request(httpc, params, value, opts)
     sent, ok, err = pcall(httpc.send_request, httpc, request)
     if not sent then err = ok; ok = nil end
     if not ok or state.reader_error then
-        unregister()
         return fail(state.reader_error or err, state.reader_error and "reader" or "send")
     end
     close_reader()
@@ -278,8 +302,8 @@ function _M.request(httpc, params, value, opts)
     local read
     read, response, err = pcall(httpc.read_response, httpc, request)
     if not read then err = response; response = nil end
+    if not response or state.reader_error then return fail(state.reader_error or err, "response") end
     unregister()
-    if not response then return fail(err, "response") end
     state.stage = "complete"
     return response, nil, state
 end

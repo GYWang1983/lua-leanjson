@@ -26,11 +26,15 @@ local function get(path, target_port)
     return cjson.decode(res.body)
 end
 local function sink_count() return get("/stats", sink_port).requests end
+local initial_health = get("/health")
 local function capture(result)
     local file = assert(io.open(assert(result.sink.capture), "rb"))
     local raw = assert(file:read("*a")) -- client-side semantic oracle, not the upstream sink
     file:close()
     assert(#raw == result.sink.bytes)
+    local hash = assert(require("resty.sha256"):new())
+    hash:update(raw)
+    assert(require("resty.string").to_hex(hash:final()) == result.sink.sha256)
     return cjson.decode(raw)
 end
 check("memory source rewrites a field and sends exact bounded bytes", function()
@@ -187,7 +191,8 @@ check("aborted uploads release resources and the same worker stays alive", funct
     for _ = 1, 8 do
         local sock = assert(ngx.socket.tcp())
         assert(sock:connect("127.0.0.1", port))
-        assert(sock:send("POST /incremental HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000000\r\n\r\n{\"model\":\"partial\","))
+        assert(sock:send("POST /incremental HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000000\r\n\r\n" ..
+            '{"model":"partial","prompt":"' .. ("a"):rep(40000)))
         ngx.sleep(0.01)
         sock:close()
     end
@@ -200,6 +205,86 @@ check("aborted uploads release resources and the same worker stays alive", funct
     for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/decoder") do
         assert(name == "." or name == "..", "leaked decoder file: " .. name)
     end
+end)
+check("client abort during yielding completed-file scanning closes its fd without GC", function()
+    local before = get("/health")
+    local upstream_before = sink_count()
+    get("/gc?action=stop")
+    local ok, err = xpcall(function()
+        local marker = os.getenv("QJSON_TEST_PREFIX") .. "/file-parse-started"
+        local sock = assert(ngx.socket.tcp())
+        assert(sock:connect("127.0.0.1", port))
+        local raw = '{"model":"original","prompt":"' .. ("p"):rep(200000) .. '"}'
+        assert(sock:send("POST /abort-file-parse HTTP/1.1\r\nHost: localhost\r\nContent-Length: " .. #raw .. "\r\n\r\n" .. raw))
+        local scanning
+        for _ = 1, 100 do
+            local file = io.open(marker, "r")
+            if file then file:close(); scanning = true; break end
+            ngx.sleep(0.01)
+        end
+        assert(scanning, "file decoder never entered its yielding scan")
+        sock:close()
+        ngx.sleep(0.1)
+        local after = get("/health")
+        assert(after.pid == before.pid and after.fd_count <= before.fd_count + 2,
+            cjson.encode { before = before, after = after })
+        assert(sink_count() == upstream_before)
+    end, debug.traceback)
+    get("/gc?action=restart")
+    assert(ok, err)
+end)
+check("explicit session close wakes every pending get waiter", function()
+    local raw = '{"model":"pending","prompt":"' .. ("w"):rep(40000) .. '"}'
+    local client = http.new()
+    client:set_timeout(5000)
+    assert(client:connect { scheme = "http", host = "127.0.0.1", port = port })
+    local step = 0
+    local res, err = client:request { method = "POST", path = "/close-waiters",
+        headers = { ["Content-Length"] = tostring(#raw) }, body = function()
+            step = step + 1
+            if step == 1 then return raw:sub(1, 100) end
+            if step == 2 then ngx.sleep(0.05); return raw:sub(101) end
+        end }
+    assert(res, err)
+    local result = cjson.decode(assert(res:read_body()))
+    client:close()
+    assert(result.first.ok and result.second.ok)
+    assert(result.first.status == "ERROR" and result.second.status == "ERROR")
+    assert(result.first.error and result.second.error)
+end)
+check("client abort during normalized output length closes the reader before sending", function()
+    local before = get("/health")
+    local upstream_before = sink_count()
+    get("/gc?action=stop")
+    local ok, err = xpcall(function()
+        local marker = os.getenv("QJSON_TEST_PREFIX") .. "/output-length-started"
+        local sock = assert(ngx.socket.tcp())
+        assert(sock:connect("127.0.0.1", port))
+        local raw = '{"model":"original","nested":{"small":"value","prompt":"' .. ("p"):rep(200000) .. '"}}'
+        assert(sock:send("POST /abort-output-length HTTP/1.1\r\nHost: localhost\r\nContent-Length: " .. #raw .. "\r\n\r\n" .. raw))
+        local counting
+        for _ = 1, 100 do
+            local file = io.open(marker, "r")
+            if file then file:close(); counting = true; break end
+            ngx.sleep(0.01)
+        end
+        assert(counting, "normalized length never entered a yielding source read")
+        sock:close()
+        ngx.sleep(0.1)
+        local after = get("/health")
+        assert(after.pid == before.pid and after.fd_count <= before.fd_count + 2,
+            cjson.encode { before = before, after = after })
+        assert(sink_count() == upstream_before)
+    end, debug.traceback)
+    get("/gc?action=restart")
+    assert(ok, err)
+end)
+check("an output source hook failure stays a reader failure and closes the transfer", function()
+    local raw = '{"model":"original","prompt":"' .. ("o"):rep(200000) .. '"}'
+    local status, result = request("/output-hook-failure", raw)
+    assert(status == 502 and result.error:find("intentional output hook failure", 1, true), cjson.encode(result))
+    assert(result.transfer.reader_error and result.transfer.reader_closed)
+    assert(result.transfer.attempts == 1 and result.transfer.headers_may_have_been_sent)
 end)
 check("one failing abort callback cannot suppress other cleanup callbacks", function()
     local marker = os.getenv("QJSON_TEST_PREFIX") .. "/abort-cleanup-ran"
@@ -219,6 +304,35 @@ check("one failing abort callback cannot suppress other cleanup callbacks", func
         ngx.sleep(0.01)
     end
     assert(ran, "cleanup following the throwing callback did not run")
+end)
+check("concurrent file uploads preserve isolated values and release descriptors", function()
+    local baseline = get("/health")
+    local before = sink_count()
+    local threads = {}
+    for i = 1, 8 do
+        threads[i] = ngx.thread.spawn(function()
+            local prompt = string.char(64 + i):rep(300000)
+            local status, result = request("/completed", '{"model":"original","prompt":"' .. prompt .. '"}', "parallel-" .. i)
+            assert(status == 200, cjson.encode(result))
+            assert(result.input.mode == "completed-file")
+            assert(capture(result).prompt == prompt)
+        end)
+    end
+    for _, thread in ipairs(threads) do local ok, err = ngx.thread.wait(thread); assert(ok, err) end
+    local final = get("/health")
+    assert(final.pid == baseline.pid and final.fd_count <= baseline.fd_count + 2)
+    assert(sink_count() == before + 8)
+end)
+check("all completed and failed paths clean file leases without forcing GC", function()
+    local final = get("/health")
+    assert(final.pid == initial_health.pid)
+    assert(final.fd_count <= initial_health.fd_count + 2, cjson.encode { initial = initial_health, final = final })
+    local lfs = require "lfs"
+    for _, directory in ipairs { "client-body", "decoder" } do
+        for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/" .. directory) do
+            assert(name == "." or name == "..", "leaked body/spool file: " .. directory .. "/" .. name)
+        end
+    end
 end)
 print("1.." .. count)
 assert(failures == 0, failures .. " native OpenResty acceptance checks failed")

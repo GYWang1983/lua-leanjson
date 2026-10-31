@@ -1,0 +1,17 @@
+worker_processes 1;
+daemon off;
+pid @PREFIX@/sink.pid;
+error_log @PREFIX@/sink-error.log info;
+env QJSON_TEST_PREFIX;
+events { worker_connections 1024; }
+http {
+    access_log off;
+    lua_package_path '@ROOT@/tests/openresty/?.lua;;';
+    lua_shared_dict sink_state 1m;
+    client_max_body_size 256m;
+    client_body_timeout 5s;
+    server {
+        listen 127.0.0.1:@SINK_PORT@;
+        location / { content_by_lua_file @ROOT@/tests/openresty/sink.lua; }
+    }
+}

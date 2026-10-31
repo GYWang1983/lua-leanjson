@@ -1,0 +1,186 @@
+local cjson = require "cjson"
+local http = require "resty.http"
+local port = assert(tonumber(os.getenv("QJSON_TEST_PORT")))
+local sink_port = assert(tonumber(os.getenv("QJSON_SINK_PORT")))
+local function request(path, body, id, headers)
+    local client = http.new()
+    client:set_timeout(15000)
+    local res, err = client:request_uri("http://127.0.0.1:" .. port .. path, {
+        method = "POST", body = body, headers = headers or { ["x-capture-id"] = id }, keepalive = false,
+    })
+    assert(res, err)
+    local ok, value = pcall(cjson.decode, res.body)
+    assert(ok, "HTTP " .. res.status .. ": " .. res.body)
+    return res.status, value
+end
+local count = 0
+local failures = 0
+local function check(name, fn)
+    count = count + 1
+    local ok, err = xpcall(fn, debug.traceback)
+    if ok then print("ok " .. count .. " - " .. name)
+    else failures = failures + 1; print("not ok " .. count .. " - " .. name .. "\n" .. tostring(err)) end
+end
+local function get(path, target_port)
+    local res = assert(http.new():request_uri("http://127.0.0.1:" .. (target_port or port) .. path, { keepalive = false }))
+    return cjson.decode(res.body)
+end
+local function sink_count() return get("/stats", sink_port).requests end
+local function capture(result)
+    local file = assert(io.open(assert(result.sink.capture), "rb"))
+    local raw = assert(file:read("*a")) -- client-side semantic oracle, not the upstream sink
+    file:close()
+    assert(#raw == result.sink.bytes)
+    return cjson.decode(raw)
+end
+check("memory source rewrites a field and sends exact bounded bytes", function()
+    local status, result = request("/completed", '{"model":"original","prompt":"hello"}', "memory")
+    assert(status == 200, cjson.encode(result))
+    assert(result.input.mode == "completed-memory", cjson.encode(result.input))
+    assert(result.transfer.reader_closed and result.transfer.delivered_bytes == result.sink.bytes)
+    assert(result.sink.bytes == result.sink.length and result.transfer.max_chunk <= 16384)
+    local decoded = capture(result)
+    assert(decoded.model == "rewritten" and decoded.prompt == "hello")
+    assert(result.original_model == "original" and result.sibling_model == "independent")
+end)
+check("file source preserves a huge sibling and mixed modifications", function()
+    local prompt = ("abcdef0123456789"):rep(131072)
+    local status, result = request("/completed?mixed=1", cjson.encode {
+        model = "original", prompt = prompt, nested = { flag = true }, remove_me = "delete",
+    }, "large")
+    assert(status == 200, cjson.encode(result))
+    assert(result.input.mode == "completed-file", cjson.encode(result.input))
+    local decoded = capture(result)
+    assert(decoded.prompt == prompt and decoded.model == "rewritten")
+    assert(decoded.remove_me == nil and decoded.nested.flag == false)
+    assert(decoded.added.enabled and decoded.added.value == cjson.null)
+    assert(result.transfer.max_chunk <= 16384 and result.sink.max_chunk <= 16384)
+end)
+check("malformed completed JSON produces no upstream request", function()
+    local client = http.new()
+    local function stats()
+        local res = assert(client:request_uri("http://127.0.0.1:" .. sink_port .. "/stats", { keepalive = false }))
+        return cjson.decode(res.body).requests
+    end
+    local before = stats()
+    local status, result = request("/completed", '{"model":"valid","bad":[1,]}')
+    assert(status == 400 and result.error)
+    assert(stats() == before)
+end)
+check("upstream disconnect is a single failed attempt and closes the reader", function()
+    local before = sink_count()
+    local status, result = request("/completed?disconnect=1", '{"model":"original","prompt":"hello"}')
+    assert(status == 502 and result.error)
+    assert(result.transfer.attempts == 1 and result.transfer.reader_closed)
+    assert(result.transfer.headers_may_have_been_sent)
+    assert(sink_count() == before + 1)
+end)
+check("fixed-length incremental upload waits for the final duplicate", function()
+    local status, result = request("/incremental", '{"model":"first","prompt":"hello","model":"last"}', "incremental")
+    assert(status == 200, cjson.encode(result))
+    assert(result.input.mode == "incremental" and result.input.model == "last")
+    assert(result.input.other_model == "last" and result.input.other_status == "READY")
+    assert(capture(result).model == "rewritten")
+end)
+check("root false and null are values, not input failures", function()
+    local status, result = request("/scalar", "false")
+    assert(status == 200 and result.value == false)
+    status, result = request("/scalar", "null")
+    assert(status == 200 and result.value == cjson.null)
+end)
+check("request body has one input owner", function()
+    local status, result = request("/ownership", '{"model":"original"}')
+    assert(status == 200 and result.error:find("already owned", 1, true))
+end)
+check("HTTP/1.1 chunked upload uses the completed fallback", function()
+    local raw = '{"model":"original","prompt":"chunked"}'
+    local framed = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+    local status, result = request("/incremental", framed, nil, { ["Transfer-Encoding"] = "chunked" })
+    assert(status == 200, cjson.encode(result))
+    assert(result.input.mode == "completed-memory" and result.input.fallback == "transfer-encoding")
+    assert(result.sink.transfer_encoding == nil and result.sink.length == result.sink.bytes)
+end)
+check("HTTP/2 upload uses the completed fallback", function()
+    local command = "curl --http2-prior-knowledge --silent --show-error --fail-with-body --data-binary " ..
+        "'{\"model\":\"original\",\"prompt\":\"http2\"}' http://127.0.0.1:" .. port .. "/incremental"
+    local pipe = assert(io.popen(command, "r"))
+    local raw = pipe:read("*a")
+    local ok = pipe:close()
+    assert(ok, raw)
+    local result = cjson.decode(raw)
+    assert(result.input.mode == "completed-memory" and result.input.fallback == "http-version", raw)
+end)
+check("a slow duplicate does not trigger an upstream side effect before finish", function()
+    local before = sink_count()
+    local first = '{"model":"first","prompt":"'
+    local last = 'hello","model":"last"}'
+    local client = http.new()
+    client:set_timeout(5000)
+    assert(client:connect { scheme = "http", host = "127.0.0.1", port = port })
+    local sent_first = false
+    local worker = ngx.thread.spawn(function()
+        local step = 0
+        local res, err = client:request { method = "POST", path = "/incremental",
+            headers = { ["Content-Length"] = tostring(#first + #last) }, body = function()
+                step = step + 1
+                if step == 1 then sent_first = true; return first end
+                if step == 2 then ngx.sleep(0.2); return last end
+            end }
+        assert(res, err)
+        local raw = assert(res:read_body())
+        client:close()
+        return res.status, cjson.decode(raw)
+    end)
+    while not sent_first do ngx.sleep(0.001) end
+    ngx.sleep(0.05)
+    assert(sink_count() == before)
+    local ok, status, result = ngx.thread.wait(worker)
+    assert(ok and status == 200, cjson.encode(result))
+    assert(result.input.model == "last" and result.input.other_model == "last")
+end)
+check("malformed incremental JSON wakes all waiters without forwarding", function()
+    local before = sink_count()
+    local status, result = request("/incremental", '{"model":"first","bad":[1,]}')
+    assert(status == 400 and result.error)
+    assert(sink_count() == before)
+end)
+check("source read failure is preserved as failure instead of EOF", function()
+    local status, result = request("/io-failure", '{"model":"original","prompt":"' .. ("x"):rep(200000) .. '"}')
+    assert(status == 502 and result.error, cjson.encode(result))
+    assert(result.transfer.reader_error and result.transfer.reader_closed)
+    assert(result.transfer.attempts <= 1)
+end)
+check("an unlinked Nginx source remains readable through its open file lease", function()
+    local prompt = ("z"):rep(200000)
+    local status, result = request("/unlink-source", '{"model":"original","prompt":"' .. prompt .. '"}', "unlinked")
+    assert(status == 200, cjson.encode(result))
+    assert(capture(result).prompt == prompt)
+end)
+check("output cancellation stops a transfer, closes its reader, and never retries", function()
+    local status, result = request("/cancel-output", '{"model":"original","prompt":"' .. ("y"):rep(200000) .. '"}')
+    assert(status == 502 and result.error == "request cancelled", cjson.encode(result))
+    assert(result.transfer.reader_closed and result.transfer.attempts == 1)
+    assert(result.transfer.delivered_bytes <= 16384)
+end)
+check("aborted uploads release resources and the same worker stays alive", function()
+    local before = sink_count()
+    local health = get("/health")
+    for _ = 1, 8 do
+        local sock = assert(ngx.socket.tcp())
+        assert(sock:connect("127.0.0.1", port))
+        assert(sock:send("POST /incremental HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1000000\r\n\r\n{\"model\":\"partial\","))
+        ngx.sleep(0.01)
+        sock:close()
+    end
+    ngx.sleep(0.1)
+    local after = get("/health")
+    assert(after.pid == health.pid)
+    assert(after.fd_count <= health.fd_count + 2, cjson.encode { before = health, after = after })
+    assert(sink_count() == before)
+    local lfs = require "lfs"
+    for name in lfs.dir(os.getenv("QJSON_TEST_PREFIX") .. "/decoder") do
+        assert(name == "." or name == "..", "leaked decoder file: " .. name)
+    end
+end)
+print("1.." .. count)
+assert(failures == 0, failures .. " native OpenResty acceptance checks failed")

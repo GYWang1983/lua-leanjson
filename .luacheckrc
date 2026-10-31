@@ -6,3 +6,7 @@ redefined       = false
 files["tests/lua/**/*.lua"] = {
     std = "luajit+busted",
 }
+
+files["lua/qjson/openresty.lua"] = { globals = { "ngx" } }
+files["examples/openresty/**/*.lua"] = { globals = { "ngx" } }
+files["tests/openresty/**/*.lua"] = { globals = { "ngx" } }

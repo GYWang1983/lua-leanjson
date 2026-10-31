@@ -46,6 +46,8 @@ One producer owns the input socket. Every waiter shares one decoder and semaphor
 
 Register cleanup for application-owned forks with `local unregister, err = input.on_abort(function() qjson.close(branch) end)`. This joins the adapter's single abort callback and returns an unregister function for normal completion. Closing the input root or session alone intentionally preserves those forks; their owner must close them too. Callbacks must not yield.
 
+Register holder cleanup before the first field mutation/read that can yield. Protect application mutation, connection and response work with an error-unwind path that closes every owned holder/client on ordinary errors as well as aborts. The [complete example](../../examples/openresty/handler.lua) shows both paths; an abort callback alone does not handle an ordinary source or connection failure.
+
 ## Sending a reader once
 
 ```lua
@@ -104,6 +106,8 @@ QJSON_BENCH_CASES='prompt messages' QJSON_BENCH_BYTES=8388608 QJSON_BENCH_CONCUR
 ```
 
 Each method/scenario uses a fresh qjson worker so process RSS high water never carries over from its pair. Both methods receive identical payloads, make the same branch count and model change, and send to the same bounded sink. The cjson baseline intentionally allocates a complete source string, Lua object tree, branch container copies, and encoded output. Its immutable long Lua strings are shared across branch copies. The qjson path reads only model in lazy cases and uses normalized bounded output. The `explicit` case deliberately accesses the long value and is reported separately.
+
+Input generation uses fixed key order and records SHA256 so paired payload identity is checkable. `requests` counts timed transfers only. After elapsed time and worker health/CPU/I/O snapshots are frozen, each method makes one additional untimed disk-capture request. The separate client checks its SHA256 and complete JSON semantics against the input with `model="rewritten-1"`; the result appears under `oracle`. Timed requests do not enable capture or full output parsing.
 
 Scenarios cover a top-level prompt, input string, nested messages, escape-dense values, many short elements, explicit long-value access, and advisory cold file reads. Results record input/output bytes, RSS/current and VmHWM, sampled Lua heap, process CPU time, throughput, p50/p95 latency, first observed sink body chunk relative to client start, output chunk bound, and concurrent `/ping` latency. These are actual native processes. Lua heap samples are not an allocator peak. CPU is measured across the complete worker run to avoid double-counting overlapping requests.
 

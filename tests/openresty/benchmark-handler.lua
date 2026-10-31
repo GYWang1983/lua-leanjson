@@ -61,13 +61,14 @@ local client = http.new()
 client:set_timeout(30000)
 assert(client:connect { scheme = "http", host = "127.0.0.1", port = tonumber(os.getenv("QJSON_SINK_PORT")) })
 local response, err, output
+local headers = { ["x-capture-id"] = ngx.req.get_headers()["x-capture-id"] }
 if method == "qjson" then
-    response, err, output = adapter.request(client, { method = "POST", path = "/sink" }, branches[1], opts)
+    response, err, output = adapter.request(client, { method = "POST", path = "/sink", headers = headers }, branches[1], opts)
 else
     local encoded = cjson.encode(branches[1])
     sample()
     output = { length = #encoded, delivered_bytes = #encoded, max_chunk = #encoded }
-    response, err = client:request { method = "POST", path = "/sink", body = encoded }
+    response, err = client:request { method = "POST", path = "/sink", headers = headers, body = encoded }
 end
 assert(response, err)
 local sink = cjson.decode(assert(response:read_body()))

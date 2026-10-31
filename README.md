@@ -66,6 +66,7 @@ The runtime file set is small:
 | `/usr/local/share/lua/5.1/qjson.lua` | Public Lua module |
 | `/usr/local/share/lua/5.1/qjson/lib.lua` | FFI loader |
 | `/usr/local/share/lua/5.1/qjson/table.lua` | Lazy table API and encoder |
+| `/usr/local/share/lua/5.1/qjson/{proxy,reader,source_memory}.lua` | Immutable nodes, bounded output and memory source adapter |
 
 The runtime also needs OpenResty LuaJIT (preferred) or LuaJIT, plus the normal
 OS shared libraries required by LuaJIT and the native module.
@@ -140,8 +141,10 @@ Use `get_f64` for the convenient Lua-number path, or `tonumber(...)` when a
 ### Lazy table API (`qjson.decode` / `qjson.encode`)
 
 For callers migrating from `cjson`, an alternative API returns a table-shaped
-lazy view. Reads, iteration, and length all work like a `cjson.decode`'d
-table; writes materialize the affected level into a plain Lua table.
+lazy view. Reads decode requested values; writes record immutable field overlays
+without decoding sibling values. Arrays and objects keep private proxy state.
+See [mutable views and bounded output](docs/source-proxy-api.md) for snapshot,
+duplicate-key, array-operation and reader semantics.
 
 ```lua
 local qjson    = require("qjson")
@@ -165,6 +168,21 @@ trees, and LuaJIT `int64_t` / `uint64_t` cdata values. Callers cannot pass a
 lazy proxy directly to `cjson.encode` (cjson bypasses metamethods in C); use
 `qjson.encode` instead, or call `qjson.materialize(t)` to get a plain Lua table
 that any third-party encoder can handle.
+
+`qjson.fork(value)` creates an independent snapshot while sharing source nodes.
+Assigning a table or proxy to a proxy field also captures a snapshot. Object
+getters use the last duplicate key; untouched numbers and strings retain their
+raw tokens until explicitly replaced. Proxy arrays support dense replacement,
+append and explicit `qjson.array_insert` / `qjson.array_remove`; interior nil holes
+and noncontiguous writes require explicit materialization.
+
+`qjson.reader(value, { chunk_size = 65536, normalize_duplicates = true })`
+freezes its input and returns `length()`, `next()` and idempotent `close()` methods.
+It emits bounded chunks for original source spans and newly assigned strings.
+`next()` returns `nil, nil` at EOF or `nil, error` on failure; later calls return a
+closed error. `length()` counts actual encoded bytes without building output.
+`qjson.encode` continues to allocate a complete string. The new core APIs do not
+require `ngx`; input remains an in-memory string in this phase.
 
 `qjson.materialize(t, { keep_origin = true })` keeps lightweight provenance on
 the returned plain Lua tables so `qjson.encode` can preserve key order and
@@ -190,7 +208,7 @@ output rather than guaranteeing byte-identical re-emission of every unchanged
 small token.
 
 **Native `next` caveat.** `next(t)` is not proxy-aware: it bypasses the
-`__pairs` / `__ipairs` hooks and may see qjson implementation fields instead of
+`__pairs` / `__ipairs` hooks and sees the proxy's empty raw storage instead of
 JSON fields. Do not use native `next` to iterate a lazy proxy or test whether it
 is empty. Use `qjson.pairs(t)`, `qjson.ipairs(t)`, or `qjson.len(t)` instead, or
 call `qjson.materialize(t)` before passing the value to code that requires
@@ -230,7 +248,9 @@ AMD EPYC Rome, Zen 2, 4 vCPUs; 5 rounds, deterministic payload).
 
 ### Encode (unmodified) + modify-then-re-encode
 
-Numbers from the same run as [`docs/benchmarks.md`](docs/benchmarks.md).
+Historical numbers from the same upstream run as [`docs/benchmarks.md`](docs/benchmarks.md).
+These timings predate the mutable proxy and reader changes; rerun benchmarks on
+the target build before using them for a comparison.
 
 | Size | encode (unmodified) | modify top + encode | modify nested + encode |
 |---:|---:|---:|---:|
@@ -239,9 +259,9 @@ Numbers from the same run as [`docs/benchmarks.md`](docs/benchmarks.md).
 |  100 KB | 105,374 | 28,114 |  71,942 |
 |    1 MB |  16,269 |  3,125 |  13,649 |
 
-> **qjson.encode(unmodified)** re-emits the original byte range via `memcpy` —
-> no fields touched means zero serializer work.
-> **qjson modify+encode** materializes only the mutated subtree; unmodified
+> **qjson.encode(unmodified)** reuses the original byte range without decoding
+> fields, then collects the bounded output into the requested complete string.
+> **qjson modify+encode** records changes without decoding siblings; unmodified
 > siblings stay on the fast path. See [`docs/benchmarks.md`](docs/benchmarks.md)
 > for the full size ladder, cjson comparisons, speedup ratios, memory
 > numbers, and environment.

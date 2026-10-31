@@ -1,724 +1,102 @@
--- Lazy table view + cjson-compatible encoder for qjson.
-
+-- Lazy JSON views, explicit materialization and the compatible full encoder.
 local ffi = require("ffi")
-local C   = require("qjson.lib")
--- Defer the require to avoid a circular dependency when qjson.lua
--- re-exports this module.  By the time _M.decode is called, qjson
--- is already registered in package.loaded.
-local function get_qjson()
-    return require("qjson")
-end
-
--- Optional cjson bridge: reuse its sentinels when available so callers'
--- `v == cjson.null` comparisons keep working unchanged.
+local proxy = require("qjson.proxy")
+local bounded_reader = require("qjson.reader")
 local has_cjson, cjson = pcall(require, "cjson")
-
 local _M = {}
-
-if has_cjson then
-    _M.null            = cjson.null
-    _M.empty_array_mt  = cjson.empty_array_mt
-else
-    _M.null            = setmetatable({}, { __tostring = function() return "null" end })
-    _M.empty_array_mt  = { __jsontype = "array" }
-end
-
--- Weak side-table for container type hints, avoiding collision with
--- user-visible keys.  Maps materialized table → "object" | "array".
+_M.null = has_cjson and cjson.null or setmetatable({}, { __tostring = function() return "null" end })
+_M.empty_array_mt = (has_cjson and (cjson.empty_array_mt or cjson.array_mt)) or { __jsontype = "array" }
 local TABLE_TYPE_HINT = setmetatable({}, { __mode = "k" })
-
--- Weak side-table for keep_origin materialization metadata.
--- Maps materialized table -> provenance record used by qjson.encode.
 local TABLE_ORIGIN = setmetatable({}, { __mode = "k" })
-local ORIGIN_STRING_MIN_RAW = 24
-local ORIGIN_TABLE_MIN_RAW = 64
+local LazyObject, LazyArray = proxy.Object, proxy.Array
+local classify_plain_table
 
--- Box scratch used for one-shot FFI returns. Reused across calls to avoid
--- per-call allocation; safe because the parent Doc / lazy view holds the
--- buffer alive and these are read-and-copy.
-local f64_box  = ffi.new("double[1]")
-local bool_box = ffi.new("int[1]")
-local size_box = ffi.new("size_t[1]")
-local type_box = ffi.new("int[1]")
-local strp_box = ffi.new("const uint8_t*[1]")
-local cur_box   = ffi.new("qjson_cursor[1]")
-local child_box = ffi.new("qjson_cursor[1]")
-local sz_a      = ffi.new("size_t[1]")
-local sz_b      = ffi.new("size_t[1]")
+proxy.configure({
+    null = _M.null,
+    classify = function(value)
+        local hint = TABLE_TYPE_HINT[value]
+        if getmetatable(value) == _M.empty_array_mt or hint == "array" then return "array", #value end
+        if hint == "object" then return "object" end
+        return classify_plain_table(value)
+    end,
+})
 
-local QJSON_OK        = 0
-local QJSON_NOT_FOUND = 2
-local T_NULL = 0
-local T_BOOL = 1
-local T_NUM  = 2
-local T_STR  = 3
-local T_ARR  = 4
-local T_OBJ  = 5
-local SIZE_MAX = ffi.cast("size_t", -1)
-local EXPECT_CONTAINER = ffi.cast("size_t", -2)
+_M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
+_M.fork, _M.type = proxy.fork, proxy.type
+_M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
-local function doc_from_context(ctx)
-    if ctx == nil then return nil end
-    if rawget(ctx, "_ptr") ~= nil then return ctx end
-    return rawget(ctx, "_doc")
+function _M.decode(raw)
+    local backend, root = require("qjson.source_memory").open(raw)
+    return proxy.from_backend(backend, root)
 end
 
-local function format_error(code, offset, extra, buf)
-    local buf_len = 0
-    if type(buf) == "string" then
-        buf_len = #buf
-    else
-        buf = nil
+-- Full reads exist only in explicitly materializing/complete-encode paths.
+-- The bounded reader uses backend:read directly and never calls this helper.
+local function read_all(backend, first, last)
+    local parts = {}
+    while first < last do
+        local wanted = math.min(65536, last - first)
+        local chunk, err = backend:read(first, wanted)
+        if type(chunk) ~= "string" then error(err or "qjson: source read failed", 0) end
+        if #chunk == 0 then error("qjson: unexpected source EOF", 0) end
+        if #chunk > wanted then error("qjson: source exceeded read bound", 0) end
+        parts[#parts + 1] = chunk
+        first = first + #chunk
     end
-    if extra == nil then extra = SIZE_MAX end
-    local needed = tonumber(C.qjson_format_error(code, offset, extra, buf, buf_len, nil, 0))
-    local out = ffi.new("char[?]", needed + 1)
-    local written = tonumber(C.qjson_format_error(code, offset, extra, buf, buf_len, out, needed + 1))
-    return ffi.string(out, written)
+    return table.concat(parts)
 end
 
-local function check(ctx, rc, expected_type)
-    if rc == QJSON_OK then return true end
-    if rc == QJSON_NOT_FOUND then return false end
-    local doc = doc_from_context(ctx)
-    local offset = SIZE_MAX
-    local source = nil
-    if doc ~= nil and doc._ptr ~= nil then
-        offset = C.qjson_doc_last_error_offset(doc._ptr)
-        source = doc._hold
-    end
-    error("qjson: " .. format_error(rc, offset, expected_type, source))
-end
-
-local LazyObject = {}
-local LazyArray  = {}
-
--- Sentinel tables used as raw keys to avoid collision with user JSON keys.
--- Using tables (not strings) ensures no user JSON key can match these.
-local ORDER_KEYS = {}    -- stores ordered key list after materialization
-local ORDER_VALUES = {}  -- stores key->value map after materialization
-local CHILD_CACHE = {}   -- stores key->child proxy cache before materialization
-
-local function get_child_cache(view)
-    local cache = rawget(view, CHILD_CACHE)
-    if not cache then
-        cache = {}
-        rawset(view, CHILD_CACHE, cache)
-    end
-    return cache
-end
-
-local function cached_child(view, key)
-    local cache = rawget(view, CHILD_CACHE)
-    if cache then return cache[key] end
-    return nil
-end
-
--- Build a new lazy view for a child container cursor.
--- src_box is an FFI cdata `qjson_cursor[1]`; src_box[0] is the cursor whose
--- data we copy into a fresh per-view allocation so the new view's _cur
--- survives later overwrites of src_box.
-local function wrap_child(parent_view, src_box)
-    C.qjson_cursor_bytes(src_box[0], sz_a, sz_b)
-    local own_box = ffi.new("qjson_cursor[1]")
-    ffi.copy(own_box, src_box, ffi.sizeof("qjson_cursor"))
-    return {
-        _parent  = parent_view,
-        _dirty   = false,
-        _doc     = parent_view._doc,
-        _cur_box = own_box,        -- keep cdata alive
-        _cur     = own_box[0],     -- stable reference into own_box
-        _bs      = tonumber(sz_a[0]),
-        _be      = tonumber(sz_b[0]),
-    }
-end
-
--- Decode the value at src_box[0] into a Lua value.
--- src_box is a `qjson_cursor[1]`; for container types, a new view is created
--- via wrap_child so the caller's box can be freely reused afterwards.
-local function decode_cursor(parent_view, src_box)
-    local trc = C.qjson_cursor_typeof(src_box[0], "", 0, type_box)
-    if not check(parent_view, trc) then return nil end
-    local t = type_box[0]
-    if t == T_STR then
-        local rrc = C.qjson_cursor_get_str(src_box[0], "", 0, strp_box, size_box)
-        if not check(parent_view, rrc, T_STR) then return nil end
-        return ffi.string(strp_box[0], size_box[0])
-    elseif t == T_NUM then
-        local rrc = C.qjson_cursor_get_f64(src_box[0], "", 0, f64_box)
-        if not check(parent_view, rrc, T_NUM) then return nil end
-        return f64_box[0]
-    elseif t == T_BOOL then
-        local rrc = C.qjson_cursor_get_bool(src_box[0], "", 0, bool_box)
-        if not check(parent_view, rrc, T_BOOL) then return nil end
-        return bool_box[0] ~= 0
-    elseif t == T_NULL then
-        return _M.null
-    elseif t == T_OBJ then
-        return setmetatable(wrap_child(parent_view, src_box), LazyObject)
-    elseif t == T_ARR then
-        return setmetatable(wrap_child(parent_view, src_box), LazyArray)
-    end
-    return nil
-end
-
--- Resolve a child cursor at `key` (object) and decode it into a Lua value.
--- Returns nil for missing keys (cjson semantics).
--- Container results (lazy proxies) are cached behind a sentinel key so that
--- subsequent accesses return the same Lua table object without occupying the
--- user field name and bypassing LazyObject.__newindex.
-local function read_object_field(self, key)
-    if type(key) ~= "string" then return nil end
-
-    -- Check if materialized (using sentinel key to avoid collision with user JSON keys)
-    local values = rawget(self, ORDER_VALUES)
-    if values then
-        return values[key]
-    end
-
-    local cached = cached_child(self, key)
-    if cached ~= nil then return cached end
-
-    -- Use child_box so the lookup result does not alias self._cur (which is
-    -- itself stored in root_box's backing memory in the decode caller).
-    local rc = C.qjson_cursor_field(self._cur, key, #key, child_box)
-    if not check(self, rc, T_OBJ) then return nil end
-    local v = decode_cursor(self, child_box)
-    -- Cache containers so identity is stable and materialization sticks.
-    if type(v) == "table" then get_child_cache(self)[key] = v end
-    return v
-end
-
-LazyObject.__index = read_object_field
-
--- Resolve a child cursor at integer index `key` (1-based) and decode it.
--- Returns nil for missing/out-of-range indices and non-integer keys.
--- Container results are rawset-cached for the same identity-stability reason
--- as read_object_field.
-local function read_array_index(self, key)
-    if type(key) ~= "number" then return nil end
-    -- 1-based external, 0-based internal
-    local i = key - 1
-    if i < 0 or i ~= math.floor(i) then return nil end
-    local rc = C.qjson_cursor_index(self._cur, i, child_box)
-    if not check(self, rc, T_ARR) then return nil end
-    local v = decode_cursor(self, child_box)
-    -- Cache containers so identity is stable and materialization sticks.
-    if type(v) == "table" then rawset(self, key, v) end
-    return v
-end
-
-LazyArray.__index = read_array_index
-
-local function new_object_iter(view)
-    local it = ffi.new("qjson_iter[1]")
-    local rc = C.qjson_iter_init(view._cur, it)
-    check(view, rc, T_OBJ)
-    return it
-end
-
--- Iterator function for lazy_object_iter: advances through object entries in
--- source order without restarting from the container opener.
-local function lazy_object_iter(state, _prev_key)
-    local rc = C.qjson_iter_next(state.it, strp_box, size_box, child_box)
-    if rc == QJSON_NOT_FOUND then return nil end
-    check(state.view, rc)
-    local k = ffi.string(strp_box[0], size_box[0])
-    local seen = state.seen
-    local count = (seen[k] or 0) + 1
-    seen[k] = count
-    if count > 1 then
-        -- Duplicate keys cannot share key-based cache entries safely.
-        -- Drop any prior cache for this key and return the cursor-decoded value.
-        local cache = rawget(state.view, CHILD_CACHE)
-        if cache then cache[k] = nil end
-        return k, decode_cursor(state.view, child_box)
-    end
-    local cached = cached_child(state.view, k)
-    local v
-    if cached ~= nil then
-        v = cached
-    else
-        v = decode_cursor(state.view, child_box)
-        if type(v) == "table" then
-            get_child_cache(state.view)[k] = v
-        end
-    end
-    return k, v
-end
-
-function LazyObject.__pairs(t)
-    local keys = rawget(t, ORDER_KEYS)
-    if keys then
-        local values = rawget(t, ORDER_VALUES)
-        local i = 0
-        return function()
-            i = i + 1
-            local k = keys[i]
-            if k then return k, values[k] end
-        end
-    end
-    return lazy_object_iter, { view = t, it = new_object_iter(t), seen = {} }, nil
-end
-
-local function lazy_array_iter(state, _prev_i)
-    local i = state.i
-    local rc = C.qjson_cursor_index(state.view._cur, i, child_box)
-    if rc == QJSON_NOT_FOUND then return nil end
-    check(state.view, rc, T_ARR)
-    state.i = i + 1
-    local v = decode_cursor(state.view, child_box)
-    return i + 1, v
-end
-
-function LazyArray.__ipairs(t)
-    return lazy_array_iter, { view = t, i = 0 }, 0
-end
-
-function _M.ipairs(t)
-    local mt = getmetatable(t)
-    if mt == LazyArray then
-        return LazyArray.__ipairs(t)
-    end
-    return ipairs(t)
-end
-
-function _M.pairs(t)
-    local mt = getmetatable(t)
-    if mt == LazyObject then
-        return LazyObject.__pairs(t)
-    elseif mt == LazyArray then
-        return _M.ipairs(t)
-    end
-    return pairs(t)
-end
-
-local function lazy_len(self)
-    if getmetatable(self) == LazyObject then
-        local keys = rawget(self, ORDER_KEYS)
-        if keys then return #keys end
-    end
-    local rc = C.qjson_cursor_len(self._cur, "", 0, size_box)
-    check(self, rc, EXPECT_CONTAINER)
-    return tonumber(size_box[0])
-end
-
-LazyObject.__len = lazy_len
-LazyArray.__len  = lazy_len
-
--- Public fallback for `#t` on a lazy proxy. Vanilla LuaJIT 5.1 does not invoke
--- __len on tables (only userdata) unless built with LUAJIT_ENABLE_LUA52COMPAT
--- (OpenResty's default). Callers running on a non-compat LuaJIT must use
--- qjson.len(t) — same role qjson.pairs / qjson.ipairs play for __pairs / __ipairs.
-function _M.len(t)
-    local mt = getmetatable(t)
-    if mt == LazyObject or mt == LazyArray then
-        return lazy_len(t)
-    end
-    return #t
-end
-
--- Materialize all key/value pairs from a LazyObject view into a plain list.
--- Returns a sequence of {k, v} pairs. The view is not mutated here; mutation
--- happens in __newindex after the walk completes successfully.
-local function materialize_object_contents(view)
-    local pairs_out = {}
-    local it = new_object_iter(view)
-    while true do
-        local rc = C.qjson_iter_next(it, strp_box, size_box, child_box)
-        if rc == QJSON_NOT_FOUND then break end
-        check(view, rc)
-        local k = ffi.string(strp_box[0], size_box[0])
-        local v = decode_cursor(view, child_box)
-        pairs_out[#pairs_out+1] = {k, v}
-    end
-    return pairs_out
-end
-
--- Materialize all elements from a LazyArray view into a plain sequence.
--- Returns a sequence indexed 1..n. The view is not mutated here.
-local function materialize_array_contents(view)
-    local i = 0
-    local out = {}
-    while true do
-        local rc = C.qjson_cursor_index(view._cur, i, child_box)
-        if rc == QJSON_NOT_FOUND then break end
-        check(view, rc, T_ARR)
-        out[i + 1] = decode_cursor(view, child_box)
-        i = i + 1
-    end
-    return out
-end
-
--- Build ORDER_KEYS/ORDER_VALUES for a LazyObject on demand.
--- Semantics for duplicate keys after mutation:
---   - keep first-appearance key order
---   - value is last-wins for the same key
-local function ensure_object_order_state(view)
-    local keys = rawget(view, ORDER_KEYS)
-    if keys then
-        return keys, rawget(view, ORDER_VALUES)
-    end
-
-    keys = {}
-    local values = {}
-    local seen = {}
-    local it = new_object_iter(view)
-    while true do
-        local rc = C.qjson_iter_next(it, strp_box, size_box, child_box)
-        if rc == QJSON_NOT_FOUND then break end
-        check(view, rc)
-        local key = ffi.string(strp_box[0], size_box[0])
-        local count = (seen[key] or 0) + 1
-        seen[key] = count
-        if count == 1 then
-            keys[#keys + 1] = key
-        end
-
-        -- For duplicate keys, always decode from cursor so "last-wins" is
-        -- derived from lexical JSON order instead of ambiguous key cache state.
-        local val
-        if count == 1 then
-            local cached = cached_child(view, key)
-            if cached ~= nil then
-                val = cached
-            else
-                val = decode_cursor(view, child_box)
-            end
-        else
-            val = decode_cursor(view, child_box)
-        end
-        values[key] = val
-    end
-
-    rawset(view, ORDER_KEYS, keys)
-    rawset(view, ORDER_VALUES, values)
-    return keys, values
-end
-
--- On first write, walk all cursor entries into ORDER_KEYS (ordered list) and
--- ORDER_VALUES (key→value map) stored under sentinel table keys. The LazyObject
--- metatable is kept alive so __index continues to route reads through
--- ORDER_VALUES. Any CHILD_CACHE entries (pre-materialization child proxies) are
--- promoted into ORDER_VALUES so proxy identity is preserved across materialization.
-LazyObject.__newindex = function(t, k, v)
-    if type(k) ~= "string" then
-        error("qjson: object key must be a string, got " .. type(k))
-    end
-    local keys, values = ensure_object_order_state(t)
-
-    -- Mark dirty from this view up to the root.
-    local cur = t
-    while cur do
-        local mt = getmetatable(cur)
-        if mt ~= LazyObject and mt ~= LazyArray then break end
-        rawset(cur, "_dirty", true)
-        cur = rawget(cur, "_parent")
-    end
-
-    if v == nil then
-        -- Delete: remove from _keys
-        for i, key in ipairs(keys) do
-            if key == k then
-                table.remove(keys, i)
-                break
-            end
-        end
-        values[k] = nil
-    elseif values[k] == nil then
-        -- New key: append to _keys
-        keys[#keys + 1] = k
-        values[k] = v
-    else
-        -- Existing key: just update value
-        values[k] = v
-    end
-end
-
--- On first write, walk all existing elements into a plain sequence,
--- switch to empty_array_mt (no lazy machinery), then apply the assignment.
--- Existing rawget-cached entries are preserved so callers' references remain valid.
-LazyArray.__newindex = function(t, k, v)
-    -- Mark dirty from this view up to the root.
-    local cur = t
-    while cur do
-        local mt = getmetatable(cur)
-        if mt ~= LazyObject and mt ~= LazyArray then break end
-        rawset(cur, "_dirty", true)
-        cur = rawget(cur, "_parent")
-    end
-    local contents = materialize_array_contents(t)
-    -- Snapshot integer-key cache BEFORE nilling internals.
-    local cache = {}
-    local ck, cv = next(t)
-    while ck ~= nil do
-        if type(ck) == "number" then
-            cache[ck] = cv
-        end
-        ck, cv = next(t, ck)
-    end
-    rawset(t, "_parent",  nil)
-    rawset(t, "_dirty",   nil)
-    rawset(t, "_doc",     nil)
-    rawset(t, "_cur_box", nil)
-    rawset(t, "_cur",     nil)
-    rawset(t, "_bs",      nil)
-    rawset(t, "_be",      nil)
-    setmetatable(t, _M.empty_array_mt)
-    TABLE_TYPE_HINT[t] = "array"
-    for i, x in ipairs(contents) do
-        rawset(t, i, cache[i] or x)
-    end
-    rawset(t, k, v)
-end
-
-function _M.decode(json_str)
-    -- Reuse the existing qjson.parse path to get a Doc with stable buffer hold.
-    local doc = get_qjson().parse(json_str)
-    -- Open the root cursor into cur_box, then copy into a dedicated box owned
-    -- by the view so that later child lookups (which reuse child_box) do not
-    -- alias the root cursor's backing storage.
-    local rc = C.qjson_open(doc._ptr, "", 0, cur_box)
-    if not check(doc, rc) then
-        error("qjson: open root failed")
-    end
-    local root_box = ffi.new("qjson_cursor[1]")
-    ffi.copy(root_box, cur_box, ffi.sizeof("qjson_cursor"))
-    -- Determine root container kind (object/array) and wrap accordingly.
-    -- Both have meaningful byte spans for encode.
-    local trc = C.qjson_cursor_typeof(root_box[0], "", 0, type_box)
-    if not check(doc, trc) then
-        error("qjson: root typeof failed")
-    end
-    local rt = type_box[0]
-    local brc = C.qjson_cursor_bytes(root_box[0], sz_a, sz_b)
-    if not check(doc, brc) then
-        error("qjson: root byte-span failed")
-    end
-    local view = {
-        _dirty   = false,
-        _doc     = doc,
-        _cur_box = root_box,   -- keep the box alive; _cur is a stable reference
-        _cur     = root_box[0],
-        _bs      = tonumber(sz_a[0]),
-        _be      = tonumber(sz_b[0]),
-    }
-    if rt == T_OBJ then
-        return setmetatable(view, LazyObject)
-    elseif rt == T_ARR then
-        return setmetatable(view, LazyArray)
-    else
-        return decode_cursor(view, root_box)
-    end
-end
-
-local function materialize_plain(v)
-    local mt = (type(v) == "table") and getmetatable(v) or nil
-    if mt == LazyObject then
-        local out = {}
-        local keys = rawget(v, ORDER_KEYS)
-        if not keys and rawget(v, "_dirty") then
-            keys = ensure_object_order_state(v)
-        end
-        if keys then
-            -- Already materialized: use ORDER_KEYS order and ORDER_VALUES
-            local values = rawget(v, ORDER_VALUES)
-            for _, k in ipairs(keys) do
-                local val = values[k]
-                assert(val ~= nil, "qjson: internal invariant violated (ORDER_VALUES missing key " .. tostring(k) .. ")")
-                out[k] = materialize_plain(val)
-            end
-        else
-            -- Not yet materialized: use cursor-based walk
-            for _, kv in ipairs(materialize_object_contents(v)) do
-                local child = cached_child(v, kv[1]) or kv[2]
-                out[kv[1]] = materialize_plain(child)
-            end
-        end
-        return out
-    elseif mt == LazyArray then
-        local raw = materialize_array_contents(v)
-        local out = {}
-        for i, x in ipairs(raw) do
-            out[i] = materialize_plain(rawget(v, i) or x)
-        end
-        if #out == 0 then
-            setmetatable(out, _M.empty_array_mt)
-        end
-        return out
-    end
-    return v
-end
-
-local function cursor_token_span(ctx, cursor)
-    local rc = C.qjson_cursor_bytes(cursor, sz_a, sz_b)
-    check(ctx, rc)
-    local bs = tonumber(sz_a[0])
-    local be = tonumber(sz_b[0])
-    return bs, be
-end
-
-local function origin_child_record(v, source, bs, be)
-    local raw_len = be - bs
-    local tv = type(v)
-    if tv == "string" then
-        if raw_len > ORIGIN_STRING_MIN_RAW then
-            return { tag = "string", value = v, raw = source:sub(bs + 1, be) }, true
-        end
-        return nil, false
-    end
-    if tv == "table" then
-        local child_origin = TABLE_ORIGIN[v]
-        if child_origin ~= nil
-            and child_origin.complete == true
-            and (child_origin.be - child_origin.bs) > ORIGIN_TABLE_MIN_RAW
-        then
-            return { tag = "table", origin = child_origin }, true
-        end
-        return nil, false
-    end
-    return nil, false
-end
-
-local materialize_with_origin
-
-local function materialize_object_with_origin(view)
-    local out = {}
-    local keys = {}
-    local records = {}
-    local seen = {}
-    local had_duplicates = false
+local materialize_node
+materialize_node = function(node, keep_origin)
+    if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node) end
+    local keys, values, entries = proxy.members(node)
+    local out, records = {}, {}
     local complete = true
-    local it = new_object_iter(view)
-
-    while true do
-        local rc = C.qjson_iter_next(it, strp_box, size_box, child_box)
-        if rc == QJSON_NOT_FOUND then break end
-        check(view, rc)
-        local key = ffi.string(strp_box[0], size_box[0])
-        local count = (seen[key] or 0) + 1
-        seen[key] = count
-        if count == 1 then
-            keys[#keys + 1] = key
-        else
-            had_duplicates = true
-        end
-
-        local bs, be = cursor_token_span(view, child_box[0])
-        local child
-        if count == 1 then
-            local cached = cached_child(view, key)
-            if cached ~= nil then
-                child = cached
-            else
-                child = decode_cursor(view, child_box)
+    keep_origin = keep_origin and node.backend ~= nil
+    local n = #keys
+    if node.kind == "array" then
+        n = 0
+        while values[n + 1] ~= nil do n = n + 1 end
+    end
+    for i = 1, n do
+        local key = node.kind == "array" and i or keys[i]
+        local child = values[key]
+        local value = materialize_node(child, keep_origin)
+        out[key] = value
+        if keep_origin then
+            local backend, first, last = proxy.span(child)
+            local record
+            if backend and child.kind == "string" and last - first > 24 then
+                record = { tag = "string", value = value, raw = read_all(backend, first, last) }
+            elseif backend and (child.kind == "object" or child.kind == "array") then
+                local origin = TABLE_ORIGIN[value]
+                if origin and origin.complete and last - first > 64 then
+                    record = { tag = "table", origin = origin }
+                end
             end
-        else
-            -- Duplicate keys must read from lexical order for deterministic
-            -- last-wins collapse and provenance snapshots.
-            child = decode_cursor(view, child_box)
+            records[key] = record
+            if not record then complete = false end
         end
-
-        local materialized_child = materialize_with_origin(child)
-        out[key] = materialized_child
-
-        local record, captured = origin_child_record(materialized_child, view._doc._hold, bs, be)
-        if not captured then
-            complete = false
-        end
-        records[key] = record
     end
-
-    TABLE_ORIGIN[out] = {
-        kind = "object",
-        complete = complete,
-        source = view._doc._hold,
-        bs = view._bs,
-        be = view._be,
-        keys = keys,
-        records = records,
-        had_duplicates = had_duplicates,
-    }
-    TABLE_TYPE_HINT[out] = "object"
+    if node.kind == "array" and n == 0 then setmetatable(out, _M.empty_array_mt) end
+    TABLE_TYPE_HINT[out] = node.kind
+    if keep_origin then
+        local backend, first, last = proxy.span(node)
+        TABLE_ORIGIN[out] = { kind = node.kind, complete = complete, backend = backend,
+            bs = first, be = last, keys = keys, len = n, records = records,
+            had_duplicates = entries and #entries ~= #keys or false }
+    end
     return out
 end
 
-local function materialize_array_with_origin(view)
-    local out = {}
-    local records = {}
-    local complete = true
-    local i = 0
-    while true do
-        local rc = C.qjson_cursor_index(view._cur, i, child_box)
-        if rc == QJSON_NOT_FOUND then break end
-        check(view, rc, T_ARR)
-        local bs, be = cursor_token_span(view, child_box[0])
-        local idx = i + 1
-        local cached = rawget(view, idx)
-        local child = cached or decode_cursor(view, child_box)
-        local materialized_child = materialize_with_origin(child)
-        out[idx] = materialized_child
-
-        local record, captured = origin_child_record(materialized_child, view._doc._hold, bs, be)
-        if not captured then
-            complete = false
-        end
-        records[idx] = record
-        i = idx
-    end
-    if #out == 0 then
-        setmetatable(out, _M.empty_array_mt)
-    end
-    TABLE_ORIGIN[out] = {
-        kind = "array",
-        complete = complete,
-        source = view._doc._hold,
-        bs = view._bs,
-        be = view._be,
-        len = #out,
-        records = records,
-    }
-    return out
+function _M.materialize(value, options)
+    if options ~= nil and type(options) ~= "table" then error("qjson.materialize: opts must be a table", 0) end
+    local keep = options and options.keep_origin
+    if keep ~= nil and type(keep) ~= "boolean" then error("qjson.materialize: opts.keep_origin must be a boolean", 0) end
+    local node = proxy.node(value)
+    if node then return materialize_node(node, keep == true) end
+    return value
 end
-
-materialize_with_origin = function(v)
-    local mt = (type(v) == "table") and getmetatable(v) or nil
-    if mt == LazyObject then
-        if rawget(v, "_dirty") then
-            return materialize_plain(v)
-        end
-        return materialize_object_with_origin(v)
-    elseif mt == LazyArray then
-        if rawget(v, "_dirty") then
-            return materialize_plain(v)
-        end
-        return materialize_array_with_origin(v)
-    end
-    return v
-end
-
-local function parse_materialize_opts(opts)
-    if opts == nil then
-        return false
-    end
-    if type(opts) ~= "table" then
-        error("qjson.materialize: opts must be a table")
-    end
-    local keep_origin = opts.keep_origin
-    if keep_origin ~= nil and type(keep_origin) ~= "boolean" then
-        error("qjson.materialize: opts.keep_origin must be a boolean")
-    end
-    return keep_origin == true
-end
-
-local function materialize(v, opts)
-    if parse_materialize_opts(opts) then
-        return materialize_with_origin(v)
-    end
-    return materialize_plain(v)
-end
-
-_M.materialize = materialize
 
 local string_byte = string.byte
 local string_format = string.format
@@ -783,14 +161,14 @@ local function encode_string(s)
     return table.concat(out)
 end
 
-local function encode_number(n)
+local function encode_number(n, fmt)
     if n ~= n or n == math.huge or n == -math.huge then
         error("qjson.encode: cannot encode non-finite number")
     end
     if n == math.floor(n) and math.abs(n) < 1e15 then
         return string_format("%d", n)
     end
-    return string_format(_ENCODE_NUMBER_FMT, n)
+    return string_format(fmt or _ENCODE_NUMBER_FMT, n)
 end
 
 local function encode_cdata(v)
@@ -857,66 +235,19 @@ function _M.encode_sparse_array(convert, ratio, safe, ...)
     return ENCODE_SPARSE_CONVERT, ENCODE_SPARSE_RATIO, ENCODE_SPARSE_SAFE
 end
 
--- Emit a dirty LazyObject as JSON in ORDER_KEYS (first-appearance) order.
--- A dirty object without ORDER state yet (e.g. dirtied only via a child
--- mutation) is materialized on demand by ensure_object_order_state, which
--- also collapses duplicate keys to last-wins. Container values that were not
--- themselves mutated encode through a fresh proxy and naturally fast-path
--- their unmodified subtree.
-local function encode_lazy_object_walking(t, depth, active)
-    if depth > ENCODE_MAX_DEPTH then
-        error(ENCODE_DEPTH_ERROR)
-    end
-    local keys = rawget(t, ORDER_KEYS)
-    if not keys then
-        keys = ensure_object_order_state(t)
-    end
-    local values = rawget(t, ORDER_VALUES)
+local function encode_proxy(value, depth)
+    local reader = _M._new_reader(value, nil, depth)
     local parts = {}
-    for _, k in ipairs(keys) do
-        local v = values[k]
-        if v ~= nil then
-            parts[#parts + 1] = encode_string(k) .. ":" .. encode(v, depth + 1, active)
-        end
+    while true do
+        local chunk, err = reader:next()
+        if err then error(err, 0) end
+        if chunk == nil then break end
+        parts[#parts + 1] = chunk
     end
-    return "{" .. table.concat(parts, ",") .. "}"
+    return table.concat(parts)
 end
 
-local function encode_lazy_array_walking(t, depth, active)
-    if depth > ENCODE_MAX_DEPTH then
-        error(ENCODE_DEPTH_ERROR)
-    end
-    local parts = {}
-    local rc = C.qjson_cursor_len(t._cur, "", 0, size_box)
-    check(t, rc, EXPECT_CONTAINER)
-    local n = tonumber(size_box[0])
-    for i = 0, n - 1 do
-        local irc = C.qjson_cursor_index(t._cur, i, child_box)
-        check(t, irc, T_ARR)
-        local cached = rawget(t, i + 1)
-        local v
-        if cached ~= nil then
-            v = cached
-        else
-            v = decode_cursor(t, child_box)
-        end
-        parts[#parts + 1] = encode(v, depth + 1, active)
-    end
-    return "[" .. table.concat(parts, ",") .. "]"
-end
-
-local function encode_proxy(t, depth, active)
-    if not t._dirty then
-        -- Fast path: no mutations — slice the original buffer bytes.
-        return t._doc._hold:sub(t._bs + 1, t._be)
-    end
-    if getmetatable(t) == LazyObject then
-        return encode_lazy_object_walking(t, depth, active)
-    end
-    return encode_lazy_array_walking(t, depth, active)
-end
-
-local function classify_plain_table(t)
+classify_plain_table = function(t)
     local count = 0
     local max = 0
     local all_positive_integer_keys = true
@@ -1014,7 +345,7 @@ local function origin_record_matches(record, value, depth, active)
 end
 
 local function origin_table_slice(origin)
-    return origin.source:sub(origin.bs + 1, origin.be)
+    return read_all(origin.backend, origin.bs, origin.be)
 end
 
 origin_object_fully_matches = function(t, origin, depth, active)
@@ -1196,6 +527,17 @@ encode = function(v, depth, active)
     end
     error("qjson.encode: unsupported value type: " .. tv)
 end
+
+function _M._new_reader(value, options, depth)
+    local fmt = _ENCODE_NUMBER_FMT
+    return bounded_reader.new(value, options, {
+        number = function(n) return encode_number(n, fmt) end,
+        cdata = encode_cdata,
+        depth = depth,
+    })
+end
+
+function _M.reader(value, options) return _M._new_reader(value, options, 1) end
 
 _M.encode = function(v)
     return encode(v, 1, {})

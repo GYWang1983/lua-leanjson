@@ -74,10 +74,12 @@ describe("qjson.encode_number_precision", function()
         end)
     end)
 
-    it("uses configured precision when encoding dirty lazy proxies", function()
+    it("preserves raw numbers until explicitly replaced in dirty lazy proxies", function()
         with_precision(4, function()
             local lazy = qjson.decode('{"n":3.141592653589793,"k":1}')
             lazy.k = 2
+            assert.are.equal('{"n":3.141592653589793,"k":2}', qjson.encode(lazy))
+            lazy.n = lazy.n
             assert.are.equal('{"n":3.142,"k":2}', qjson.encode(lazy))
         end)
     end)

@@ -687,9 +687,26 @@ local function op_alias_child(ctx)
     local value = ctx.rng:int(5000)
     append_trace(ctx.trace, "alias alias = a; alias.x = " .. tostring(value))
     ctx.lazy.alias = ctx.lazy.a
-    model_set(ctx.model, "alias", a)
+    local copied = clone_model(a)
+    model_set(ctx.model, "alias", copied)
     ctx.lazy.alias.x = value
-    model_set(a, "x", value)
+    model_set(copied, "x", value)
+end
+
+local function op_rejected_sparse_write(ctx)
+    local arr = model_get(ctx.model, "arr")
+    if not is_model_node(arr, "array") then
+        append_trace(ctx.trace, "sparse write skipped for non-array")
+        return
+    end
+    local lazy = ctx.lazy.arr
+    local n = #arr.items
+    local index = n > 1 and ctx.rng:bool() and 1 or n + 2
+    local deleting = index == 1 and n > 1
+    append_trace(ctx.trace, "reject sparse arr[" .. tostring(index) .. "]")
+    assert.has_error(function()
+        if deleting then lazy[index] = nil else lazy[index] = 7 end
+    end, "qjson: sparse proxy arrays require explicit materialization")
 end
 
 local function op_encode_midsequence(ctx)
@@ -723,6 +740,7 @@ local OPS = {
     op_replace_array,
     op_self_assign,
     op_alias_child,
+    op_rejected_sparse_write,
     op_encode_midsequence,
     op_materialize_midsequence,
 }
@@ -831,35 +849,27 @@ describe("qjson lazy mutation deterministic regressions", function()
         assert.are.equal('{"_keys":[],"_values":{"x":null},"n":null,"added":null}', qjson.encode(t))
     end)
 
-    it("defines aliasing as shared lazy proxy identity", function()
+    it("captures proxy assignments as independent snapshots", function()
         local t = qjson.decode('{"a":{"x":1},"b":2}')
         local a = t.a
         t.alias = a
         t.alias.x = 9
-        assert.are.equal(t.a, t.alias)
-        assert.are.equal('{"a":{"x":9},"b":2,"alias":{"x":9}}', qjson.encode(t))
+        assert.are_not.equal(t.a, t.alias)
+        assert.are.equal('{"a":{"x":1},"b":2,"alias":{"x":9}}', qjson.encode(t))
     end)
 
-    it("returns a bounded encode error for mutation-created cycles", function()
+    it("captures an ancestor assignment without a mutable reference cycle", function()
         local t = qjson.decode('{"a":{}}')
         t.a.self = t
-        assert.has_error(function()
-            qjson.encode(t)
-        end, "qjson.encode: circular reference")
+        assert.are.equal('{"a":{"self":{"a":{}}}}', qjson.encode(t))
     end)
 
-    it("documents sparse array hole semantics after lazy array mutation", function()
+    it("rejects sparse proxy holes instead of truncating later elements", function()
         local t = qjson.decode('[1,2,3]')
-        t[2] = nil
-
-        local seen = {}
-        for i, v in qjson.ipairs(t) do
-            seen[#seen + 1] = i .. "=" .. tostring(v)
-        end
-
-        assert.are.equal(1, qjson.len(t))
-        assert.are.same({"1=1"}, seen)
-        assert.are.equal("[1]", qjson.encode(t))
+        assert.has_error(function() t[2] = nil end,
+            "qjson: sparse proxy arrays require explicit materialization")
+        assert.are.equal(3, qjson.len(t))
+        assert.are.equal("[1,2,3]", qjson.encode(t))
     end)
 
     it("supports mutation during object iteration with final ordered state", function()
@@ -888,12 +898,17 @@ describe("qjson lazy mutation deterministic regressions", function()
         end, "qjson: invalid argument")
     end)
 
-    it("forces number reserialization after a read without hiding normalization", function()
+    it("preserves untouched numeric tokens after reads and unrelated writes", function()
         local t = qjson.decode('{"big":9007199254740993,"negzero":-0,"sci":1.25e3,"float":12.5}')
         local _ = t.big
         t.extra = 1
         assert.are.equal(
-            '{"big":9.007199254741e+15,"negzero":0,"sci":1250,"float":12.5,"extra":1}',
+            '{"big":9007199254740993,"negzero":-0,"sci":1.25e3,"float":12.5,"extra":1}',
+            qjson.encode(t)
+        )
+        t.big = t.big
+        assert.are.equal(
+            '{"big":9.007199254741e+15,"negzero":-0,"sci":1.25e3,"float":12.5,"extra":1}',
             qjson.encode(t)
         )
     end)

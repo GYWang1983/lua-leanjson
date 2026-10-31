@@ -241,6 +241,10 @@ describe("qjson.encode_sparse_array lua-cjson compatible controls", function()
         assert.are.equal("[1,null,3]", qjson.encode(lazy_clean))
 
         local lazy_materialized = qjson.decode("[1,2]")
+        assert.has_error(function() lazy_materialized[4] = 4 end,
+            "qjson: sparse proxy arrays require explicit materialization")
+        assert.are.equal("[1,2]", qjson.encode(lazy_materialized))
+        lazy_materialized[3] = qjson.null
         lazy_materialized[4] = 4
         assert.are.equal("[1,2,null,4]", qjson.encode(lazy_materialized))
     end)

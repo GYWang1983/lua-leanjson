@@ -80,14 +80,38 @@ emits them as decimal JSON integers without `LL` or `ULL` suffixes.
 only the requested value. Nested containers are also proxies and keep stable Lua
 identity when read repeatedly.
 
-The first write to a lazy object materializes that object level while preserving
-source key order for `qjson.encode`. The first write to a lazy array materializes
-the array level into a regular sequence tagged with `qjson.empty_array_mt` when
-needed.
+Writes keep objects and arrays as proxies and copy structural references along
+the modified path without decoding sibling scalars. `qjson.type(value)` reports
+`"array"`, `"object"`, `"null"`, or the scalar type; an array proxy does not use
+`qjson.empty_array_mt`. `qjson.decode` returns ordinary scalar values for scalar
+JSON roots.
 
-`qjson.decode` requires the top-level JSON value to be an object or array because
-it returns a table-shaped proxy. If you need to accept top-level scalars, use
-`qjson.parse` and the root cursor/getter APIs.
+`qjson.fork(value)` freezes the current logical value into an independent branch.
+Proxy assignment snapshots ordinary Lua tables and other proxies too; it does
+not create a shared mutable alias. Replacing/deleting a field detaches an already
+returned child proxy. This differs from assigning references between ordinary
+Lua tables. Cyclic plain tables are rejected when snapshotting.
+
+Object getters use the last duplicate key even before a write. Untouched source
+objects may retain duplicate lexical entries in iteration and output. Modified
+objects collapse duplicates in first-appearance order with the last value;
+`qjson.reader(value, { normalize_duplicates = true })` normalizes recursively.
+
+Untouched scalar spans retain their original spelling when a sibling changes.
+Merely reading `9007199254740993` through the Lua-number getter does not round the
+output token. Explicitly assigning that Lua number back applies the configured
+numeric encoder and may round it. To deliberately normalize a number, replace
+that field with the decoded value.
+
+Proxy arrays support replacement and tail append. `arr[i] = nil` deletes only a
+tail slot; interior holes and noncontiguous writes raise an error before changing
+the array. Use `qjson.array_insert(arr, index, value)` and
+`qjson.array_remove(arr, index)` for dense sequence changes. Explicitly
+materialize before using arbitrary sparse Lua-table operations; their encoding
+continues to honor `qjson.encode_sparse_array`.
+
+See [mutable views and bounded output](source-proxy-api.md) for the complete
+reader, ownership and lifecycle contract.
 
 ### Iteration and length helpers
 
@@ -115,9 +139,10 @@ lua-cjson callers usually observe.
 
 Lua's native `next(t)` walks the raw table storage directly; it does not call
 `__pairs`, `__ipairs`, `__index`, or any qjson helper. On a qjson lazy proxy,
-that raw storage is implementation state and cache data, not the decoded JSON
-object or array. This means `next(proxy)` is not a valid way to iterate JSON
-fields, fetch the first entry, or test whether a decoded object is empty.
+that raw storage is empty, not the decoded JSON object or array. Private state
+and child caches are stored outside the proxy table. This means `next(proxy)` is
+not a valid way to iterate JSON fields, fetch the first entry, or test whether a
+decoded object is empty.
 
 Replace common `next` patterns with proxy-aware helpers:
 

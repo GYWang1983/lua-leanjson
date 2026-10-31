@@ -259,10 +259,11 @@ describe("__newindex — first-write materialization", function()
         assert.are.equal(1, inner.x)
     end)
 
-    it("LazyArray materializes preserving empty_array_mt", function()
+    it("LazyArray keeps a private proxy after writes", function()
         local t = qjson.decode('[]')
         t[1] = "x"
-        assert.are.equal(qjson.empty_array_mt, getmetatable(t))
+        assert.are.equal(qjson._LazyArray, getmetatable(t))
+        assert.are.equal("array", qjson.type(t))
         assert.are.equal("x", t[1])
     end)
 

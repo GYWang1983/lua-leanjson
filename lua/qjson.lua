@@ -257,6 +257,11 @@ end
 local _lazy = require("qjson.table")
 _M.decode         = _lazy.decode
 _M.encode         = _lazy.encode
+_M.fork           = _lazy.fork
+_M.type           = _lazy.type
+_M.array_insert   = _lazy.array_insert
+_M.array_remove   = _lazy.array_remove
+_M.reader         = _lazy.reader
 _M.encode_number_precision = _lazy.encode_number_precision
 _M.encode_sparse_array = _lazy.encode_sparse_array
 _M.materialize    = _lazy.materialize

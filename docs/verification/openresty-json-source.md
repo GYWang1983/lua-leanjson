@@ -76,7 +76,7 @@ QJSON_PROP_CASES=2000 QJSON_MUT_PROP_CASES=1000 QJSON_MUT_PROP_STEPS=100 make op
 
 The dev image is based on native `openresty/openresty:1.29.2.4-0-jammy@sha256:0a887716d1bc7a3d38e6a765e4c9df31a4b4e27473fc30def6601511330c7f2f` and `rust:1.90.0-slim-bookworm@sha256:64232e656c058f4468e8d024e990acff04f0fd5a5c0a88a574dc37773d7325c9`. Direct and transitive Lua rock versions are pinned in the Dockerfile. Runtime FFI and Lua modules are built from the same exact fork revision by `scripts/build-openresty-image.sh`.
 
-`openresty-verify` runs Rust release/default, scalar, and panic-barrier modes; Clippy with warnings denied; the full Lua suite; Lua lint; seeded encode/mutation properties; pinned JSONTestSuite/third-party corpus tests; and real worker HTTP tests. CI runs this native source gate independently of existing runtime compatibility jobs. The submodule gitlinks pin JSONTestSuite (`1ef36fa01286573e846ac449e8683f8833c5b26a`), cJSON (`fb16e5cf358798aabb049655975cde8427101056`), and simdjson (`43766fc7efdedc87111c48bda55f758ca212335b`).
+`openresty-verify` runs Rust release/default, scalar, and panic-barrier modes; Clippy with warnings denied; the full Lua suite; Lua lint; seeded encode/mutation properties; 500 valid plus 500 byte-mutated source/contiguous differential stress cases; pinned JSONTestSuite/third-party corpus tests; and real worker HTTP tests. CI runs this native source gate independently of existing runtime compatibility jobs. The submodule gitlinks pin JSONTestSuite (`1ef36fa01286573e846ac449e8683f8833c5b26a`), cJSON (`fb16e5cf358798aabb049655975cde8427101056`), and simdjson (`43766fc7efdedc87111c48bda55f758ca212335b`).
 
 The native harness starts a dedicated qjson worker and a separate upstream worker. The sink only reads bounded chunks, counts bytes, hashes them, and optionally writes a disk capture. A separate test client parses those captures after the transfer for semantic comparison. This separates the oracle's full parsing from the measured process and sink.
 
@@ -90,6 +90,8 @@ cargo install cargo-fuzz --locked
 QJSON_FUZZ_SECONDS=30 make bounded-fuzz
 ```
 
+The first five libFuzzer targets exercise the legacy contiguous core. `fuzz_source_windows` exercises the new window-fed source separately. Seeded Lua source stress also checks valid/mutated stream verdicts, chunked output, and final lease release; it is distinct from coverage-guided libFuzzer.
+
 ## Benchmark protocol
 
 ```sh
@@ -97,6 +99,8 @@ QJSON_FUZZ_SECONDS=30 make bounded-fuzz
 QJSON_BENCH_BYTES=8388608 QJSON_BENCH_CONCURRENCY=2 QJSON_BENCH_REQUESTS=3 make openresty-bench
 # A quick pair:
 QJSON_BENCH_CASES=prompt QJSON_BENCH_BYTES=1048576 make openresty-bench
+# Larger context pair, with four concurrent clients and two branches:
+QJSON_BENCH_CASES='prompt messages' QJSON_BENCH_BYTES=8388608 QJSON_BENCH_CONCURRENCY=4 QJSON_BENCH_BRANCHES=2 make openresty-bench
 ```
 
 Each method/scenario uses a fresh qjson worker so process RSS high water never carries over from its pair. Both methods receive identical payloads, make the same branch count and model change, and send to the same bounded sink. The cjson baseline intentionally allocates a complete source string, Lua object tree, branch container copies, and encoded output. Its immutable long Lua strings are shared across branch copies. The qjson path reads only model in lazy cases and uses normalized bounded output. The `explicit` case deliberately accesses the long value and is reported separately.

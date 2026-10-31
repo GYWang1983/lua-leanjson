@@ -12,7 +12,7 @@ do
 local body = { model = "original" }
 if scenario == "messages" then body.messages = { { role = "user", content = ("m"):rep(size) } }
 elseif scenario == "input" then body.input = ("i"):rep(size)
-elseif scenario == "escaped" then body.prompt = ("\n\t\"\\"):rep(math.floor(size / 4))
+elseif scenario == "escaped" then body.prompt = ("\n\t\"\\"):rep(math.floor(size / 8))
 elseif scenario == "short-elements" then
     body.items = {}
     for i = 1, math.max(1, math.floor(size / 32)) do body.items[i] = { id = i, value = "small" } end

@@ -15,7 +15,7 @@ leanjson.close(branch)
 leanjson.close(body)
 ```
 
-These functions are independent of `ngx`. File I/O is synchronous. Smaller windows bound each operation's working buffers; they do not make disk I/O asynchronous or guarantee constant total memory. Structural metadata, keys, overlays and explicitly read scalar values still occupy memory.
+These functions are independent of `ngx`. File I/O is synchronous. Smaller windows bound each operation's working buffers; they do not make disk I/O asynchronous or guarantee constant total memory. Retained native indexes obey the source metadata budget. Validation/traversal workspace, live public views, durable overlays and explicitly read scalar values still occupy memory.
 
 ## Options and callbacks
 
@@ -25,9 +25,14 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 | --- | --- | --- |
 | `chunk_size` | `65536` | Positive uint32 integer; bounds file reads, feed steps and native scalar windows. |
 | `max_depth` | `1024` | Nonnegative uint32 integer; zero selects the default, values above 4096 are clamped. |
-| `lazy` | `false` | Source v1 supports eager validation only; `true` is rejected. |
-| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for owned decoder spools; memory and original-file decoding do not create spools. |
+| `index_depth` | `3` | Nonnegative uint32 integer; root depth is 0 and `a.b.c` is the default span frontier. Zero retains no optional children. |
+| `index_array_limit` | `3` | Nonnegative uint32 integer; optional retained prefix per array, with exact full length and scanning for farther elements. Zero disables the prefix. |
+| `index_budget_bytes` | `1048576` | Nonnegative uint32 integer; shared native index-capacity budget per source across parse and later operations. Zero disables optional cached indexes. |
+| `lazy` | `false` | High-level sources support eager validation only; `true` is rejected. |
+| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for decoder input spools and active duplicate-normalization spill storage. Memory/original-file decoding creates no input spool; wide normalized operations may create an unlinked spill file. |
 | `on_chunk(bytes_sofar)` | absent | Runs between bounded file/feed source steps and may yield; not invoked by memory decoding. The argument is the received/scanned byte total and stays fixed during later value reads. |
+
+The same bounds propagate through OpenResty `read_body`/`start_body` in `opts.decode`; HTTP chunk/callback overrides preserve them. Metadata bounds do not weaken full eager JSON validation or the independent nesting limit.
 
 No Lua callback runs inside Rust. Every native output pointer is copied before the callback. A callback error propagates as a source failure and releases the failing operation's resources. The caller should close its holders on cancellation. The OpenResty adapter handles request cleanup separately.
 
@@ -62,7 +67,7 @@ leanjson.close(body)
 | `nil, "ABSENT"` | The completed object/array has no such field/index. |
 | `nil, "ERROR", error` | Invalid query, malformed input, abort, I/O failure or closed decoder. |
 
-The native `NEED_READ` status is handled internally through bounded file windows. Source v1 deliberately exposes no provisional values: a closing root before EOF does not establish final duplicate-key or absence results. Completed decoder queries refer to its immutable source; proxy edits do not rewrite that source.
+The native `NEED_READ` status is handled internally through bounded file windows. The source APIs deliberately expose no provisional values: a closing root before EOF does not establish final duplicate-key or absence results. Completed decoder queries refer to its immutable source; proxy edits do not rewrite that source.
 
 `abort(reason)` invalidates unfinished input and releases its spool ownership. After successful finish it returns `nil, error` and leaves completed values valid. `close()` is idempotent, drops decoder ownership and makes later decoder queries return `ERROR`. It leaves independently returned proxies/readers/forks valid.
 
@@ -87,3 +92,5 @@ Active backend operations belong to the initiating public holder's cancellation 
 The final lease closes the descriptor and unlinks an owned spool deterministically. An original `decode_file` path is never unlinked. Reader EOF, error and close release only that reader's scope; other holders remain valid.
 
 Reader construction freezes the logical snapshot and acquires leases without source I/O. `length()` performs and caches full length/encoding validation; `next()` performs that validation first if needed, before returning any output. Both operations can yield through source callbacks. Close wins over a late suspended result, while a previously successful length stays available after close.
+
+The additive sparse C ABI is version 2 (`leanjson_source_v2_*`), documented in `include/leanjson.h`. It uses immutable span handles and resumable targeted lookup/iteration with bounded `NEED_READ` windows. Feed/finish/abort/source retain/release and scalar operation pumping reuse the unchanged v1 functions. Existing v1 structs/functions and the contiguous `parse` API keep their layouts and behavior. Use v1 metadata/node/iteration functions with v1-created sources and v2 span/iteration functions with v2-created sources. The Lua loader requires the sparse ABI and rejects an older native library with a missing-symbol diagnostic. See [source diagnostics and duplicate workspace](source-proxy-api.md) for the budget accounting boundary.

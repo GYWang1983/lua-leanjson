@@ -10,32 +10,13 @@ local options = require("leanjson.options").normalize
 local M = {}
 local Backend = {}; Backend.__index = Backend
 local Decoder = {}; Decoder.__index = Decoder
-local READY, DONE, NEED_INPUT, NEED_READ, ERROR = 0, 1, 2, 3, 5
+local READY, NEED_INPUT = 0, 2
 local MAX_EXACT = 9007199254740991
-local kinds = { [0] = "null", "boolean", "number", "string", "array", "object" }
-local U64_MAX = ffi.cast("uint64_t", -1)
-local details = { "source I/O error", "source aborted", "source closed", "invalid source window",
-    "invalid source offset", "invalid source options" }
-
-local function exact(value)
-    if value > MAX_EXACT then error("leanjson: source offset exceeds Lua exact integer range", 0) end
-    return tonumber(value)
-end
-
-local function result_error(result)
-    local r = result[0]
-    local message
-    if r.detail ~= 0 then message = details[tonumber(r.detail)] or "source error"
-    else message = ffi.string(C.leanjson_strerror(r.code)) end
-    if r.offset ~= U64_MAX then message = message .. " at byte " .. tostring(exact(r.offset)) end
-    return "leanjson: " .. message
-end
-
-local function require_status(status, expected, result)
-    if status ~= expected then
-        if status == ERROR then error(result_error(result), 0) end
-        error("leanjson: unexpected source status " .. status, 0)
-    end
+local shared = require("leanjson.source_backend")
+local exact, result_error, require_status = shared.exact, shared.result_error, shared.require_status
+local native_options = shared.native_options
+for _, name in ipairs({ "type", "span", "scalar", "children", "lookup", "length", "identity", "clean", "stats", "lexical_length", "clear_indexes" }) do
+    Backend[name] = shared[name]
 end
 
 local function close_state(state)
@@ -54,17 +35,23 @@ local function drop(state)
     if state.leases == 0 then close_state(state) end
 end
 
+local function release_lease(lease)
+    if lease.released then return end
+    lease.released = true
+    drop(lease.state)
+end
 function Backend:retain()
     self:check_open()
     local state = self.state
     state.leases = state.leases + 1
-    -- The finalizer closes over resource state only, never this token, backend,
-    -- proxy or weak-table key. An explicit release removes the fallback first.
-    return ffi.gc(ffi.new("uint8_t[1]"), function() drop(state) end)
+    local lease = { state = state }
+    -- Both explicit release and VM shutdown enter the same idempotent owner.
+    -- The finalizer captures no token, backend, proxy or weak-table key.
+    local token = ffi.gc(ffi.new("uint8_t[1]"), function() release_lease(lease) end)
+    return { token = token, lease = lease }
 end
-
-function Backend:release(token)
-    if token then ffi.gc(token, nil); drop(self.state) end
+function Backend:release(owner)
+    if owner then ffi.gc(owner.token, nil); release_lease(owner.lease) end
 end
 
 function Backend:check_open()
@@ -111,137 +98,9 @@ function Backend:read(offset, length, scope)
     return chunk
 end
 
-local function info(self, handle)
-    self:check_open()
-    local out, result = ffi.new("leanjson_source_v1_node_info[1]"), ffi.new("leanjson_source_v1_result[1]")
-    require_status(C.leanjson_source_v1_node_get_info(handle, out, result), READY, result)
-    return out[0]
-end
-
-function Backend:type(handle) return kinds[tonumber(info(self, handle).kind)] end
-function Backend:span(handle)
-    local value = info(self, handle)
-    return exact(value.raw_start), exact(value.raw_end)
-end
-
-local function scalar_bytes(self, handle, base, scope)
-    leases.check(scope)
-    local lease = self:retain()
-    local out, result = ffi.new("leanjson_source_v1_op *[1]"), ffi.new("leanjson_source_v1_result[1]")
-    local status = C.leanjson_source_v1_node_scalar_begin(handle, out, result)
-    if status == ERROR then self:release(lease); error(result_error(result), 0) end
-    local operation = ffi.gc(out[0], C.leanjson_source_v1_op_release)
-    local record = leases.track(scope, function()
-        if operation then ffi.gc(operation, nil); C.leanjson_source_v1_op_release(operation); operation = nil end
-        self:release(lease)
-    end)
-    local ok, value = pcall(function()
-        local parts, ptr, size = {}, ffi.new("const uint8_t *[1]"), ffi.new("size_t[1]")
-        while status ~= DONE do
-            leases.check(scope)
-            if not operation then error("leanjson: source operation closed", 0) end
-            if status == NEED_READ then
-                local offset, length = exact(result[0].offset), exact(result[0].length)
-                local chunk = self:read((base or 0) + offset, length, scope)
-                leases.check(scope)
-                require_status(C.leanjson_source_v1_provide_window(operation, offset, chunk, #chunk, result), READY, result)
-            elseif status == READY then
-                -- Copy before another operation step can invalidate the pointer.
-                parts[#parts + 1] = ffi.string(ptr[0], size[0])
-                self:notify(scope)
-            else error(result_error(result), 0) end
-            status = C.leanjson_source_v1_op_step(operation, ptr, size, result)
-        end
-        return table.concat(parts)
-    end)
-    leases.finish(scope, record)
-    if not ok then error(value, 0) end
-    return value
-end
-
-function Backend:scalar(handle, scope)
-    local ok, value = pcall(function()
-        local kind = self:type(handle)
-        local raw = scalar_bytes(self, handle, nil, scope)
-        if kind == "string" then return raw end
-        if kind == "boolean" then return raw == "true" end
-        if kind == "null" then return nil end
-        local number = tonumber(raw)
-        if number == nil or number == math.huge or number == -math.huge then error("leanjson: number out of range", 0) end
-        return number
-    end)
-    if not ok then error(value, 0) end
-    return value
-end
-
-local function native_options(opts)
-    return ffi.new("leanjson_source_v1_options[1]", { { 1, 0, opts.max_depth, opts.chunk_size } })
-end
-
-local function key_string(self, first, last, scope)
-    -- Keys have spans rather than value-node handles. A temporary bounded
-    -- source reuses the same Rust string validator/decoder without aggregating
-    -- a raw quoted key or maintaining a second Lua escape implementation.
-    local result = ffi.new("leanjson_source_v1_result[1]")
-    local source = C.leanjson_source_v1_new(native_options(self.opts), result)
-    if source == nil then error(result_error(result), 0) end
-    source = ffi.gc(source, C.leanjson_source_v1_release)
-    local record = leases.track(scope, function()
-        if source then ffi.gc(source, nil); C.leanjson_source_v1_release(source); source = nil end
-    end)
-    local ok, value = pcall(function()
-        local position = first
-        while position < last do
-            local chunk = self:read(position, math.min(last - position, self.opts.chunk_size), scope)
-            leases.check(scope)
-            require_status(C.leanjson_source_v1_feed(source, position - first, chunk, #chunk, result), NEED_INPUT, result)
-            position = position + #chunk
-        end
-        require_status(C.leanjson_source_v1_finish(source, last - first, result), READY, result)
-        local root = ffi.new("leanjson_source_v1_node[1]")
-        require_status(C.leanjson_source_v1_root(source, root, result), READY, result)
-        return scalar_bytes(self, root[0], first, scope)
-    end)
-    leases.finish(scope, record)
-    if not ok then error(value, 0) end
-    return value
-end
-
-function Backend:children(handle, scope)
-    local kind = self:type(handle)
-    local lease = self:retain()
-    local out, result = ffi.new("leanjson_source_v1_iter *[1]"), ffi.new("leanjson_source_v1_result[1]")
-    local status = C.leanjson_source_v1_iter_begin(handle, out, result)
-    if status ~= READY then self:release(lease); error(result_error(result), 0) end
-    local iterator = ffi.gc(out[0], C.leanjson_source_v1_iter_release)
-    local record = leases.track(scope, function()
-        if iterator then ffi.gc(iterator, nil); C.leanjson_source_v1_iter_release(iterator); iterator = nil end
-        if lease then self:release(lease); lease = nil end
-    end)
-    local fallback = leases.fallback(scope, record)
-    return function()
-        leases.check(scope)
-        if not fallback or not iterator then return nil end
-        local ok, key, child = pcall(function()
-            local member = ffi.new("leanjson_source_v1_member[1]")
-            local rc = C.leanjson_source_v1_iter_next(iterator, member, result)
-            if rc == DONE then return nil end
-            require_status(rc, READY, result)
-            local value = member[0]
-            local name = kind == "array" and (exact(value.ordinal) + 1)
-                or key_string(self, exact(value.key_start), exact(value.key_end), scope)
-            if kind == "array" then self:notify(scope) end
-            return name, ffi.new("leanjson_source_v1_node", value.value)
-        end)
-        if not ok then leases.finish(scope, record); fallback = nil; error(key, 0) end
-        if key == nil then leases.finish(scope, record); fallback = nil end
-        return key, child
-    end
-end
-
 local function backend_new(fd, spool_path, opts)
     local result = ffi.new("leanjson_source_v1_result[1]")
-    local source = C.leanjson_source_v1_new(native_options(opts), result)
+    local source = C.leanjson_source_v2_new(native_options(opts), result)
     if source == nil then io_source.close(fd, spool_path); error(result_error(result), 0) end
     local backend = setmetatable({ state = { fd = fd, path = spool_path, source = source, leases = 0 },
         total = 0, opts = opts }, Backend)
@@ -267,10 +126,10 @@ local function feed_bytes(backend, chunk, spool, scope)
 end
 
 local function finish_backend(backend)
-    local result, root = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v1_node[1]")
+    local result, root = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v2_node[1]")
     require_status(C.leanjson_source_v1_finish(backend.state.source, backend.total, result), READY, result)
-    require_status(C.leanjson_source_v1_root(backend.state.source, root, result), READY, result)
-    return { backend = backend, handle = ffi.new("leanjson_source_v1_node", root[0]), kind = backend:type(root[0]) }
+    require_status(C.leanjson_source_v2_root(backend.state.source, root, result), READY, result)
+    return { backend = backend, handle = ffi.new("leanjson_source_v2_node", root[0]), kind = backend:type(root[0]) }
 end
 
 function M.decode_file(filename, opts)

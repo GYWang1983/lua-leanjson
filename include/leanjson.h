@@ -203,6 +203,60 @@ int leanjson_source_v1_op_step(leanjson_source_v1_op *, const uint8_t **, size_t
 int leanjson_source_v1_provide_window(leanjson_source_v1_op *, uint64_t base, const uint8_t *, size_t, leanjson_source_v1_result *);
 void leanjson_source_v1_op_release(leanjson_source_v1_op *);
 
+
+/* Sparse sources, additive v2 API. v1 options/layouts/entry points are unchanged.
+ * v2_new defaults: depth=3, array prefix=3, optional index budget=1048576.
+ * Explicit zeros disable optional preindexing. All integer fields are uint32.
+ * max_depth remains the independent full-validation nesting limit. Feed,
+ * finish, abort, retain and release use v1 source functions. All new exports
+ * catch panics. Source spans borrow their source; iterator/op handles retain it.
+ * flags: 0=unknown duplicate status, 1=proven no duplicate in subtree,
+ * 2=duplicates in subtree. Unknown must never be interpreted as clean.
+ * Only rebuildable native capacity is budgeted. Root/validation stack, active
+ * bounded I/O and duplicate work, input, edits, returned values and output are
+ * separate semantic/working storage, not a total RSS bound. Wide duplicate
+ * indexes spill to owned temporary files; Unix pathnames are unlinked on open.
+ */
+typedef struct {
+    uint32_t api_version, mode, max_depth, window_size;
+    uint32_t index_depth, index_array_limit, index_budget_bytes, reserved;
+    const uint8_t *spill_directory;
+    size_t spill_directory_len;
+} leanjson_source_v2_options;
+typedef struct {
+    const leanjson_source_v1 *source;
+    uint64_t raw_start, raw_end, child_count;
+    uint32_t kind, flags;
+} leanjson_source_v2_node;
+typedef struct leanjson_source_v2_iter leanjson_source_v2_iter;
+typedef struct {
+    uint64_t ordinal, key_start, key_end;
+    const uint8_t *key;
+    size_t key_len;
+    leanjson_source_v2_node value;
+} leanjson_source_v2_member;
+typedef struct {
+    uint64_t budget_bytes, index_bytes, indexed_nodes, indexed_depth;
+    uint64_t index_depth, index_array_limit;
+} leanjson_source_v2_stats;
+leanjson_source_v1 *leanjson_source_v2_new(const leanjson_source_v2_options *, leanjson_source_v1_result *);
+int leanjson_source_v2_root(const leanjson_source_v1 *, leanjson_source_v2_node *, leanjson_source_v1_result *);
+int leanjson_source_v2_get_stats(const leanjson_source_v1 *, leanjson_source_v2_stats *, leanjson_source_v1_result *);
+int leanjson_source_v2_clear_indexes(const leanjson_source_v1 *, leanjson_source_v1_result *);
+/* normalize=0 yields every lexical occurrence; normalize=1 yields first-key
+ * position with final whole value. Arrays are zero-based. iter_next returns
+ * READY, DONE, NEED_READ or ERROR. Supply NEED_READ with a nonempty window at
+ * offset, at most length; partial windows work. Key pointer is valid only until
+ * next/provide/release on that iterator. Copy keys immediately. Each iterator
+ * owns independent traversal and temporary files; release exactly once. */
+int leanjson_source_v2_iter_begin(leanjson_source_v2_node, uint32_t normalize, leanjson_source_v2_iter **, leanjson_source_v1_result *);
+int leanjson_source_v2_lookup_begin(leanjson_source_v2_node, const uint8_t *key, size_t key_len, uint64_t index, leanjson_source_v2_iter **, leanjson_source_v1_result *);
+int leanjson_source_v2_iter_next(leanjson_source_v2_iter *, leanjson_source_v2_member *, leanjson_source_v1_result *);
+int leanjson_source_v2_iter_provide_window(leanjson_source_v2_iter *, uint64_t, const uint8_t *, size_t, leanjson_source_v1_result *);
+void leanjson_source_v2_iter_release(leanjson_source_v2_iter *);
+/* Scalar operations use unchanged v1 op_step/provide/release functions. */
+int leanjson_source_v2_node_scalar_begin(leanjson_source_v2_node, leanjson_source_v1_op **, leanjson_source_v1_result *);
+
 #ifdef __cplusplus
 }
 #endif

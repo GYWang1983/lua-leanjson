@@ -24,18 +24,9 @@ local function string_length(value)
     return length
 end
 
-local function container(node, scope)
-    local keys, values = proxy.members(node, scope)
-    local n = #keys
-    if node.kind == "array" then
-        n = 0
-        while values[n + 1] ~= nil do n = n + 1 end
-    end
-    return keys, values, n
-end
-
 local function raw_span(node, normalize)
-    if node.backend and (not normalize or (node.kind ~= "object" and node.kind ~= "array")) then
+    if node.backend and (not normalize or (node.kind ~= "object" and node.kind ~= "array")
+        or (node.backend.clean and node.backend:clean(node.handle))) then
         return proxy.span(node)
     end
 end
@@ -54,15 +45,15 @@ local function count_length(root, normalize, codec, scope)
     while #stack > 0 do
         local frame = stack[#stack]
         local node = frame.node
-        if frame.values then
-            frame.index = frame.index + 1
-            if frame.index > frame.n then
-                stack[#stack] = nil
+        if frame.iterator then
+            local key, child = frame.iterator()
+            leases.check(scope)
+            if key == nil then stack[#stack] = nil
             else
-                local key = node.kind == "array" and frame.index or frame.keys[frame.index]
-                if frame.index > 1 then length = length + 1 end
+                if frame.index > 0 then length = length + 1 end
+                frame.index = frame.index + 1
                 if node.kind == "object" then length = length + string_length(key) + 1 end
-                stack[#stack + 1] = { node = frame.values[key], depth = frame.depth + 1 }
+                stack[#stack + 1] = { node = child, depth = frame.depth + 1 }
             end
         else
             local backend, first, last = raw_span(node, normalize)
@@ -72,7 +63,7 @@ local function count_length(root, normalize, codec, scope)
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
                 if frame.depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
-                frame.keys, frame.values, frame.n = container(node, scope)
+                frame.iterator = proxy.iter(node, scope, true)
                 leases.check(scope)
                 frame.index = 0
                 length = length + 2
@@ -104,10 +95,9 @@ local function next_chunk(self)
             if backend then
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
-                local keys, values, n = container(node, self.scope)
+                local iterator = proxy.iter(node, self.scope, true)
                 if self.closed then return nil end
-                stack[#stack] = { tag = "container", node = node, keys = keys, values = values,
-                    n = n, index = 0, open = true }
+                stack[#stack] = { tag = "container", node = node, iterator = iterator, index = 0, open = true }
             elseif node.kind == "string" then
                 stack[#stack] = string_frame(node.value)
             else
@@ -155,13 +145,14 @@ local function next_chunk(self)
                 fragment = frame.node.kind == "array" and "[" or "{"
                 frame.open = false
             else
+                local key, child = frame.iterator()
+                if self.closed then return nil end
                 frame.index = frame.index + 1
-                if frame.index > frame.n then
+                if key == nil then
                     fragment = frame.node.kind == "array" and "]" or "}"
                     stack[#stack] = nil
                 else
-                    local key = frame.node.kind == "array" and frame.index or frame.keys[frame.index]
-                    stack[#stack + 1] = { tag = "value", node = frame.values[key] }
+                    stack[#stack + 1] = { tag = "value", node = child }
                     if frame.node.kind == "object" then
                         stack[#stack + 1] = literal(":")
                         stack[#stack + 1] = string_frame(key)

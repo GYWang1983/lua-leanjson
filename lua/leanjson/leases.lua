@@ -2,12 +2,11 @@
 -- Raw nodes denote one immutable backend; only synthetic overlays are walked.
 local ffi = require("ffi")
 local M = {}
+local nodes = require("leanjson.nodes")
 
 local function dependencies(node, found)
     if node.backend then found[node.backend] = true
-    elseif node.values then
-        for _, child in pairs(node.values) do dependencies(child, found) end
-    end
+    else nodes.dependencies(node, function(child) dependencies(child, found) end) end
 end
 
 local function release_entries(entries)
@@ -41,7 +40,7 @@ function M.acquire(node) return { entries = acquire_entries(node), active = {} }
 function M.managed(node)
     local found = {}
     dependencies(node, found)
-    for backend in pairs(found) do if backend.retain then return true end end
+    for backend in pairs(found) do if backend.retain and not backend.memory then return true end end
     return false
 end
 

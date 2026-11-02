@@ -263,6 +263,7 @@ _M.type           = _lazy.type
 _M.array_insert   = _lazy.array_insert
 _M.array_remove   = _lazy.array_remove
 _M.reader         = _lazy.reader
+_M.source_stats   = _lazy.source_stats
 _M.encode_number_precision = _lazy.encode_number_precision
 _M.encode_sparse_array = _lazy.encode_sparse_array
 _M.materialize    = _lazy.materialize

@@ -62,4 +62,23 @@ describe("leanjson native loader", function()
         assert.is_true(ok)
         assert.are.equal(valid_lib, lib)
     end)
+    it("rejects an otherwise complete library missing the additive sparse ABI", function()
+        local old_lib, old_ffi, old_cpath = package.loaded["leanjson.lib"], package.loaded.ffi, package.cpath
+        package.loaded["leanjson.lib"] = nil
+        package.loaded.ffi = {
+            cdef = function() end,
+            load = function()
+                return setmetatable({}, { __index = function(_, symbol)
+                    if symbol == "leanjson_source_v2_new" then error("missing sparse ABI") end
+                    return true
+                end })
+            end,
+        }
+        package.cpath = ""
+        local ok, err = pcall(require, "leanjson.lib")
+        package.loaded["leanjson.lib"], package.loaded.ffi, package.cpath = old_lib, old_ffi, old_cpath
+        assert.is_false(ok)
+        assert.matches("missing required symbol leanjson_source_v2_new", err, 1, true)
+    end)
+
 end)

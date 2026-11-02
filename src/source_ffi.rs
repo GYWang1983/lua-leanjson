@@ -14,6 +14,9 @@ use std::rc::Rc;
 use crate::error::{leanjson_err, leanjson_type};
 use crate::source::{Source, SourceError, SourceReader, ReadStep, DETAIL_NONE, DETAIL_IO, DETAIL_ABORTED, DETAIL_CLOSED, DETAIL_BAD_OPTIONS};
 
+mod sparse;
+pub use sparse::*;
+
 pub const LEANJSON_SOURCE_V1_API: u32 = 1;
 pub const LEANJSON_SOURCE_V1_READY: u32 = 0;
 pub const LEANJSON_SOURCE_V1_DONE: u32 = 1;
@@ -22,7 +25,7 @@ pub const LEANJSON_SOURCE_V1_NEED_READ: u32 = 3;
 pub const LEANJSON_SOURCE_V1_ABSENT: u32 = 4;
 pub const LEANJSON_SOURCE_V1_ERROR: u32 = 5;
 
-pub struct leanjson_source_v1 { inner: RefCell<Source> }
+pub struct leanjson_source_v1 { inner: RefCell<Source>, spill_dir: std::path::PathBuf }
 pub struct leanjson_source_v1_op { source: Rc<leanjson_source_v1>, reader: SourceReader }
 pub struct leanjson_source_v1_iter { source: Rc<leanjson_source_v1>, node: usize, ordinal: usize }
 
@@ -122,7 +125,7 @@ pub unsafe extern "C" fn leanjson_source_v1_new(opts: *const leanjson_source_v1_
         if opts.api_version != LEANJSON_SOURCE_V1_API || opts.mode != 0 {
             return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX));
         }
-        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new(opts.max_depth, opts.window_size as usize)) })) as *mut leanjson_source_v1)
+        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new(opts.max_depth, opts.window_size as usize)), spill_dir: std::env::temp_dir() })) as *mut leanjson_source_v1)
     }));
     match result {
         Ok(Ok(handle)) => { write_result(out, leanjson_source_v1_result::pending(0)); handle },

@@ -16,12 +16,14 @@ describe("mutation publication across source yields", function()
         local value
         if mode == "memory" then
             local backend, root = require("leanjson.source_memory").open(raw)
-            local children, scalar = backend.children, backend.scalar
+            local children, scalar, lookup, length = backend.children, backend.scalar, backend.lookup, backend.length
             function backend:children(handle)
                 local next_child = children(self, handle)
                 return function() checkpoint(); return next_child() end
             end
             function backend:scalar(handle) checkpoint(); return scalar(self, handle) end
+            function backend:lookup(handle, key, scope) checkpoint(); return lookup(self, handle, key, scope) end
+            function backend:length(handle, scope) checkpoint(); return length(self, handle, scope) end
             value = proxy.from_backend(backend, root)
         elseif mode == "file" then
             local filename = directory .. "/input-" .. (#originals + 1)

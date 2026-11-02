@@ -1,12 +1,15 @@
-//! Bounded, strictly validated JSON source metadata. Input storage belongs to the caller.
+//! Strict incremental validation with optional, capacity-bounded source indexes.
 
 use crate::error::{leanjson_err, leanjson_type};
 use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
 mod window;
+pub(crate) mod duplicates;
+pub(crate) mod sparse;
 pub use window::{ReadStep, SourceReader};
 use validate::{NumberState, StringState};
+use duplicates::KeyMap;
 
 pub const DETAIL_NONE: u32 = 0;
 pub const DETAIL_IO: u32 = 1;
@@ -15,111 +18,152 @@ pub const DETAIL_CLOSED: u32 = 3;
 pub const DETAIL_BAD_WINDOW: u32 = 4;
 pub const DETAIL_BAD_OFFSET: u32 = 5;
 pub const DETAIL_BAD_OPTIONS: u32 = 6;
+pub const SPAN_CLEAN: u32 = 1;
+pub const SPAN_DUPLICATES: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SourceError {
-    pub code: leanjson_err,
-    pub detail: u32,
-    pub offset: u64,
-}
-
+pub struct SourceError { pub code: leanjson_err, pub detail: u32, pub offset: u64 }
 impl SourceError {
-    pub(crate) fn json(code: leanjson_err, offset: u64) -> Self {
-        Self { code, detail: DETAIL_NONE, offset }
-    }
-
-    pub(crate) fn argument(detail: u32, offset: u64) -> Self {
-        Self { code: leanjson_err::LEANJSON_INVALID_ARG, detail, offset }
-    }
+    pub(crate) fn json(code: leanjson_err, offset: u64) -> Self { Self { code, detail: DETAIL_NONE, offset } }
+    pub(crate) fn argument(detail: u32, offset: u64) -> Self { Self { code: leanjson_err::LEANJSON_INVALID_ARG, detail, offset } }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Member {
-    pub key_start: u64,
-    pub key_end: u64,
-    pub value: usize,
-}
-
+pub struct Member { pub key_start: u64, pub key_end: u64, pub key_hash: u64, pub value: usize }
 #[derive(Debug)]
 pub struct Node {
-    pub kind: leanjson_type,
-    pub raw_start: u64,
-    pub raw_end: u64,
-    pub complete: bool,
-    pub members: Vec<Member>,
+    pub kind: leanjson_type, pub raw_start: u64, pub raw_end: u64, pub complete: bool,
+    pub members: Vec<Member>, pub child_count: u64, pub flags: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Span {
+    pub kind: leanjson_type, pub flags: u32, pub raw_start: u64, pub raw_end: u64, pub child_count: u64,
+}
+impl Span {
+    pub(crate) fn node(self) -> Node {
+        Node { kind: self.kind, raw_start: self.raw_start, raw_end: self.raw_end, complete: true,
+            members: Vec::new(), child_count: self.child_count, flags: self.flags }
+    }
+}
+#[derive(Debug)]
+pub(crate) struct SpanMember {
+    pub ordinal: u64, pub key_start: u64, pub key_end: u64, pub key: Vec<u8>, pub value: Span,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct IndexOptions { pub depth: u32, pub array_limit: u32, pub budget_bytes: usize }
+impl Default for IndexOptions {
+    fn default() -> Self { Self { depth: 3, array_limit: 3, budget_bytes: 1048576 } }
 }
 
 #[derive(Clone, Copy)]
-enum FrameState {
-    ArrayFirst, ArrayValue, ArrayAfter,
-    ObjectFirst, ObjectKey, ObjectColon, ObjectValue, ObjectAfter,
+enum FrameState { ArrayFirst, ArrayValue, ArrayAfter, ObjectFirst, ObjectKey, ObjectColon, ObjectValue, ObjectAfter }
+struct Value {
+    id: Option<usize>, kind: leanjson_type, start: u64,
+    key: (u64, u64), decoded_key: Vec<u8>, ordinal: u64,
 }
-
 struct Frame {
-    node: usize,
-    state: FrameState,
-    key: (u64, u64),
+    value: Value, state: FrameState, key: (u64, u64), key_hash: u64, decoded_key: Vec<u8>, count: u64,
+    duplicates: Option<KeyMap>, dirty: bool,
 }
-
 enum Token {
-    String { start: u64, node: Option<usize>, state: StringState },
-    Number { node: usize, state: NumberState },
-    Literal { node: usize, expected: &'static [u8], matched: usize },
+    String { start: u64, value: Option<Value>, state: StringState, key: Option<Vec<u8>>, key_hash: u64 },
+    Number { value: Value, state: NumberState },
+    Literal { value: Value, expected: &'static [u8], matched: usize },
 }
 
-/// A single-threaded parser retaining O(nodes + depth) metadata and no input bytes.
-///
-/// `feed` borrows bytes for the duration of that call only. A completed root is
-/// deliberately unavailable until `finish` confirms EOF. All parse failures and
-/// explicit aborts are sticky, including for existing node/operation users.
+/// Input bytes are never retained. Legacy sources retain the published v1 tree;
+/// sparse sources retain only optional indexes within `IndexOptions` plus one
+/// root span and the validation stack. Span identities do not refer to indexes.
 pub struct Source {
-    nodes: Vec<Node>,
-    frames: Vec<Frame>,
-    token: Option<Token>,
-    next_offset: u64,
-    finished: bool,
-    failure: Option<SourceError>,
-    max_depth: u32,
-    window_size: usize,
+    nodes: Vec<Node>, frames: Vec<Frame>, token: Option<Token>, next_offset: u64,
+    finished: bool, failure: Option<SourceError>, max_depth: u32, window_size: usize,
+    indexes: Option<IndexOptions>, index_bytes: usize, indexed_depth: u32,
+    events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
 }
-
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
         Self {
-            nodes: Vec::new(), frames: Vec::new(), token: None,
-            next_offset: 0, finished: false, failure: None,
+            nodes: Vec::new(), frames: Vec::new(), token: None, next_offset: 0,
+            finished: false, failure: None,
             max_depth: if max_depth == 0 { LEANJSON_DEFAULT_MAX_DEPTH } else { max_depth.min(LEANJSON_MAX_MAX_DEPTH) },
             window_size: if window_size == 0 { 65536 } else { window_size },
+            indexes: None, index_bytes: 0, indexed_depth: 0, events: false,
+            detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
         }
     }
-
+    pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
+        let mut source = Self::new(max_depth, window_size);
+        source.indexes = Some(indexes);
+        source
+    }
+    pub(crate) fn walker(start: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool) -> Self {
+        let mut source = Self::new_sparse(LEANJSON_MAX_MAX_DEPTH, window_size,
+            IndexOptions { depth: 0, array_limit: 0, budget_bytes: 0 });
+        source.next_offset = start;
+        source.events = true;
+        source.detect_duplicates = detect;
+        source.spill_dir = spill_dir;
+        source.workspace = workspace;
+        source
+    }
+    pub(crate) fn walker_resume(span: Span, offset: u64, ordinal: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool) -> Self {
+        let mut source = Self::walker(span.raw_start, window_size, detect, spill_dir, workspace);
+        if ordinal != 0 {
+            let opener = if span.kind == leanjson_type::LEANJSON_T_ARR { b'[' } else { b'{' };
+            source.start_value(opener, span.raw_start).unwrap();
+            let frame = source.frames.last_mut().unwrap();
+            frame.count = ordinal;
+            frame.state = if opener == b'[' { FrameState::ArrayAfter } else { FrameState::ObjectAfter };
+            source.next_offset = offset;
+        }
+        source
+    }
+    pub(crate) fn cached_count(&self, start: u64) -> Option<(usize, u64)> {
+        let index = self.nodes.binary_search_by_key(&start, |node| node.raw_start).ok()?;
+        let node = &self.nodes[index];
+        Some((node.members.len(), node.child_count))
+    }
+    pub(crate) fn cached_member(&self, start: u64, ordinal: usize) -> Option<(Member, Span)> {
+        let index = self.nodes.binary_search_by_key(&start, |node| node.raw_start).ok()?;
+        let member = *self.nodes[index].members.get(ordinal)?;
+        let value = self.nodes.get(member.value)?;
+        Some((member, Span { kind: value.kind, flags: value.flags, raw_start: value.raw_start, raw_end: value.raw_end, child_count: value.child_count }))
+    }
+    pub(crate) fn workspace(&self) -> duplicates::WorkspacePool { self.workspace.clone() }
     pub fn window_size(&self) -> usize { self.window_size }
     pub fn offset(&self) -> u64 { self.next_offset }
-
-    pub fn ready(&self) -> Result<bool, SourceError> {
-        match self.failure { Some(error) => Err(error), None => Ok(self.finished) }
+    pub fn index_bytes(&self) -> usize { self.index_bytes }
+    pub fn clear_indexes(&mut self) -> Result<(), SourceError> {
+        if !self.ready()? || self.indexes.is_none() { return Err(SourceError::argument(DETAIL_NONE, self.next_offset)); }
+        let mut root = self.nodes.remove(0);
+        root.members = Vec::new();
+        self.nodes = vec![root];
+        self.index_bytes = 0;
+        self.indexed_depth = 0;
+        Ok(())
     }
-
-    fn fail<T>(&mut self, error: SourceError) -> Result<T, SourceError> {
-        self.failure = Some(error);
-        Err(error)
-    }
+    pub fn indexed_nodes(&self) -> usize { self.nodes.len().saturating_sub(1) }
+    pub fn indexed_depth(&self) -> u32 { self.indexed_depth }
+    pub fn index_options(&self) -> Option<IndexOptions> { self.indexes }
+    pub fn ready(&self) -> Result<bool, SourceError> { match self.failure { Some(error) => Err(error), None => Ok(self.finished) } }
+    fn fail<T>(&mut self, error: SourceError) -> Result<T, SourceError> { self.failure = Some(error); Err(error) }
 
     pub fn feed(&mut self, base: u64, bytes: &[u8]) -> Result<(), SourceError> {
+        self.consume(base, bytes, false).map(|_| ())
+    }
+    pub(crate) fn feed_member(&mut self, base: u64, bytes: &[u8]) -> Result<(usize, Option<SpanMember>), SourceError> {
+        let count = self.consume(base, bytes, true)?;
+        Ok((count, self.member.take()))
+    }
+    fn consume(&mut self, base: u64, bytes: &[u8], stop: bool) -> Result<usize, SourceError> {
         self.ready()?;
-        if self.finished {
-            return Err(SourceError::argument(DETAIL_CLOSED, self.next_offset));
+        if self.finished { return Err(SourceError::argument(DETAIL_CLOSED, self.next_offset)); }
+        if base != self.next_offset || base.checked_add(bytes.len() as u64).is_none() {
+            return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, base));
         }
-        let end = match base.checked_add(bytes.len() as u64) {
-            Some(end) if base == self.next_offset => end,
-            _ => return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, base)),
-        };
         let mut i = 0;
         while i < bytes.len() {
             let offset = base + i as u64;
-            // Whitespace is legal in every grammar state outside a token. The
-            // tight loop also permits testing 64-bit positions with a reused
-            // bounded whitespace window rather than a multi-gigabyte buffer.
             if self.token.is_none() && is_whitespace(bytes[i]) {
                 i += 1;
                 while i < bytes.len() && is_whitespace(bytes[i]) { i += 1; }
@@ -131,24 +175,22 @@ impl Source {
             };
             match result {
                 Ok(true) => i += 1,
-                Ok(false) => {}, // Number ended before this structural byte.
+                Ok(false) => {},
                 Err(error) => { self.next_offset = offset; return self.fail(error); }
             }
+            if stop && self.member.is_some() { break; }
         }
-        self.next_offset = end;
-        Ok(())
+        self.next_offset = base + i as u64;
+        Ok(i)
     }
-
     pub fn finish(&mut self, total_len: u64) -> Result<(), SourceError> {
         self.ready()?;
-        if total_len != self.next_offset {
-            return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, total_len));
-        }
+        if total_len != self.next_offset { return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, total_len)); }
         if self.finished { return Ok(()); }
         let eof_error = match self.token.take() {
-            Some(Token::Number { node, state }) => match state.finish() {
-                Ok(()) => { self.complete(node, total_len); None },
-                Err(code) => Some(SourceError::json(code, self.nodes[node].raw_start)),
+            Some(Token::Number { value, state }) => match state.finish() {
+                Ok(()) => { self.complete(value, total_len, 0, SPAN_CLEAN); None },
+                Err(code) => Some(SourceError::json(code, value.start)),
             },
             Some(Token::String { start, state, .. }) => Some(match state.finish() {
                 Err(code) => SourceError::json(code, start),
@@ -162,74 +204,102 @@ impl Source {
             return self.fail(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len));
         }
         self.finished = true;
+        self.frames = Vec::new();
         Ok(())
     }
-
-    pub fn root(&self) -> Result<Option<usize>, SourceError> {
-        self.ready().map(|ready| if ready { Some(0) } else { None })
-    }
-
+    pub fn root(&self) -> Result<Option<usize>, SourceError> { self.ready().map(|ready| if ready { Some(0) } else { None }) }
     pub fn node(&self, id: usize) -> Result<Option<&Node>, SourceError> {
         if !self.ready()? { return Ok(None); }
         self.nodes.get(id).map(Some).ok_or_else(|| SourceError::argument(DETAIL_NONE, self.next_offset))
     }
-
     pub fn abort(&mut self, detail: u32) -> SourceError {
         *self.failure.get_or_insert(SourceError { code: leanjson_err::LEANJSON_OK, detail, offset: self.next_offset })
     }
-
-    fn complete(&mut self, id: usize, end: u64) {
-        self.nodes[id].raw_end = end;
-        self.nodes[id].complete = true;
-    }
-
-    fn allocate(&mut self, kind: leanjson_type, offset: u64) -> usize {
-        let id = self.nodes.len();
-        self.nodes.push(Node { kind, raw_start: offset, raw_end: offset, complete: false, members: Vec::new() });
-        if let Some(frame) = self.frames.last_mut() {
-            let (key_start, key_end) = frame.key;
-            self.nodes[frame.node].members.push(Member { key_start, key_end, value: id });
-            frame.key = (0, 0);
-            frame.state = match frame.state {
-                FrameState::ObjectValue => FrameState::ObjectAfter,
-                _ => FrameState::ArrayAfter,
-            };
+    fn complete(&mut self, value: Value, end: u64, count: u64, flags: u32) {
+        if let Some(id) = value.id {
+            self.nodes[id].raw_end = end;
+            self.nodes[id].complete = true;
+            self.nodes[id].child_count = count;
+            self.nodes[id].flags = flags;
         }
-        id
+        if let Some(parent) = self.frames.last_mut() { parent.dirty |= flags != SPAN_CLEAN; }
+        if self.events && self.frames.len() == 1 {
+            self.member = Some(SpanMember { ordinal: value.ordinal, key_start: value.key.0,
+                key_end: value.key.1, key: value.decoded_key,
+                value: Span { kind: value.kind, flags, raw_start: value.start, raw_end: end, child_count: count } });
+        }
     }
-
+    fn optional_index(&mut self) -> Option<usize> {
+        if self.frames.is_empty() { return None; }
+        let parent = self.frames.last().unwrap();
+        let parent_id = parent.value.id?;
+        if let Some(options) = self.indexes {
+            if self.frames.len() as u32 > options.depth || options.budget_bytes == 0
+                || (parent.value.kind == leanjson_type::LEANJSON_T_ARR && parent.count >= options.array_limit as u64) { return None; }
+            let node_growth = if self.nodes.len() == self.nodes.capacity() { self.nodes.capacity().max(1) } else { 0 };
+            let members = &self.nodes[parent_id].members;
+            let member_growth = if members.len() == members.capacity() { members.capacity().max(1) } else { 0 };
+            let cost = node_growth.checked_mul(std::mem::size_of::<Node>())?
+                .checked_add(member_growth.checked_mul(std::mem::size_of::<Member>())?)?;
+            if cost > options.budget_bytes.saturating_sub(self.index_bytes) { return None; }
+            if node_growth > 0 { self.nodes.reserve_exact(node_growth); }
+            if member_growth > 0 { self.nodes[parent_id].members.reserve_exact(member_growth); }
+            self.index_bytes += cost;
+        }
+        self.indexed_depth = self.indexed_depth.max(self.frames.len() as u32);
+        Some(parent_id)
+    }
+    fn allocate(&mut self, kind: leanjson_type, offset: u64) -> Value {
+        let parent_id = self.optional_index();
+        let id = if self.frames.is_empty() || parent_id.is_some() {
+            let id = self.nodes.len();
+            if id == 0 && self.indexes.is_some() { self.nodes.reserve_exact(1); }
+            self.nodes.push(Node { kind, raw_start: offset, raw_end: offset, complete: false,
+                members: Vec::new(), child_count: 0, flags: 0 });
+            Some(id)
+        } else { None };
+        let mut value = Value { id, kind, start: offset, key: (0, 0), decoded_key: Vec::new(), ordinal: 0 };
+        let direct = self.events && self.frames.len() == 1;
+        if let Some(frame) = self.frames.last_mut() {
+            value.key = frame.key;
+            value.ordinal = frame.count;
+            frame.count += 1;
+            if direct { value.decoded_key = std::mem::take(&mut frame.decoded_key); }
+            else { frame.decoded_key.clear(); }
+            if let (Some(parent_id), Some(id)) = (parent_id, id) {
+                self.nodes[parent_id].members.push(Member { key_start: frame.key.0, key_end: frame.key.1, key_hash: frame.key_hash, value: id });
+            }
+            frame.key = (0, 0);
+            frame.state = match frame.state { FrameState::ObjectValue => FrameState::ObjectAfter, _ => FrameState::ArrayAfter };
+        }
+        value
+    }
     fn start_value(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
         let kind = match byte {
-            b'{' => leanjson_type::LEANJSON_T_OBJ,
-            b'[' => leanjson_type::LEANJSON_T_ARR,
-            b'"' => leanjson_type::LEANJSON_T_STR,
-            b't' | b'f' => leanjson_type::LEANJSON_T_BOOL,
-            b'n' => leanjson_type::LEANJSON_T_NULL,
-            b'-' | b'0'..=b'9' => leanjson_type::LEANJSON_T_NUM,
+            b'{' => leanjson_type::LEANJSON_T_OBJ, b'[' => leanjson_type::LEANJSON_T_ARR,
+            b'"' => leanjson_type::LEANJSON_T_STR, b't' | b'f' => leanjson_type::LEANJSON_T_BOOL,
+            b'n' => leanjson_type::LEANJSON_T_NULL, b'-' | b'0'..=b'9' => leanjson_type::LEANJSON_T_NUM,
             _ => return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
         };
         if matches!(byte, b'{' | b'[') && self.frames.len() as u32 >= self.max_depth {
             return Err(SourceError::json(leanjson_err::LEANJSON_NESTING_TOO_DEEP, offset));
         }
-        let node = self.allocate(kind, offset);
+        let value = self.allocate(kind, offset);
         match byte {
-            b'{' | b'[' => self.frames.push(Frame {
-                node, key: (0, 0),
-                state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst },
-            }),
-            b'"' => self.token = Some(Token::String { start: offset, node: Some(node), state: StringState::new() }),
-            b't' | b'f' | b'n' => self.token = Some(Token::Literal {
-                node, expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1,
-            }),
-            _ => {
-                let mut state = NumberState::new();
-                state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
-                self.token = Some(Token::Number { node, state });
+            b'{' | b'[' => {
+                let duplicates = (self.detect_duplicates && !self.frames.is_empty() && byte == b'{')
+                    .then(|| KeyMap::new(self.spill_dir.clone(), self.workspace.clone()));
+                self.frames.push(Frame { value, key: (0, 0), key_hash: 0, decoded_key: Vec::new(), count: 0,
+                    state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst }, duplicates, dirty: false });
             },
+            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::new(), key: None, key_hash: 0xcbf29ce484222325 }),
+            b't' | b'f' | b'n' => self.token = Some(Token::Literal { value,
+                expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1 }),
+            _ => { let mut state = NumberState::new(); state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
+                self.token = Some(Token::Number { value, state }); },
         }
         Ok(())
     }
-
     fn structural_byte(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
         use FrameState::*;
         match self.frames.last().map(|f| f.state) {
@@ -239,71 +309,67 @@ impl Source {
             Some(ArrayFirst | ArrayValue | ObjectValue) => self.start_value(byte, offset),
             Some(ObjectFirst) if byte == b'}' => self.close_container(offset),
             Some(ObjectFirst | ObjectKey) if byte == b'"' => {
-                self.token = Some(Token::String { start: offset, node: None, state: StringState::new() });
-                Ok(())
+                let capture = self.events && self.frames.len() == 1 || self.frames.last().unwrap().duplicates.is_some();
+                self.token = Some(Token::String { start: offset, value: None, state: StringState::new(), key: capture.then(Vec::new), key_hash: 0xcbf29ce484222325 }); Ok(())
             },
-            Some(ObjectColon) if byte == b':' => {
-                self.frames.last_mut().unwrap().state = ObjectValue;
-                Ok(())
-            },
-            Some(ArrayAfter) if byte == b',' => {
-                self.frames.last_mut().unwrap().state = ArrayValue;
-                Ok(())
-            },
-            Some(ObjectAfter) if byte == b',' => {
-                self.frames.last_mut().unwrap().state = ObjectKey;
-                Ok(())
-            },
+            Some(ObjectColon) if byte == b':' => { self.frames.last_mut().unwrap().state = ObjectValue; Ok(()) },
+            Some(ArrayAfter) if byte == b',' => { self.frames.last_mut().unwrap().state = ArrayValue; Ok(()) },
+            Some(ObjectAfter) if byte == b',' => { self.frames.last_mut().unwrap().state = ObjectKey; Ok(()) },
             Some(ArrayAfter) if byte == b']' => self.close_container(offset),
             Some(ObjectAfter) if byte == b'}' => self.close_container(offset),
             _ => Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
         }
     }
-
     fn close_container(&mut self, offset: u64) -> Result<(), SourceError> {
         let frame = self.frames.pop().unwrap();
-        self.complete(frame.node, offset + 1);
+        let dirty = frame.dirty || frame.duplicates.as_ref().is_some_and(|d| d.had_duplicates());
+        let flags = if self.detect_duplicates { if dirty { SPAN_DUPLICATES } else { SPAN_CLEAN } } else { 0 };
+        self.complete(frame.value, offset + 1, frame.count, flags);
         Ok(())
     }
-
     fn token_byte(&mut self, token: Token, byte: u8, offset: u64) -> Result<bool, SourceError> {
         match token {
-            Token::String { start, node, mut state } => {
+            Token::String { start, value, mut state, mut key, mut key_hash } => {
                 if byte == b'"' && state.at_boundary() {
-                    match node {
-                        Some(node) => self.complete(node, offset + 1),
+                    match value {
+                        Some(value) => self.complete(value, offset + 1, 0, SPAN_CLEAN),
                         None => {
                             let frame = self.frames.last_mut().unwrap();
                             frame.key = (start, offset + 1);
+                            frame.key_hash = key_hash;
+                            if let Some(key) = key {
+                                if let Some(duplicates) = frame.duplicates.as_mut() { duplicates.insert_key(&key)?; }
+                                frame.decoded_key = key;
+                            }
                             frame.state = FrameState::ObjectColon;
                         },
                     }
                 } else {
-                    state.feed(byte).map_err(|code| SourceError::json(code, start))?;
-                    self.token = Some(Token::String { start, node, state });
+                    let decoded = state.feed(byte).map_err(|code| SourceError::json(code, start))?;
+                    if value.is_none() {
+                        for byte in &decoded.bytes[..decoded.len] { key_hash ^= *byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
+                    }
+                    if let Some(key) = key.as_mut() { key.extend_from_slice(&decoded.bytes[..decoded.len]); }
+                    self.token = Some(Token::String { start, value, state, key, key_hash });
                 }
             },
-            Token::Number { node, mut state } => {
+            Token::Number { value, mut state } => {
                 if is_delimiter(byte) {
-                    state.finish().map_err(|code| SourceError::json(code, self.nodes[node].raw_start))?;
-                    self.complete(node, offset);
-                    return Ok(false);
+                    state.finish().map_err(|code| SourceError::json(code, value.start))?;
+                    self.complete(value, offset, 0, SPAN_CLEAN); return Ok(false);
                 }
-                state.feed(byte).map_err(|code| SourceError::json(code, self.nodes[node].raw_start))?;
-                self.token = Some(Token::Number { node, state });
+                state.feed(byte).map_err(|code| SourceError::json(code, value.start))?;
+                self.token = Some(Token::Number { value, state });
             },
-            Token::Literal { node, expected, mut matched } => {
-                if byte != expected[matched] {
-                    return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset));
-                }
+            Token::Literal { value, expected, mut matched } => {
+                if byte != expected[matched] { return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)); }
                 matched += 1;
-                if matched == expected.len() { self.complete(node, offset + 1); }
-                else { self.token = Some(Token::Literal { node, expected, matched }); }
+                if matched == expected.len() { self.complete(value, offset + 1, 0, SPAN_CLEAN); }
+                else { self.token = Some(Token::Literal { value, expected, matched }); }
             },
         }
         Ok(true)
     }
 }
-
 fn is_whitespace(byte: u8) -> bool { matches!(byte, b' ' | b'\t' | b'\r' | b'\n') }
 fn is_delimiter(byte: u8) -> bool { is_whitespace(byte) || matches!(byte, b',' | b':' | b'[' | b']' | b'{' | b'}') }

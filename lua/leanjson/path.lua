@@ -35,8 +35,7 @@ end
 function M.from_node(node, segments, scope)
     for _, segment in ipairs(segments) do
         if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
-        local _, values = proxy.members(node, scope)
-        node = values[segment.key]
+        node = proxy.lookup(node, segment.key, scope)
         if node == nil then return nil end
     end
     if node.kind == "array" or node.kind == "object" then return proxy.from_node(node) end

@@ -159,16 +159,13 @@ describe("source proxy overlays", function()
 
     it("keeps source node identities stable when a backend yields during indexing", function()
         local backend, root = require("leanjson.source_memory").open('{"a":{"x":1}}')
-        local original, pause = backend.children, true
-        function backend:children(handle)
-            local iter = original(self, handle)
-            return function()
-                if handle == root and pause then
-                    pause = false
-                    coroutine.yield("index pending")
-                end
-                return iter()
+        local original, pause = backend.lookup, true
+        function backend:lookup(handle, key, scope)
+            if handle.raw_start == root.raw_start and pause then
+                pause = false
+                coroutine.yield("index pending")
             end
+            return original(self, handle, key, scope)
         end
         local body = require("leanjson.proxy").from_backend(backend, root)
         local co = coroutine.create(function() return body.a end)
@@ -191,16 +188,13 @@ describe("source proxy overlays", function()
         for _, case in ipairs(cases) do
             for _, action in ipairs({ "replace", "delete" }) do
                 local backend, root = require("leanjson.source_memory").open(case.source)
-                local original, pause = backend.children, true
-                function backend:children(handle)
-                    local iter = original(self, handle)
-                    return function()
-                        if handle == root and pause then
-                            pause = false
-                            coroutine.yield("read pending")
-                        end
-                        return iter()
+                local original, pause = backend.lookup, true
+                function backend:lookup(handle, key, scope)
+                    if handle.raw_start == root.raw_start and pause then
+                        pause = false
+                        coroutine.yield("read pending")
                     end
+                    return original(self, handle, key, scope)
                 end
                 local body = require("leanjson.proxy").from_backend(backend, root)
                 local co = coroutine.create(function() return body[case.key] end)

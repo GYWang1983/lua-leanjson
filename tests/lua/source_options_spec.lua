@@ -58,9 +58,42 @@ describe("consistent source decode policy", function()
             end
         end)
 
+        it("propagates metadata bounds and defaults to " .. mode, function()
+            local raw = '{"a":{"b":{"c":{"d":7}}},"items":[0,1,2,3,4]}'
+            local body = decode(mode, raw, { temp_dir = directory })
+            local stats = leanjson.source_stats(body)
+            assert.are.equal(3, stats.index_depth)
+            assert.are.equal(3, stats.index_array_limit)
+            assert.are.equal(1048576, stats.budget_bytes)
+            assert.are.equal(3, stats.indexed_depth)
+            leanjson.close(body)
+            for _, setting in ipairs({ 0, 1, 3 }) do
+                for _, budget in ipairs({ 0, 64, 192 }) do
+                    body = decode(mode, raw, { temp_dir = directory, chunk_size = 1,
+                        index_depth = setting, index_array_limit = setting, index_budget_bytes = budget })
+                    stats = leanjson.source_stats(body)
+                    assert.are.equal(setting, stats.index_depth)
+                    assert.are.equal(setting, stats.index_array_limit)
+                    assert.are.equal(budget, stats.budget_bytes)
+                    assert.is_true(stats.index_bytes <= budget)
+                    assert.is_true(stats.indexed_depth <= setting)
+                    assert.are.equal(7, body.a.b.c.d)
+                    assert.are.equal(5, leanjson.len(body.items))
+                    assert.are.equal(4, body.items[5])
+                    assert.are.equal(stats.index_bytes, leanjson.source_stats(body).index_bytes)
+                    leanjson.close(body)
+                end
+            end
+        end)
+
         it("rejects invalid depth and source options consistently in " .. mode, function()
             for _, invalid in ipairs({ -1, 1.5, math.huge, -math.huge, 0 / 0, "1", true, {}, 4294967296 }) do
                 assert.is_false(verdict(mode, '{}', { max_depth = invalid, temp_dir = directory }))
+            end
+            for _, name in ipairs({ "index_depth", "index_array_limit", "index_budget_bytes" }) do
+                for _, invalid in ipairs({ -1, 1.5, math.huge, -math.huge, 0 / 0, "1", false, {}, 4294967296 }) do
+                    assert.is_false(verdict(mode, '{}', { [name] = invalid, temp_dir = directory }))
+                end
             end
             for _, opts in ipairs({ false, 1, "opts", { lazy = true }, { lazy = "yes" },
                 { chunk_size = false }, { chunk_size = math.huge }, { on_chunk = false }, { temp_dir = false } }) do

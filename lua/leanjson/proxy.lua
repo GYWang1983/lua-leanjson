@@ -3,6 +3,7 @@
 local M = {}
 local ffi = require("ffi")
 local leases = require("leanjson.leases")
+local nodes = require("leanjson.nodes")
 local META = setmetatable({}, { __mode = "k" })
 local GC_TOKENS = setmetatable({}, { __mode = "k" })
 local Object, Array = {}, {}
@@ -24,25 +25,8 @@ end
 
 function M.configure(options) config = options end
 
-local function raw_node(backend, handle)
-    return { backend = backend, handle = handle, kind = backend:type(handle) }
-end
-
-function M.members(node, scope)
-    if node.values then return node.keys, node.values, node.entries end
-    local keys, values, entries = {}, {}, {}
-    for key, handle in node.backend:children(node.handle, scope) do
-        local child = raw_node(node.backend, handle)
-        if values[key] == nil then keys[#keys + 1] = key end
-        values[key] = child
-        entries[#entries + 1] = { key, child }
-    end
-    -- Backends may yield while loading structural metadata. Another coroutine
-    -- can publish the same index first; retain its stable child-node identities.
-    if node.values then return node.keys, node.values, node.entries end
-    node.keys, node.values, node.entries = keys, values, entries
-    return keys, values, entries
-end
+local raw_node = nodes.raw
+M.members, M.lookup, M.iter = nodes.members, nodes.lookup, nodes.iter
 
 function M.scalar(node, scope)
     if node.kind == "null" then return config.null end
@@ -60,25 +44,10 @@ function M.span(node)
     end
 end
 
-local function copy_map(original)
-    local out = {}
-    for key, value in pairs(original) do out[key] = value end
-    return out
-end
-
-local function changed(node, key, value, scope)
-    local keys, values = M.members(node, scope)
-    local new_keys, new_values = {}, copy_map(values)
-    for _, k in ipairs(keys) do
-        if k ~= key or value ~= nil then new_keys[#new_keys + 1] = k end
-    end
-    if values[key] == nil and value ~= nil then new_keys[#new_keys + 1] = key end
-    new_values[key] = value
-    return { kind = node.kind, keys = new_keys, values = new_values }
-end
+local changed = nodes.changed
 
 local function new_cell(node, parent, key, lexical)
-    return { node = node, parent = parent, key = key, children = {}, version = 0, lexical = lexical }
+    return { node = node, parent = parent, key = key, children = setmetatable({}, { __mode = "v" }), version = 0, lexical = lexical }
 end
 
 local function wrap(cell, prepared)
@@ -96,23 +65,12 @@ local function wrap(cell, prepared)
     return value
 end
 
-local function child_cell(node, parent, key, lexical, scope)
+local function child_cell(node, parent, key, lexical, scope, expected)
     if parent and not lexical then
-        -- A metadata load can yield while the mutable parent cell is replaced.
-        -- Only attach/cache the child if it still belongs to the current node;
-        -- otherwise the in-flight read returns its detached old snapshot.
-        while true do
-            leases.check(scope)
-            if parent.closed then return new_cell(node) end
-            local current, version = parent.node, parent.version
-            local _, values = M.members(current, scope)
-            if parent.node == current and parent.version == version then
-                if values[key] ~= node then return new_cell(node) end
-                break
-            end
-        end
+        leases.check(scope)
+        if parent.closed or parent.node ~= expected then return new_cell(node) end
         local cached = parent.children[key]
-        if cached and cached.node == node and not cached.closed then return cached end
+        if cached and nodes.same(cached.node, node) and not cached.closed then return cached end
         if cached then cached.parent = nil end
         local cell = new_cell(node, parent, key)
         parent.children[key] = cell
@@ -121,18 +79,12 @@ local function child_cell(node, parent, key, lexical, scope)
     return new_cell(node, parent, key, lexical)
 end
 
-local function expose(node, parent, key, lexical, scope)
+local function expose(node, parent, key, lexical, scope, expected)
     if node == nil then return nil end
     if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, scope) end
-    return wrap(child_cell(node, parent, key, lexical, scope))
+    return wrap(child_cell(node, parent, key, lexical, scope, expected))
 end
-
-local function array_length(node, scope)
-    local _, values = M.members(node, scope)
-    local n = 0
-    while values[n + 1] ~= nil do n = n + 1 end
-    return n
-end
+local array_length = nodes.length
 
 local snapshot
 snapshot = function(value, active, depth)
@@ -184,15 +136,16 @@ function M.get_path(value, segments)
         local cell, node = owner.cell, owner.cell.node
         for i, segment in ipairs(segments) do
             if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
-            local _, values = M.members(node, owner.scope)
+            local parent_node = node
+            node = M.lookup(node, segment.key, owner.scope)
             leases.check(owner.scope)
-            node = values[segment.key]
             if node == nil then return nil end
-            if i == #segments then return expose(node, cell, segment.key, false, owner.scope) end
+            if i == #segments then return expose(node, cell, segment.key, false, owner.scope, parent_node) end
             if node.kind ~= "object" and node.kind ~= "array" then error("leanjson.get: type mismatch", 0) end
             -- Intermediate cells are canonical logical links, not public
             -- holders. Every yielded operation still uses the initiating scope.
-            cell = child_cell(node, cell, segment.key, false, owner.scope)
+            cell = child_cell(node, cell, segment.key, false, owner.scope, parent_node)
+            node = cell.node
         end
     end)
 end
@@ -239,9 +192,10 @@ local function read(proxy, key)
         elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) then
             return nil
         end
-        local _, values = M.members(cell.node, holder.scope)
+        local original = cell.node
+        local child = M.lookup(original, key, holder.scope)
         leases.check(holder.scope)
-        return expose(values[key], cell, key, false, holder.scope)
+        return expose(child, cell, key, false, holder.scope, original)
     end)
 end
 
@@ -275,12 +229,12 @@ local function mutate(holder, prepare)
             local updates = { { entry = chain[1], node = node } }
             for i = 2, #chain do
                 local child, parent = chain[i - 1], chain[i]
-                local _, values = M.members(parent.node, scope)
-                if values[child.key] == child.node then
+                local current = M.lookup(parent.node, child.key, scope)
+                if nodes.same(current, child.node) then
                     node = changed(parent.node, child.key, node, scope)
                 elseif child.cell.lexical then
                     -- Only the final duplicate occurrence is a logical member.
-                    node = changed(parent.node, child.key, values[child.key], scope)
+                    node = changed(parent.node, child.key, current, scope)
                 else break end
                 updates[#updates + 1] = { entry = parent, node = node }
             end
@@ -353,59 +307,37 @@ function M.len(value)
     local cell = holder.cell
     return leases.guard(holder.scope, cell.node, function()
         if cell.node.kind == "array" then return array_length(cell.node, holder.scope) end
-        local keys = M.members(cell.node, holder.scope)
-        return #keys
+        return nodes.length(cell.node, holder.scope)
     end)
 end
 Object.__len, Array.__len = M.len, M.len
 
-function M.ipairs(value)
-    local holder = META[value]
-    if not holder then return ipairs(value) end
-    local cell = holder.cell
+local function iterate(value, array)
+    local holder, cell = META[value], META[value].cell
     leases.check(holder.scope)
-    local index, version = 0, cell.version
-    return function()
-        leases.check(holder.scope)
-        if cell.version ~= version then error("leanjson: invalid argument", 0) end
-        index = index + 1
-        local child = read(value, index)
-        if child ~= nil then return index, child end
-    end, nil, 0
-end
-
-function M.pairs(value)
-    local holder = META[value]
-    if not holder then return pairs(value) end
-    local cell = holder.cell
-    leases.check(holder.scope)
-    if cell.node.kind == "array" then return M.ipairs(value) end
-    local pin = leases.pin(holder.scope, cell.node)
+    local original, version = cell.node, cell.version
+    local pin = leases.pin(holder.scope, original)
     local fallback = leases.fallback(holder.scope, pin)
-    local keys, values, entries = M.members(cell.node, holder.scope)
-    local lexical_entries = cell.node.backend and entries
-    local index = 0
+    local next_member = M.iter(original, holder.scope, false)
     return function()
-        -- The iterator is itself a live use of the public source proxy.
         leases.check(META[value].scope)
+        if array and cell.version ~= version then error("leanjson: invalid argument", 0) end
         if not fallback then return nil end
-        index = index + 1
-        local key, node
-        if lexical_entries then
-            local entry = lexical_entries[index]
-            if entry then key, node = entry[1], entry[2] end
-        else
-            key = keys[index]
-            if key ~= nil then node = values[key] end
-        end
+        local key, node = next_member()
         if key ~= nil then
-            local _, current = M.members(cell.node, holder.scope)
-            local lexical = current[key] ~= node
-            return key, expose(node, cell, key, lexical, holder.scope)
+            return key, expose(node, cell, key, not array, holder.scope, original)
         end
         leases.finish(holder.scope, pin)
         fallback = nil
-    end, nil, nil
+    end, nil, array and 0 or nil
+end
+function M.ipairs(value)
+    if not META[value] then return ipairs(value) end
+    return iterate(value, true)
+end
+function M.pairs(value)
+    if not META[value] then return pairs(value) end
+    return iterate(value, META[value].cell.node.kind == "array")
 end
 Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs
 
@@ -441,17 +373,13 @@ function M.array_insert(value, index, child)
         check_index(index, n, true)
         local inserted = M.snapshot(child)
         dependencies(inserted)
-        local _, old = M.members(original, scope)
-        local values, keys = copy_map(old), {}
-        for i = n, index, -1 do values[i + 1] = values[i] end
-        values[index] = inserted
-        for i = 1, n + 1 do keys[i] = i end
-        return { kind = "array", keys = keys, values = values }, function()
-            for i = n, index, -1 do
-                cell.children[i + 1] = cell.children[i]
-                if cell.children[i + 1] then cell.children[i + 1].key = i + 1 end
+        return nodes.array_edit(original, index, 0, inserted, scope), function()
+            local moved = {}
+            for key, cached in pairs(cell.children) do
+                local target = key >= index and key + 1 or key
+                cached.key, moved[target] = target, cached
             end
-            cell.children[index] = nil
+            cell.children = setmetatable(moved, { __mode = "v" })
         end
     end)
 end
@@ -464,24 +392,23 @@ function M.array_remove(value, index)
         if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, false)
-        local _, old = M.members(original, scope)
-        local removed_node, removed, removed_cell = old[index]
+        local removed_node = M.lookup(original, index, scope)
+        local removed, removed_cell
         local container = removed_node.kind == "array" or removed_node.kind == "object"
         local prepared
         if container then prepared = dependencies(removed_node)
         else removed = M.scalar(removed_node, scope) end
-        local values, keys = copy_map(old), {}
-        for i = index, n - 1 do values[i] = values[i + 1] end
-        values[n] = nil
-        for i = 1, n - 1 do keys[i] = i end
-        return { kind = "array", keys = keys, values = values }, function()
+        return nodes.array_edit(original, index, 1, nil, scope), function()
             removed_cell = cell.children[index]
             if removed_cell then removed_cell.parent = nil end
-            for i = index, n - 1 do
-                cell.children[i] = cell.children[i + 1]
-                if cell.children[i] then cell.children[i].key = i end
+            local moved = {}
+            for key, cached in pairs(cell.children) do
+                if key ~= index then
+                    local target = key > index and key - 1 or key
+                    cached.key, moved[target] = target, cached
+                end
             end
-            cell.children[n] = nil
+            cell.children = setmetatable(moved, { __mode = "v" })
         end, function()
             if container then return wrap(removed_cell or new_cell(removed_node), prepared) end
             return removed
@@ -489,5 +416,11 @@ function M.array_remove(value, index)
     end)
 end
 
+function M.stats(value)
+    local node = M.node(value)
+    while node and node.base do node = node.base end
+    if not node or not node.backend or not node.backend.stats then error("leanjson: value has no source diagnostics", 0) end
+    return node.backend:stats()
+end
 M.Object, M.Array = Object, Array
 return M

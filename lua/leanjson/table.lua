@@ -29,6 +29,7 @@ proxy.configure({ null = _M.null, classify = classify_table })
 
 _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
 _M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
+_M.source_stats = proxy.stats
 _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
 function _M.decode(raw, opts)
@@ -53,21 +54,17 @@ local function read_all(backend, first, last, scope)
 end
 
 local materialize_node
-materialize_node = function(node, keep_origin, scope)
+materialize_node = function(node, keep_origin, scope, backends)
+    if node.backend then backends[node.backend] = true end
     if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, scope) end
-    local keys, values, entries = proxy.members(node, scope)
-    local out, records = {}, {}
+    local out, records, keys = {}, {}, {}
     local complete = true
     keep_origin = keep_origin and node.backend ~= nil
-    local n = #keys
-    if node.kind == "array" then
-        n = 0
-        while values[n + 1] ~= nil do n = n + 1 end
-    end
-    for i = 1, n do
-        local key = node.kind == "array" and i or keys[i]
-        local child = values[key]
-        local value = materialize_node(child, keep_origin, scope)
+    local n = 0
+    for key, child in proxy.iter(node, scope, true) do
+        n = n + 1
+        if keep_origin then keys[n] = key end
+        local value = materialize_node(child, keep_origin, scope, backends)
         out[key] = value
         if keep_origin then
             local backend, first, last = proxy.span(child)
@@ -90,7 +87,8 @@ materialize_node = function(node, keep_origin, scope)
         local backend, first, last = proxy.span(node)
         TABLE_ORIGIN[out] = { kind = node.kind, complete = complete, backend = backend,
             bs = first, be = last, keys = keys, len = n, records = records,
-            had_duplicates = entries and #entries ~= #keys or false }
+            had_duplicates = node.kind == "object" and node.backend.lexical_length
+                and node.backend:lexical_length(node.handle) ~= n or false }
     end
     return out
 end
@@ -105,7 +103,11 @@ function _M.materialize(value, options)
             error("leanjson.materialize: keep_origin is unsupported for file and incremental sources", 0)
         end
         return leases.guard(proxy.scope(value), node, function()
-            return materialize_node(node, keep == true, proxy.scope(value))
+            local backends = {}
+            local plain = materialize_node(node, keep == true, proxy.scope(value), backends)
+            -- Explicit full values no longer need duplicate source indexes.
+            for backend in pairs(backends) do if backend.clear_indexes then backend:clear_indexes() end end
+            return plain
         end)
     end
     return value

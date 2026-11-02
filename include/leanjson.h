@@ -268,6 +268,30 @@ void leanjson_source_v2_iter_release(leanjson_source_v2_iter *);
 /* Scalar operations use unchanged v1 op_step/provide/release functions. */
 int leanjson_source_v2_node_scalar_begin(leanjson_source_v2_node, leanjson_source_v1_op **, leanjson_source_v1_result *);
 
+/* Additive scan-time loading interface. Selectors are immutable shared-prefix
+ * tries compiled from concatenated little-endian u32 lengths + UTF-8 JSONPath
+ * strings. Configure before any feed. eager=1 selects the complete source.
+ * Drain events after each bounded feed and finish: BEGIN=1, decoded DATA=2,
+ * END=3; DONE means the queue is currently empty. DATA is decoded UTF-8 for
+ * strings and the original token for other scalars. BEGIN selected=0 is route
+ * metadata, selected=1 is a complete selected value/subtree. Byte pointers are
+ * borrowed until the next feed/finish/next-event/release; copy immediately.
+ * Construction events must not be published before successful final validation.
+ * A configured source retains its selector independently of selector_release. */
+typedef struct leanjson_source_v2_selector leanjson_source_v2_selector;
+typedef struct {
+    uint32_t event, selected, kind, flags;
+    uint64_t raw_start, raw_end, child_count, ordinal;
+    const uint8_t *key;
+    size_t key_len;
+    const uint8_t *bytes;
+    size_t bytes_len;
+} leanjson_source_v2_loading_event;
+leanjson_source_v2_selector *leanjson_source_v2_selector_new(const uint8_t *, size_t, leanjson_source_v1_result *);
+void leanjson_source_v2_selector_release(leanjson_source_v2_selector *);
+int leanjson_source_v2_set_loading(const leanjson_source_v1 *, const leanjson_source_v2_selector *, uint32_t, leanjson_source_v1_result *);
+int leanjson_source_v2_next_loading_event(const leanjson_source_v1 *, leanjson_source_v2_loading_event *, leanjson_source_v1_result *);
+
 #ifdef __cplusplus
 }
 #endif

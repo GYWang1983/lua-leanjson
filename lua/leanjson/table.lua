@@ -26,6 +26,9 @@ local function classify_table(value)
 end
 
 proxy.configure({ null = _M.null, classify = classify_table })
+local loading = require("leanjson.loading")
+loading.configure({ null = _M.null, empty_array_mt = _M.empty_array_mt,
+    hint = function(value, kind) TABLE_TYPE_HINT[value] = kind end })
 
 _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
 _M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
@@ -34,6 +37,13 @@ _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
 function _M.decode(raw, opts)
     local backend, root = require("leanjson.source_memory").open(raw, opts)
+    if not backend.opts.lazyload then
+        local value = backend.loading:take()
+        local source = ffi.gc(backend.state.source, nil)
+        require("leanjson.lib").leanjson_source_v1_release(source)
+        backend.state.source = nil
+        return value
+    end
     return proxy.from_backend(backend, root)
 end
 

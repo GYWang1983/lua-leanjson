@@ -55,6 +55,9 @@ function M.stats(self)
     for _, name in ipairs({ "spill_file_bytes", "spill_live_regions", "spill_free_regions" }) do
         out[name] = M.exact(workspace[0][name])
     end
+    for _, name in ipairs({ "preloaded_nodes", "preloaded_payload_bytes", "preload_path_nodes", "preloaded_key_bytes" }) do
+        out[name] = self.preload_stats and self.preload_stats[name] or 0
+    end
     return out
 end
 function M.clear_indexes(self)

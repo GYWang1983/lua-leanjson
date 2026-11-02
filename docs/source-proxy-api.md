@@ -2,6 +2,48 @@
 
 `leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types; proxy metatables are not array markers. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility. Direct `next`, `rawget`, `rawset`, and metatable replacement bypass the proxy API.
 
+`lazyload` defaults to `true`. Set `lazyload=false` to build the complete value
+as ordinary Lua tables/scalars during validation, without proxy descendants or
+hidden source ownership. Native `pairs`, `ipairs`, `next`, `rawget` and ordinary
+table edits then work directly. Null is `leanjson.null`, numbers are Lua numbers,
+decoded duplicate keys use the final whole value, and empty arrays retain their
+identity under LeanJSON encoding. This mode works without the optional `cjson`
+module. The separate `lazy` option controls validation and remains unsupported
+for these strict source APIs.
+
+```lua
+local plain = leanjson.decode(raw, { lazyload = false })
+local body = leanjson.decode(raw, {
+    preload_paths = { "$.model", "$.stream", "$.messages[*].role" },
+    index_depth = 0,
+    index_array_limit = 0,
+    index_budget_bytes = 0,
+})
+```
+
+`preload_paths` is an optional dense array of JSONPath strings. `$` selects the
+whole value; `.name` and `["quoted.key"]` / `['quoted.key']` select members;
+`[0]` selects the first array element. Dot names accept letters, digits, `_`, `-`
+and non-ASCII UTF-8 names. Quoted names accept JSON escapes and Unicode surrogate
+pairs; single-quoted names also accept `\'`. `.*` and `[*]` match immediate object
+members or array elements. Recursive descent, filters, slices, unions, negative
+indexes and malformed expressions raise before file/spool creation. A missing
+path or incompatible input type has no match. Empty, duplicate and overlapping
+path arrays are harmless. The compiled selection is immutable even if the
+caller's path array changes. `lazyload=false` loads everything while still
+validating any supplied paths.
+
+Selection shares path prefixes during the strict native scan; unselected data
+is fully validated without building its Lua values or an unrestricted metadata
+tree. Selecting an object/array loads its complete subtree. Required path spans
+and selected decoded values are independent of all three automatic index bounds,
+including zero. Repeated selected lookups and selected-subtree iteration reuse
+immutable decoded nodes without source reads or scalar decoding. Unselected
+fields remain readable lazily, and encoding retains the complete JSON.
+Preloading is source data rather than an edit: untouched spans preserve lexical
+tokens (including large integers), while writes, forks, held children and
+duplicate snapshots keep the usual proxy semantics.
+
 The source options `index_depth`, `index_array_limit`, and `index_budget_bytes` default to `3`, `3`, and `1048576`. Each accepts an integer from 0 through 4294967295; negative, fractional, nonfinite, nonnumeric and overflowing values are rejected before FFI conversion. Zero disables the corresponding optional preindexing/cache allocation. Root is depth 0, so `a.b.c` is the default retained frontier. Every array retains at most the configured prefix while its length remains exact. `max_depth` independently limits actual nesting; all input is eagerly validated even beyond the retained frontier.
 
 The byte budget covers native rebuildable index capacities per immutable source, shared by its forks. It applies throughout the source lifetime: later scans do not build another retained sibling tree. A root span and the validation stack, active traversal/string/duplicate workspace, mutation payloads, live public views and explicitly requested strings or output are separate storage. This is a metadata limit, not a process RSS guarantee. Missing or discarded indexes fall back to source scans. Held views/readers use immutable spans and remain valid after index removal.
@@ -74,5 +116,20 @@ Normal EOF is `nil, nil`. Encoding/source failures are `nil, error`; preserve th
 `leanjson.close(proxy)` drops that proxy's source leases, detaches its cache slot and rejects later access. Held children, forks and readers remain independently usable. These APIs are independent of `ngx`. Memory input retains the complete source string; [file and incremental sources](file-source-api.md) use bounded disk windows with explicit ownership and cancellation.
 
 `leanjson.source_stats(proxy)` returns `budget_bytes`, `index_bytes`, `indexed_nodes`, `indexed_depth`, `index_depth`, and `index_array_limit` for a source-backed root or overlay. `index_bytes` counts native index vector capacities, excluding the mandatory root record. The additional `spill_file_bytes`, `spill_live_regions` and `spill_free_regions` describe the current shared temporary workspace's file length and allocated/free region counts; all three are zero when no spilled map is active. These disk diagnostics are separate from the index budget. The diagnostic does not count the Lua allocator, weak live-view identity maps, holder state, input/output strings, patches or active operation workspace memory. It is useful for verifying the configured cache bound, and is not total native heap or RSS. An entirely synthetic value has no source diagnostic.
+
+Loading diagnostics are separate from `index_bytes`:
+
+| Field | Unit |
+| --- | --- |
+| `preloaded_nodes` | Retained selected scalar/container node count, including retained lexical duplicate occurrences inside selected subtrees. |
+| `preload_path_nodes` | Retained route-only node count needed to reach selected descendants; excludes complete selected nodes. |
+| `preloaded_payload_bytes` | Logical scalar payload: decoded UTF-8 string bytes, 8 bytes per Lua number, 1 per boolean and 0 per null. |
+| `preloaded_key_bytes` | Sum of decoded key byte lengths for retained cache occurrences; route-only nodes count their final matched members. |
+
+These counts are zero without preloading. They describe immutable selected
+source data, so branch edits do not change them. Payload/key byte counts exclude
+Lua tables, string headers, allocator capacities, possible string interning and
+native selector/event workspace. They are neither allocation measurements nor a
+total-memory estimate. Eager ordinary values have no `source_stats` diagnostic.
 
 Exact duplicate normalization keeps at most eight short decoded keys (4096 key bytes) per active object in memory, then uses an on-disk hash index with exact byte comparison on fingerprint collisions. All spilled maps for one source share one unlinked temporary backing file while active, including parent reader iterators and nested duplicate detection. Its virtual regions grow with bounded-buffer relocation. Released regions are coalesced and reused, trailing free space is truncated, and the final active map closes the descriptor. Repeated traversals do not retain a region for every historical operation while an older reader stays open. Wide/deep normalization trades extra scanning and temporary disk I/O for limited retained memory. The current decoded key, an explicitly accessed scalar, or a caller-retained key/value can still be large; those are separate from optional retained indexes. Temporary storage must be available in `temp_dir`; I/O failures remain errors and clean up owned resources.

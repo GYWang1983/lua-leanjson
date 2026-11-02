@@ -34,6 +34,7 @@ http {
             content_by_lua_file @ROOT@/examples/openresty/handler.lua;
         }
         location /policy/ { content_by_lua_file @ROOT@/tests/openresty/policy.lua; }
+        location /loading/ { content_by_lua_file @ROOT@/tests/openresty/loading-handler.lua; }
         location /lifecycle/ { content_by_lua_file @ROOT@/tests/openresty/lifecycle.lua; }
         location / { content_by_lua_file @ROOT@/tests/openresty/handler.lua; }
     }

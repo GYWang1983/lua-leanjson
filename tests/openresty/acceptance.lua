@@ -73,6 +73,57 @@ local function closed_source(probe)
         assert(state.close_unlinked and not probe.path_exists, cjson.encode(probe))
     end
 end
+
+for _, eager in ipairs { false, true } do
+    for _, input in ipairs { "memory", "file", "incremental", "fallback" } do
+        check((eager and "eager" or "preloaded") .. " loading options reach HTTP " .. input, function()
+            local ignored = ("p"):rep(input == "file" and 131072 or 32)
+            local raw = '{"a":{"b":{"c":{"d":{"e":"selected"}}}},"items":[0,1,2,3,4,{"x":false}],"n":null,"big":9007199254740993,"ignored":"' .. ignored .. '"}'
+            local body, headers = raw
+            local endpoint = (input == "incremental" or input == "fallback") and "/loading/incremental" or "/loading/completed"
+            if input == "fallback" then
+                body = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+                headers = { ["Transfer-Encoding"] = "chunked" }
+            end
+            local status, result = request(endpoint .. "?eager=" .. (eager and "1" or "0"), body, nil, headers)
+            assert(status == 200, cjson.encode(result))
+            assert(result.ordinary == eager, cjson.encode(result))
+            assert(result.before == result.after, "selected reads performed source I/O")
+            if eager then
+                local decoded = cjson.decode(result.encoded)
+                assert(decoded.a.b.c.d.e == "selected" and decoded.items[6].x == false and decoded.n == cjson.null)
+                assert(decoded.ignored == ignored)
+            else
+                assert(result.encoded == raw, "preloading changed untouched source tokens")
+                assert(result.stats.index_bytes == 0 and result.stats.preloaded_nodes == 4)
+            end
+            if input == "file" then assert(result.mode == "completed-file")
+            elseif input == "incremental" then assert(result.mode == "incremental")
+            else assert(result.mode == "completed-memory") end
+            if input == "fallback" then assert(result.fallback == "transfer-encoding") end
+            if input == "incremental" or input == "fallback" then assert(result.session_observes_edits) end
+        end)
+    end
+end
+check("HTTP eager scalar roots preserve false and null", function()
+    for _, endpoint in ipairs { "/loading/completed", "/loading/incremental" } do
+        for _, raw in ipairs { "false", "null" } do
+            local status, result = request(endpoint .. "?eager=1&scalar=1", raw)
+            assert(status == 200, cjson.encode(result))
+            if raw == "false" then assert(result.value == false and result.kind == "boolean")
+            else assert(result.value == cjson.null and result.kind == "null") end
+        end
+    end
+end)
+check("HTTP invalid selector options reject before decoding or forwarding", function()
+    local before = sink_count()
+    for _, endpoint in ipairs { "/loading/completed", "/loading/incremental" } do
+        local status, result = request(endpoint .. "?invalid=1&eager=1", '{"a":1}')
+        assert(status == 400 and result.error:find("preload_paths", 1, true), cjson.encode(result))
+    end
+    assert(sink_count() == before)
+end)
+
 check("memory source rewrites a field and sends exact bounded bytes", function()
     local status, result = request("/completed", '{"model":"original","prompt":"hello"}', "memory")
     assert(status == 200, cjson.encode(result))

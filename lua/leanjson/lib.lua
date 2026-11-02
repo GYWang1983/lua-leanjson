@@ -160,6 +160,20 @@ void leanjson_source_v2_iter_release(leanjson_source_v2_iter *);
 /* Scalar operations use unchanged v1 op_step/provide/release functions. */
 int leanjson_source_v2_node_scalar_begin(leanjson_source_v2_node, leanjson_source_v1_op **, leanjson_source_v1_result *);
 
+typedef struct leanjson_source_v2_selector leanjson_source_v2_selector;
+typedef struct {
+    uint32_t event, selected, kind, flags;
+    uint64_t raw_start, raw_end, child_count, ordinal;
+    const uint8_t *key;
+    size_t key_len;
+    const uint8_t *bytes;
+    size_t bytes_len;
+} leanjson_source_v2_loading_event;
+leanjson_source_v2_selector *leanjson_source_v2_selector_new(const uint8_t *, size_t, leanjson_source_v1_result *);
+void leanjson_source_v2_selector_release(leanjson_source_v2_selector *);
+int leanjson_source_v2_set_loading(const leanjson_source_v1 *, const leanjson_source_v2_selector *, uint32_t, leanjson_source_v1_result *);
+int leanjson_source_v2_next_loading_event(const leanjson_source_v1 *, leanjson_source_v2_loading_event *, leanjson_source_v1_result *);
+
 ]]
 
 local tried = {}
@@ -213,6 +227,10 @@ local required_symbols = {
     "leanjson_source_v2_iter_provide_window",
     "leanjson_source_v2_iter_release",
     "leanjson_source_v2_node_scalar_begin",
+    "leanjson_source_v2_selector_new",
+    "leanjson_source_v2_selector_release",
+    "leanjson_source_v2_set_loading",
+    "leanjson_source_v2_next_loading_event",
 }
 
 local function try_load(name)

@@ -16,6 +16,8 @@ use crate::source::{Source, SourceError, SourceReader, ReadStep, DETAIL_NONE, DE
 
 mod sparse;
 pub use sparse::*;
+mod loading;
+pub use loading::*;
 
 pub const LEANJSON_SOURCE_V1_API: u32 = 1;
 pub const LEANJSON_SOURCE_V1_READY: u32 = 0;

@@ -13,6 +13,7 @@ local Decoder = {}; Decoder.__index = Decoder
 local READY, NEED_INPUT = 0, 2
 local MAX_EXACT = 9007199254740991
 local shared = require("leanjson.source_backend")
+local loading = require("leanjson.loading")
 local exact, result_error, require_status = shared.exact, shared.result_error, shared.require_status
 local native_options = shared.native_options
 for _, name in ipairs({ "type", "span", "scalar", "children", "lookup", "length", "identity", "clean", "stats", "lexical_length", "clear_indexes" }) do
@@ -20,6 +21,10 @@ for _, name in ipairs({ "type", "span", "scalar", "children", "lookup", "length"
 end
 
 local function close_state(state)
+    if state.preloaded then
+        for identity in pairs(state.preloaded) do state.preloaded[identity] = nil end
+        state.preloaded = nil
+    end
     if state.fd ~= nil then
         io_source.close(state.fd, state.path)
         state.fd, state.path = nil, nil
@@ -104,7 +109,11 @@ local function backend_new(fd, spool_path, opts)
     if source == nil then io_source.close(fd, spool_path); error(result_error(result), 0) end
     local backend = setmetatable({ state = { fd = fd, path = spool_path, source = source, leases = 0 },
         total = 0, opts = opts }, Backend)
-    return backend, backend:retain()
+    local owner = backend:retain()
+    local ok, builder = pcall(loading.new, backend)
+    if not ok then backend:release(owner); error(builder, 0) end
+    backend.loading = builder
+    return backend, owner
 end
 
 local function feed_bytes(backend, chunk, spool, scope)
@@ -120,6 +129,7 @@ local function feed_bytes(backend, chunk, spool, scope)
         end
         require_status(C.leanjson_source_v1_feed(backend.state.source, backend.total,
             ffi.cast("const uint8_t *", chunk) + position, count, result), NEED_INPUT, result)
+        if backend.loading then backend.loading:drain() end
         backend.total, position = backend.total + count, position + count
         backend:notify(scope)
     end
@@ -128,8 +138,9 @@ end
 local function finish_backend(backend)
     local result, root = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v2_node[1]")
     require_status(C.leanjson_source_v1_finish(backend.state.source, backend.total, result), READY, result)
+    if backend.loading then backend.loading:finish() end
     require_status(C.leanjson_source_v2_root(backend.state.source, root, result), READY, result)
-    return { backend = backend, handle = ffi.new("leanjson_source_v2_node", root[0]), kind = backend:type(root[0]) }
+    return require("leanjson.nodes").raw(backend, ffi.new("leanjson_source_v2_node", root[0]))
 end
 
 function M.decode_file(filename, opts)
@@ -146,7 +157,9 @@ function M.decode_file(filename, opts)
             if #chunk == 0 then break end
             feed_bytes(backend, chunk, false)
         end
-        return proxy.from_node(finish_backend(backend))
+        local node = finish_backend(backend)
+        if not opts.lazyload then return backend.loading:take() end
+        return proxy.from_backend(backend, node.handle)
     end)
     backend:release(owner)
     if not ok then error(value, 0) end
@@ -166,6 +179,7 @@ end
 function Decoder:close()
     leases.release(self.scope)
     self.closed, self.node = true, nil
+    self.backend.loading = nil
 end
 
 function Decoder:fail(message)
@@ -197,8 +211,12 @@ function Decoder:finish()
     self.input_busy = true
     local ok, value = pcall(function()
         leases.check(self.scope)
-        if not self.finished then self.node = finish_backend(self.backend) end
-        local completed = path.from_node(self.node, {}, self.scope)
+        local was_finished = self.finished
+        if not was_finished then self.node = finish_backend(self.backend) end
+        local completed
+        if self.backend.opts.lazyload then completed = path.from_node(self.node, {}, self.scope)
+        elseif was_finished then completed = loading.rebuild(self.backend, self.node.handle, self.scope)
+        else completed = self.backend.loading:take() end
         self.finished = true
         return completed
     end)
@@ -215,7 +233,17 @@ function Decoder:get(query)
     local usable, source_error = pcall(leases.check, self.scope)
     if not usable then return nil, "ERROR", tostring(source_error) end
     if not self.finished then return nil, "NEED_INPUT" end
-    local found, value = pcall(path.from_node, self.node, segments, self.scope)
+    local found, value = pcall(function()
+        if self.backend.opts.lazyload then return path.from_node(self.node, segments, self.scope) end
+        local node = self.node
+        for _, segment in ipairs(segments) do
+            if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
+            node = proxy.lookup(node, segment.key, self.scope)
+            if node == nil then return nil end
+        end
+        if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, self.scope) end
+        return loading.rebuild(self.backend, node.handle, self.scope)
+    end)
     if not found then return nil, "ERROR", tostring(value) end
     if type(value) == "nil" then return nil, "ABSENT" end
     return value, "READY"

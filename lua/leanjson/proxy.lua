@@ -30,6 +30,7 @@ M.members, M.lookup, M.iter = nodes.members, nodes.lookup, nodes.iter
 
 function M.scalar(node, scope)
     if node.kind == "null" then return config.null end
+    if node.preloaded then return node.value end
     if node.backend then return node.backend:scalar(node.handle, scope) end
     return node.value
 end

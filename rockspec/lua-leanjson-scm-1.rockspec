@@ -43,6 +43,7 @@ build = {
         cp lua/leanjson/path.lua "$(LUADIR)/leanjson/path.lua"
         cp lua/leanjson/leases.lua "$(LUADIR)/leanjson/leases.lua"
         cp lua/leanjson/options.lua "$(LUADIR)/leanjson/options.lua"
+        cp lua/leanjson/loading.lua "$(LUADIR)/leanjson/loading.lua"
         cp lua/leanjson/openresty.lua "$(LUADIR)/leanjson/openresty.lua"
         lib=target/release/libleanjson.so
         if [ ! -f "$lib" ]; then lib=target/release/libleanjson.dylib; fi

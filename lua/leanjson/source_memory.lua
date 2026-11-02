@@ -20,12 +20,23 @@ function M.open(raw, opts)
     local source = C.leanjson_source_v2_new(shared.native_options(opts), result)
     if source == nil then error(shared.result_error(result), 0) end
     source = ffi.gc(source, C.leanjson_source_v1_release)
-    -- Validation borrows input and stores no token bytes or input pointer.
-    shared.require_status(C.leanjson_source_v1_feed(source, 0, raw, #raw, result), 2, result)
+    local backend = setmetatable({ raw = raw, memory = true, opts = opts, state = { source = source } }, Memory)
+    backend.loading = require("leanjson.loading").new(backend)
+    -- Construction events are drained per bounded feed; unselected bytes and
+    -- native input pointers are never retained by the validator.
+    local first = 0
+    repeat
+        local count = math.min(#raw - first, opts.chunk_size)
+        shared.require_status(C.leanjson_source_v1_feed(source, first,
+            ffi.cast("const uint8_t *", raw) + first, count, result), 2, result)
+        if backend.loading then backend.loading:drain() end
+        first = first + count
+    until first == #raw
     shared.require_status(C.leanjson_source_v1_finish(source, #raw, result), 0, result)
+    if backend.loading then backend.loading:finish() end
     local root = ffi.new("leanjson_source_v2_node[1]")
     shared.require_status(C.leanjson_source_v2_root(source, root, result), 0, result)
-    return setmetatable({ raw = raw, memory = true, opts = opts, state = { source = source } }, Memory),
+    return backend,
         ffi.new("leanjson_source_v2_node", root[0])
 end
 return M

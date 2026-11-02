@@ -3,8 +3,10 @@
 local M = {}
 local DELETE = {}
 function M.raw(backend, handle)
+    local identity = backend.identity and backend:identity(handle) or handle
+    if backend.preloaded and backend.preloaded[identity] then return backend.preloaded[identity] end
     return { backend = backend, handle = handle, kind = backend:type(handle),
-        identity = backend.identity and backend:identity(handle) or handle }
+        identity = identity }
 end
 function M.same(a, b)
     if a == b then return true end
@@ -29,6 +31,10 @@ function M.lookup(node, key, scope)
         return nil
     end
     if node.values then return node.values[key] end
+    if node.preload_values then
+        local value = node.preload_values[key]
+        if value ~= nil or node.preloaded then return value end
+    end
     if node.backend.lookup then
         local handle = node.backend:lookup(node.handle, key, scope)
         if handle then return M.raw(node.backend, handle) end
@@ -103,6 +109,19 @@ function M.iter(node, scope, normalize, linked)
             if key ~= nil then return key, node.values[key], true end
         end
     end
+    if node.preloaded then
+        local index = 0
+        return function()
+            index = index + 1
+            if normalize then
+                local key = node.preload_keys[index]
+                if key ~= nil then return key, node.preload_values[key], true end
+            else
+                local entry = node.preload_entries[index]
+                if entry then return entry[1], entry[2], node.preload_values[entry[1]] == entry[2] end
+            end
+        end
+    end
     local next_child = node.backend:children(node.handle, scope, normalize, linked)
     return function()
         local key, handle, current = next_child()
@@ -111,6 +130,7 @@ function M.iter(node, scope, normalize, linked)
 end
 function M.length(node, scope)
     if node.length then return node.length end
+    if node.preloaded then return #node.preload_keys end
     if node.backend and node.backend.length then return node.backend:length(node.handle, scope) end
     if node.values then return #node.keys end
     local n = 0

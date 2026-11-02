@@ -5,6 +5,7 @@ use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
 mod window;
+pub mod loading;
 pub(crate) mod duplicates;
 pub(crate) mod sparse;
 pub use window::{ReadStep, SourceReader};
@@ -59,14 +60,14 @@ impl Default for IndexOptions {
 enum FrameState { ArrayFirst, ArrayValue, ArrayAfter, ObjectFirst, ObjectKey, ObjectColon, ObjectValue, ObjectAfter }
 struct Value {
     id: Option<usize>, kind: leanjson_type, start: u64,
-    key: (u64, u64), decoded_key: Vec<u8>, ordinal: u64,
+    key: (u64, u64), decoded_key: Vec<u8>, ordinal: u64, loading: Option<loading::ValueState>,
 }
 struct Frame {
     value: Value, state: FrameState, key: (u64, u64), key_hash: u64, decoded_key: Vec<u8>, count: u64,
     duplicates: Option<KeyMap>, dirty: bool,
 }
 enum Token {
-    String { start: u64, value: Option<Value>, state: StringState, key: Option<Vec<u8>>, key_hash: u64 },
+    String { start: u64, value: Option<Value>, state: StringState, key: Option<Vec<u8>>, key_hash: u64, key_limit: usize },
     Number { value: Value, state: NumberState },
     Literal { value: Value, expected: &'static [u8], matched: usize },
 }
@@ -79,6 +80,7 @@ pub struct Source {
     finished: bool, failure: Option<SourceError>, max_depth: u32, window_size: usize,
     indexes: Option<IndexOptions>, index_bytes: usize, indexed_depth: u32,
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
+    loading: Option<loading::Loading>,
 }
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
@@ -89,6 +91,7 @@ impl Source {
             window_size: if window_size == 0 { 65536 } else { window_size },
             indexes: None, index_bytes: 0, indexed_depth: 0, events: false,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
+            loading: None,
         }
     }
     pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
@@ -131,6 +134,15 @@ impl Source {
     }
     pub(crate) fn workspace(&self) -> duplicates::WorkspacePool { self.workspace.clone() }
     pub fn window_size(&self) -> usize { self.window_size }
+    pub fn set_loading(&mut self, eager: bool, selector: Option<std::rc::Rc<loading::Selector>>) -> Result<(), SourceError> {
+        if self.next_offset != 0 || !self.nodes.is_empty() || self.finished || self.indexes.is_none() { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
+        self.loading = Some(loading::Loading::new(eager, selector));
+        Ok(())
+    }
+    pub fn next_loading_event(&mut self) -> Result<Option<&loading::Event>, SourceError> {
+        self.ready()?;
+        Ok(self.loading.as_mut().and_then(|loading| loading.next(self.finished)))
+    }
     pub fn offset(&self) -> u64 { self.next_offset }
     pub fn index_bytes(&self) -> usize { self.index_bytes }
     pub fn clear_indexes(&mut self) -> Result<(), SourceError> {
@@ -216,6 +228,7 @@ impl Source {
         *self.failure.get_or_insert(SourceError { code: leanjson_err::LEANJSON_OK, detail, offset: self.next_offset })
     }
     fn complete(&mut self, value: Value, end: u64, count: u64, flags: u32) {
+        if let Some(loading) = &mut self.loading { loading.end(&value, end, count, flags); }
         if let Some(id) = value.id {
             self.nodes[id].raw_end = end;
             self.nodes[id].complete = true;
@@ -230,6 +243,7 @@ impl Source {
         }
     }
     fn optional_index(&mut self) -> Option<usize> {
+        if self.loading.as_ref().is_some_and(|loading| loading.eager) { return None; }
         if self.frames.is_empty() { return None; }
         let parent = self.frames.last().unwrap();
         let parent_id = parent.value.id?;
@@ -258,13 +272,16 @@ impl Source {
                 members: Vec::new(), child_count: 0, flags: 0 });
             Some(id)
         } else { None };
-        let mut value = Value { id, kind, start: offset, key: (0, 0), decoded_key: Vec::new(), ordinal: 0 };
+        let loading = self.loading.as_ref().map(|loading| loading.state(self.frames.last().map(|frame|
+            (frame.value.loading.as_ref().unwrap(), frame.value.kind, frame.decoded_key.as_slice(), frame.count))));
+        let interesting = loading.as_ref().is_some_and(|state| state.interesting);
+        let mut value = Value { id, kind, start: offset, key: (0, 0), decoded_key: Vec::new(), ordinal: 0, loading };
         let direct = self.events && self.frames.len() == 1;
         if let Some(frame) = self.frames.last_mut() {
             value.key = frame.key;
             value.ordinal = frame.count;
             frame.count += 1;
-            if direct { value.decoded_key = std::mem::take(&mut frame.decoded_key); }
+            if direct || interesting { value.decoded_key = std::mem::take(&mut frame.decoded_key); }
             else { frame.decoded_key.clear(); }
             if let (Some(parent_id), Some(id)) = (parent_id, id) {
                 self.nodes[parent_id].members.push(Member { key_start: frame.key.0, key_end: frame.key.1, key_hash: frame.key_hash, value: id });
@@ -272,6 +289,7 @@ impl Source {
             frame.key = (0, 0);
             frame.state = match frame.state { FrameState::ObjectValue => FrameState::ObjectAfter, _ => FrameState::ArrayAfter };
         }
+        if let Some(loading) = &mut self.loading { loading.begin(&value); }
         value
     }
     fn start_value(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
@@ -292,10 +310,13 @@ impl Source {
                 self.frames.push(Frame { value, key: (0, 0), key_hash: 0, decoded_key: Vec::new(), count: 0,
                     state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst }, duplicates, dirty: false });
             },
-            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::new(), key: None, key_hash: 0xcbf29ce484222325 }),
-            b't' | b'f' | b'n' => self.token = Some(Token::Literal { value,
-                expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1 }),
+            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::new(), key: None, key_hash: 0xcbf29ce484222325, key_limit: 0 }),
+            b't' | b'f' | b'n' => {
+                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
+                self.token = Some(Token::Literal { value, expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1 });
+            },
             _ => { let mut state = NumberState::new(); state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
+                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
                 self.token = Some(Token::Number { value, state }); },
         }
         Ok(())
@@ -310,7 +331,9 @@ impl Source {
             Some(ObjectFirst) if byte == b'}' => self.close_container(offset),
             Some(ObjectFirst | ObjectKey) if byte == b'"' => {
                 let capture = self.events && self.frames.len() == 1 || self.frames.last().unwrap().duplicates.is_some();
-                self.token = Some(Token::String { start: offset, value: None, state: StringState::new(), key: capture.then(Vec::new), key_hash: 0xcbf29ce484222325 }); Ok(())
+                let key_limit = if capture { usize::MAX } else { self.loading.as_ref().map_or(0, |loading|
+                    loading.key_limit(self.frames.last().unwrap().value.loading.as_ref().unwrap())) };
+                self.token = Some(Token::String { start: offset, value: None, state: StringState::new(), key: (key_limit != 0).then(Vec::new), key_hash: 0xcbf29ce484222325, key_limit }); Ok(())
             },
             Some(ObjectColon) if byte == b':' => { self.frames.last_mut().unwrap().state = ObjectValue; Ok(()) },
             Some(ArrayAfter) if byte == b',' => { self.frames.last_mut().unwrap().state = ArrayValue; Ok(()) },
@@ -329,7 +352,7 @@ impl Source {
     }
     fn token_byte(&mut self, token: Token, byte: u8, offset: u64) -> Result<bool, SourceError> {
         match token {
-            Token::String { start, value, mut state, mut key, mut key_hash } => {
+            Token::String { start, value, mut state, mut key, mut key_hash, key_limit } => {
                 if byte == b'"' && state.at_boundary() {
                     match value {
                         Some(value) => self.complete(value, offset + 1, 0, SPAN_CLEAN),
@@ -349,8 +372,12 @@ impl Source {
                     if value.is_none() {
                         for byte in &decoded.bytes[..decoded.len] { key_hash ^= *byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
                     }
-                    if let Some(key) = key.as_mut() { key.extend_from_slice(&decoded.bytes[..decoded.len]); }
-                    self.token = Some(Token::String { start, value, state, key, key_hash });
+                    if let Some(value) = &value { if let Some(loading) = &mut self.loading { loading.data(value, &decoded.bytes[..decoded.len]); } }
+                    if let Some(key) = key.as_mut() {
+                        let count = decoded.len.min(key_limit.saturating_sub(key.len()));
+                        key.extend_from_slice(&decoded.bytes[..count]);
+                    }
+                    self.token = Some(Token::String { start, value, state, key, key_hash, key_limit });
                 }
             },
             Token::Number { value, mut state } => {
@@ -359,10 +386,12 @@ impl Source {
                     self.complete(value, offset, 0, SPAN_CLEAN); return Ok(false);
                 }
                 state.feed(byte).map_err(|code| SourceError::json(code, value.start))?;
+                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
                 self.token = Some(Token::Number { value, state });
             },
             Token::Literal { value, expected, mut matched } => {
                 if byte != expected[matched] { return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)); }
+                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
                 matched += 1;
                 if matched == expected.len() { self.complete(value, offset + 1, 0, SPAN_CLEAN); }
                 else { self.token = Some(Token::Literal { value, expected, matched }); }

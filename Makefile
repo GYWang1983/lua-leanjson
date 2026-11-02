@@ -15,6 +15,9 @@ LEANJSON_MUT_PROP_CASES ?= 200
 LEANJSON_MUT_PROP_SEED  ?= 104104
 LEANJSON_MUT_PROP_STEPS ?= 24
 OPENRESTY_DEV_IMAGE ?= lua-leanjson-dev:openresty-1.29.2.4-rust-1.90.0
+CJSON_COMPAT_IMAGE ?= lua-qjson-dev:task3-repro
+CJSON_COMPAT_OUTPUT ?= .superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts
+CJSON_COMPAT_LOCALE_DIR ?=
 
 LIB_DIR := $(CURDIR)/target/release
 ifeq ($(shell uname),Darwin)
@@ -23,7 +26,7 @@ else
 LUA_ENV := LD_LIBRARY_PATH=$(LIB_DIR) LUA_PATH='$(LUA_PATH)' LUA_CPATH='$(LUA_CPATH)'
 endif
 
-.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test openresty-source-stress openresty-source-corpus openresty-memory-gate bounded-fuzz
+.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test openresty-source-stress openresty-source-corpus openresty-memory-gate bounded-fuzz cjson-compat cjson-compat-strict cjson-compat-controls
 
 help: ## Show this help
 	@# FS uses [^#]* (not .*) so a description containing `##` isn't truncated.
@@ -83,6 +86,15 @@ openresty-memory-gate: ## On Docker host, compare the built Linux checkout again
 
 bounded-fuzz: ## Run bounded nightly libFuzzer sessions (cargo-fuzz required)
 	scripts/verify-bounded-fuzz.sh
+
+cjson-compat: ## Generate the complete pinned upstream cjson matrix (differences remain reported)
+	python3 scripts/verify-cjson-compat.py --docker --image '$(CJSON_COMPAT_IMAGE)' --output '$(CJSON_COMPAT_OUTPUT)' $(if $(CJSON_COMPAT_LOCALE_DIR),--locale-dir '$(CJSON_COMPAT_LOCALE_DIR)')
+
+cjson-compat-strict: ## Run the same matrix, failing for any applicable compatibility differences
+	python3 scripts/verify-cjson-compat.py --docker --strict --image '$(CJSON_COMPAT_IMAGE)' --output '$(CJSON_COMPAT_OUTPUT)' $(if $(CJSON_COMPAT_LOCALE_DIR),--locale-dir '$(CJSON_COMPAT_LOCALE_DIR)')
+
+cjson-compat-controls: ## Verify omission/duplicate/difference/API/setup/malformed-input negative controls
+	python3 -m unittest discover -s tests/upstream-cjson -p 'test_*.py' -v
 
 BENCH_SCENARIOS := small medium github-100k 100k 200k 500k 1m 2m 5m 10m interleaved
 

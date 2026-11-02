@@ -48,7 +48,7 @@ def arguments():
     ])
     parser.add_argument("--sources", nargs="+", choices=["memory", "file", "feed"], default=["memory", "file", "feed"])
     parser.add_argument("--bytes", type=int, default=1048576)
-    parser.add_argument("--branches", type=int, default=2, help="independent forks; 0 edits the decoded root directly")
+    parser.add_argument("--branches", type=int, default=0, help="independent forks; default 0 edits the decoded root directly")
     parser.add_argument("--index-budget-bytes", type=int, default=1048576)
     parser.add_argument("--index-depth", type=int, default=3)
     parser.add_argument("--index-array-limit", type=int, default=3)

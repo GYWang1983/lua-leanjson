@@ -7,7 +7,7 @@ local method, source, input, output = assert(arg[1]), assert(arg[2]), assert(arg
 local access = arg[5] or "model"
 local options = { chunk_size = 65536 }
 if arg[6] then options.index_budget_bytes = assert(tonumber(arg[6])) end
-local branches_count = tonumber(arg[7]) or 2
+local branches_count = tonumber(arg[7]) or 0
 if arg[8] then options.index_depth = assert(tonumber(arg[8])) end
 if arg[9] then options.index_array_limit = assert(tonumber(arg[9])) end
 assert(method == "leanjson" or method == "cjson")

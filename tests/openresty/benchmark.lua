@@ -8,12 +8,16 @@ local concurrency = tonumber(os.getenv("LEANJSON_BENCH_CONCURRENCY")) or 2
 local requests = tonumber(os.getenv("LEANJSON_BENCH_REQUESTS")) or 3
 local branches = tonumber(os.getenv("LEANJSON_BENCH_BRANCHES")) or 2
 local chunk_size = tonumber(os.getenv("LEANJSON_BENCH_CHUNK_SIZE")) or 65536
+local index_depth = tonumber(os.getenv("LEANJSON_BENCH_INDEX_DEPTH")) or 3
+local index_array_limit = tonumber(os.getenv("LEANJSON_BENCH_INDEX_ARRAY_LIMIT")) or 3
+local index_budget_bytes = tonumber(os.getenv("LEANJSON_BENCH_INDEX_BUDGET_BYTES")) or 1048576
 local raw = require("benchmark-fixtures").build(scenario, size)
 local payload_hash = assert(require("resty.sha256"):new())
 payload_hash:update(raw)
 local payload_sha256 = require("resty.string").to_hex(payload_hash:final())
 collectgarbage("collect")
 local route = "/benchmark?method=" .. method .. "&branches=" .. branches .. "&chunk_size=" .. chunk_size ..
+    "&index_depth=" .. index_depth .. "&index_array_limit=" .. index_array_limit .. "&index_budget_bytes=" .. index_budget_bytes ..
     "&explicit=" .. (scenario == "explicit" and "1" or "0") .. "&cold=" .. (scenario == "cold" and "1" or "0")
 local function get(path)
     local res = assert(http.new():request_uri("http://127.0.0.1:" .. port .. path, { keepalive = false }))
@@ -94,6 +98,7 @@ equal(cjson.decode(captured), expected)
 print(cjson.encode { scenario = scenario, method = method, payload_bytes = #raw,
     payload_sha256 = payload_sha256,
     requests = #results, concurrency = concurrency, branches = branches, chunk_size = chunk_size, elapsed_s = elapsed,
+    index_depth = index_depth, index_array_limit = index_array_limit, index_budget_bytes = index_budget_bytes,
     mib_per_s = (#raw * #results / 1048576) / elapsed, p50_ms = percentile(latencies, 0.5),
     p95_ms = percentile(latencies, 0.95), first_upstream_byte_p50_ms = percentile(first_bytes, 0.5),
     worker_lag_max_ms = lag_max, ping_samples = ping_count,

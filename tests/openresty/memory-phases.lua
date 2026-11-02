@@ -13,9 +13,14 @@ if arg[9] then options.index_array_limit = assert(tonumber(arg[9])) end
 assert(method == "leanjson" or method == "cjson")
 assert(source == "memory" or source == "file" or source == "feed")
 local phases = {}
+local body, raw
 local function sample(name)
     local row = metrics.sample()
     row.stage = name
+    if method == "leanjson" and body and json.source_stats then
+        row.index = json.source_stats(body)
+        assert(row.index.index_bytes <= row.index.budget_bytes, "index budget exceeded")
+    end
     phases[#phases + 1] = row
 end
 local function copy(value)
@@ -26,7 +31,6 @@ local function copy(value)
 end
 collectgarbage("collect")
 sample("baseline")
-local body, raw
 local file = assert(io.open(input, "rb"))
 local source_bytes = assert(file:seek("end"))
 assert(file:seek("set", 0))

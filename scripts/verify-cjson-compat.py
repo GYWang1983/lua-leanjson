@@ -459,8 +459,6 @@ def run_selective(env, output, reference):
         for record, wanted in zip(records, replay):
             record["matches_reference_result"] = canonical(record["result"]) == canonical(wanted["reference_result"])
             record["classification"] = "pass" if record["success"] == wanted["reference_success"] and record["matches_reference_result"] else "behavioral_difference"
-            if record.get("success") and not record.get("encoded_roundtrip_complete"):
-                record["classification"] = "behavioral_difference"
             if "unselected_key" in wanted and record.get("success"):
                 record["unselected_access_matches_reference"] = canonical(record.get("unselected_value")) == canonical(wanted["reference_unselected_value"])
                 if not record["unselected_access_matches_reference"]:
@@ -475,6 +473,13 @@ def run_selective(env, output, reference):
         write_records(output / "selective" / source / "records.jsonl", records)
         write_json(output / "selective" / source / "runtimes.json", runtime)
         summaries[source] = summarize(records)
+        # Lossless encoding is stronger than the native default-precision
+        # contract. Retain it as evidence without changing decode compatibility.
+        summaries[source]["encoded_roundtrip_diagnostics"] = {
+            "complete": sum(r.get("encoded_roundtrip_complete") is True for r in records),
+            "incomplete": sum(r.get("encoded_roundtrip_complete") is False for r in records),
+            "not_run": sum("encoded_roundtrip_complete" not in r for r in records),
+        }
         print("selective-" + source + ": " + json.dumps(summaries[source]["classifications"]), flush=True)
     return summaries, compatible
 

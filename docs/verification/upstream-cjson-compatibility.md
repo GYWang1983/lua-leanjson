@@ -118,31 +118,36 @@ selective `preload_paths` and all three automatic index limits zero. For a
 nonempty container the runner selects an existing child from the native typed
 result, including properly escaped object keys; a second child, when present,
 is read without preloading. Scalars select `$`; empty containers explicitly have
-no selectable child. Complete encoding and logical roundtrip are checked after
-the original operations.
+no selectable child. Complete encoding and a lossless logical roundtrip are
+retained as diagnostics after the original operations. They do not change decode
+compatibility classification or strict status.
 
-| Input | Combined pass | Combined difference | Proxies with initial stats | Zero-index violations | Unselected sibling checks |
+| Input | Compatibility pass | Behavioral difference | Proxies with initial stats | Zero-index violations | Unselected sibling checks |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| memory | 35 | 45 | 31 | 0 | 9, all match |
-| file | 35 | 45 | 31 | 0 | 9, all match |
-| incremental | 35 | 45 | 31 | 0 | 9, all match |
+| memory | 36 | 44 | 31 | 0 | 9, all match |
+| file | 36 | 44 | 31 | 0 | 9, all match |
+| incremental | 36 | 44 | 31 | 0 | 9, all match |
 
 The 80 outcomes per source break down more precisely as follows:
 
 | Reference / target decode result | Count | Interpretation |
 | --- | ---: | --- |
-| Both succeed, typed values agree | 36 | 35 also satisfy the extra encoding roundtrip check |
+| Both succeed, typed values agree | 36 | All pass compatibility; 35 also satisfy the diagnostic lossless roundtrip |
 | Both reject, error details differ | 27 | Exact error parity fails |
 | Reference succeeds, target rejects | 15 | Includes permissive settings and safe-return behavior not emulated by replay |
 | Reference rejects, target succeeds | 2 | Original maximum-depth setting is not emulated |
 
-The remaining combined failure is `agentzh.t:TEST20#decode1`: decoding `2^53`
-agrees exactly, but default 14-digit encoding produces `9.007199254741e+15`, losing
+The separate incomplete-roundtrip diagnostic is `agentzh.t:TEST20#decode1`:
+decoding `2^53` agrees exactly and passes compatibility, but default 14-digit
+encoding produces `9.007199254741e+15`, losing
 precision on re-decode. **Native cjson's default output in the original block is
-the same.** This is failure of an additional lossless-roundtrip requirement, not
-a target-only decode or default-encoding incompatibility. The primary cjson
-compatibility gap is inability to select 16-digit precision. Thus neither 35/80
-nor 45/80 should be advertised as a direct decode compatibility rate.
+the same.** This additional lossless-roundtrip diagnostic does not fail
+compatibility or strict mode. The primary cjson compatibility gap is inability to
+select 16-digit precision. Summary diagnostics separately record 37 complete
+roundtrips, 1 incomplete and 42 not run after decode failure per source; all
+original encoded-output evidence is retained. The 44 compatibility differences
+are the 27 exact error mismatches, 15 reference-success/target-failure and 2
+reference-failure/target-success outcomes above.
 
 All stats-bearing proxies show actual preloads and zero automatic index bytes;
 all final cleanup error lists are empty. This functional matrix does not measure
@@ -150,10 +155,12 @@ peak memory, throughput, or prove that every subsequent access avoids source I/O
 
 ## Trust checks and project regression
 
-The runner rejects omitted, duplicate and unexpected inventory IDs. Seven
-focused controls exercise real native/target processes, deliberate incorrect
+The runner rejects omitted, duplicate and unexpected inventory IDs. Eight
+focused tests exercise real native/target processes, deliberate incorrect
 returns, missing APIs, failed setup, malformed input, typed values/return arity,
 one-byte chunk boundaries, actual partial preload, and strict/report exit policy.
+A real native/target regression proves identical default-precision loss stays
+compatible through all three selective sources and returns strict exit 0.
 Observed red and green logs are retained. The independent supervisor audit
 reconciles suite locations/hashes, all 1,476 primary records, native binary hash,
 UTF-8 fixture, real source dispatch, loading options, cleanup and summary totals.
@@ -164,7 +171,7 @@ previous native HTTP gate was not rerun for this test-only change and is not
 counted as new evidence. Project regression success does not override the failed
 compatibility result.
 
-The final direct Python strict run exited **1** in 21.328 seconds with
+The refreshed direct Python strict run exited **1** in 21.741 seconds with
 `harness_healthy=true`, `compatible=false`. Report mode exits 0 for healthy report
 generation, even with incompatibilities. Python exit 2 denotes harness failure;
 GNU make also returns 2 for a failed recipe, including Python compatibility exit
@@ -209,7 +216,7 @@ into the final totals. `locale/` includes the locale package, hashes, generation
 commands and probes; `root-*` files hold independent audit evidence.
 
 The reference library SHA256 is
-`c70945c3a528bc88a787e2b6fc138f41819fbce8dc3d6c759d1164527f3561c3`;
+`6daf540edbc1fbdd1f0ee1ca331d901f5f94f29e59b05e8190b805ec212894ea`;
 the measured LeanJSON library SHA256 is
 `20e4db6e52ad82f7378550e2cc3943485e456cc1880e825f69ae445774c29d42`.
 The generated UTF-8 scalar fixture is 4,382,592 bytes, matching both the upstream

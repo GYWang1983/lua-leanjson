@@ -70,8 +70,12 @@ container selects one existing child from the reference typed observation; a
 second child, when present, is accessed without preloading it. Scalars select `$`;
 empty containers record that no child is selectable. Each source reports selected
 paths, initial zero-index statistics, unselected values, the complete encoded
-output, and an encode/decode logical roundtrip. Supplemental comparisons do not
-emulate the reference's unsupported decode settings; differences remain results.
+output, and an encode/decode logical roundtrip diagnostic. Lossless roundtrip
+results are reported separately in `encoded_roundtrip_diagnostics` and do not
+change compatibility classification or strict status: native cjson's default
+precision can lose the same numeric information. Supplemental comparisons use
+decode results, unselected access and index checks; they do not emulate the
+reference's unsupported decode settings. Original encoding evidence is retained.
 
 ## Evidence schema and limits
 

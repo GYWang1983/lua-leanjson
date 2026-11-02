@@ -83,6 +83,40 @@ class RunnerControls(unittest.TestCase):
         self.assertEqual(1, runner.exit_status(report, strict=True))
         self.assertEqual(2, runner.exit_status({"harness_healthy": False}, strict=False))
 
+    def test_shared_native_target_precision_loss_does_not_fail_selective_compatibility(self):
+        runner = self.runner()
+        scratch = ROOT / ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts/roundtrip-controls"
+        case = {"id": "shared-default-precision", "suite": "negative-control", "line": 1,
+                "name": "shared-default-precision", "category": "direct_decode",
+                "source": "negative-control:shared-default-precision", "declared_apis": ["cjson.decode", "cjson.encode"]}
+        code = ('util.run_test_group({{"shared-default-precision",function() '
+                'local value=json.decode("9007199254740992"); local encoded=json.encode(value); '
+                'return value,encoded,json.decode(encoded)==value end,{},true,'
+                '{9007199254740992,"9.007199254741e+15",false}}})')
+        with runner.Environment(ROOT, scratch) as environment:
+            reference, _ = environment.worker(scratch / "reference", "reference", "native", "memory", [case], kind="control", code=code)
+            target, _ = environment.worker(scratch / "target", "target", "lazy", "memory", [case], kind="control", code=code)
+            self.assertTrue(reference[0]["upstream_exact_pass"])
+            self.assertTrue(target[0]["upstream_exact_pass"])
+            # Both processes really encode with their default precision, produce
+            # the same bytes, and lose the same original integer on re-decode.
+            self.assertEqual(reference[0]["result"]["values"][1], target[0]["result"]["values"][1])
+            self.assertEqual({"type": "boolean", "value": False}, reference[0]["result"]["values"][2])
+            self.assertEqual({"type": "boolean", "value": False}, target[0]["result"]["values"][2])
+            summaries, compatible = runner.run_selective(environment, scratch, reference)
+            report = {"harness_healthy": True, "compatible": compatible, "selective": summaries}
+            runner.write_json(scratch / "summary.json", report)
+            self.assertTrue(compatible, json.dumps(report, indent=2))
+            self.assertEqual(0, runner.exit_status(report, strict=True))
+            for source, summary in summaries.items():
+                self.assertEqual({"pass": 2}, summary["classifications"], source)
+                self.assertEqual({"complete": 1, "incomplete": 1, "not_run": 0}, summary["encoded_roundtrip_diagnostics"], source)
+                rows = [json.loads(line) for line in (scratch / "selective" / source / "records.jsonl").read_text().splitlines()]
+                self.assertTrue(rows[0]["matches_reference_result"])
+                self.assertFalse(rows[0]["encoded_roundtrip_complete"])
+                self.assertEqual("pass", rows[0]["classification"])
+                self.assertEqual(reference[0]["result"]["values"][1], rows[0]["encoded_output"])
+
 
 if __name__ == "__main__":
     unittest.main()

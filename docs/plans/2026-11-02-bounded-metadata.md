@@ -48,4 +48,4 @@
 - [x] Run paired native process memory checks on the integrated implementation, recording peak RSS, sampled Lua heap, elapsed/CPU and input/output semantics. Repeat only for code changes/noise affecting conclusions; no concurrent cargo builds during measurements.
 - [x] If any required memory row exceeds native cjson, pass concrete measurements to Task 1 for correction; do not silently relax criteria.
 - [x] Document defaults, semantics, budgets/caller-held-memory boundaries, CPU/I/O tradeoffs and fresh measured results; update README historical caveat with links to new results.
-- [ ] Independent whole-change review after functional/memory gates; resolve findings, verify exact committed runtime image and final diff. Leave local feature branch/worktree for user; no new push/publication requested.
+- [x] Independent whole-change review after functional/memory gates; resolve findings, verify exact committed runtime image and final diff. Leave local feature branch/worktree for user; no new push/publication requested.

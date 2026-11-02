@@ -8,8 +8,9 @@ The implementation remains independent of Kong and Gateway.
 `scripts/verify-memory.py` generates fixtures outside the measured processes and
 runs native OpenResty with LuaJIT in a fresh process for every method and source
 mode. Final cjson cells load neither LeanJSON Lua modules nor its native library.
-The final harness is commit `8e07a36`; its runtime is `d4ea91c`. Each pair consumes byte-identical JSON. The native cjson comparison fully
-decodes and encodes; LeanJSON uses source spans, sparse mutation and a bounded
+The final harness and runtime are commit
+`5729eb2bcacf015f54dcbc039cb3192ac13a4e91`. Each pair consumes byte-identical
+JSON. The native cjson comparison fully decodes and encodes; LeanJSON uses source spans, sparse mutation and a bounded
 reader. Both perform the same requested edits and number of independent forks.
 `--branches 0` modifies the decoded root directly, without an artificial copy.
 
@@ -50,14 +51,16 @@ normalized counting/output. Raw records are retained in
 
 ## Updated runtime
 
-Measured runtime commit: `d4ea91c5dc28c8f8c6af922b50772956fede8f0a`.
+Measured runtime commit: `5729eb2bcacf015f54dcbc039cb3192ac13a4e91`.
 Pinned development image: `lua-qjson-dev:task3-repro`, image ID
 `sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47`. Linux ARM64, native OpenResty 1.29.2.4,
 LuaJIT 2.1 and Rust 1.90. Native library SHA256:
-`c21c9712521496f1952abf30ca14ce24400ae5a7752499052db79d1b370b43a2`; Lua runtime tree digest:
+`1fdc408e86e236178777fab94c57afe55e5fc78e518a888b3e00fee11eddbd88`; Lua runtime tree digest:
 `9472b8880f4d4949010ec210bf8962008539819a3b18d29d805efbcfd5390db3`. The image revision is the development
-image's own revision, not the mounted runtime revision. The runtime-only revision is stated above; the checkout revision in each record
-adds the corrected benchmark harness. Dirty status reflects supervisor documentation work. Native and Lua
+image's own revision, not the mounted runtime revision. The mounted runtime and harness revision is stated above.
+The runner resolves the image ID before assembling any Docker command, executes
+that immutable ID, and fingerprints both native and Lua code in mounted and
+packaged modes. Checkout dirty status is recorded in each environment row. Native and Lua
 fingerprints remained unchanged throughout all four matrices.
 
 **63/63 paired process comparisons passed against a pure-cjson baseline**, including every complete semantic,
@@ -79,19 +82,19 @@ same routing-style edit in both implementations.
 
 | Shape | Source | cjson RSS | LeanJSON RSS | cjson CPU | LeanJSON CPU |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 32,768 short array objects | memory | 18.64 MiB | 14.18 MiB | 10.3 ms | 28.6 ms |
-| 32,768 short array objects | file | 18.65 MiB | 13.68 MiB | 10.0 ms | 30.9 ms |
-| 32,768 short array objects | feed | 18.64 MiB | 13.69 MiB | 10.0 ms | 30.0 ms |
-| 32,768 small-object fields | memory | 23.22 MiB | 17.55 MiB | 13.9 ms | 648.8 ms |
-| 32,768 small-object fields | file | 23.19 MiB | 15.00 MiB | 14.0 ms | 702.9 ms |
-| 32,768 small-object fields | feed | 23.21 MiB | 14.68 MiB | 14.3 ms | 708.8 ms |
-| 32,768 scalar fields | memory | 15.93 MiB | 15.81 MiB | 8.2 ms | 618.6 ms |
-| 32,768 scalar fields | file | 15.93 MiB | 14.87 MiB | 8.0 ms | 660.4 ms |
-| 32,768 scalar fields | feed | 15.93 MiB | 15.03 MiB | 8.3 ms | 689.1 ms |
+| 32,768 short array objects | memory | 18.62 MiB | 14.16 MiB | 9.9 ms | 28.1 ms |
+| 32,768 short array objects | file | 18.68 MiB | 13.70 MiB | 9.5 ms | 29.4 ms |
+| 32,768 short array objects | feed | 18.64 MiB | 13.59 MiB | 9.5 ms | 31.6 ms |
+| 32,768 small-object fields | memory | 23.16 MiB | 17.69 MiB | 13.1 ms | 658.2 ms |
+| 32,768 small-object fields | file | 23.18 MiB | 15.07 MiB | 13.3 ms | 774.6 ms |
+| 32,768 small-object fields | feed | 23.17 MiB | 14.86 MiB | 13.4 ms | 732.4 ms |
+| 32,768 scalar fields | memory | 15.89 MiB | 15.68 MiB | 7.6 ms | 632.9 ms |
+| 32,768 scalar fields | file | 15.88 MiB | 14.87 MiB | 7.7 ms | 695.1 ms |
+| 32,768 scalar fields | feed | 15.89 MiB | 14.90 MiB | 8.8 ms | 739.7 ms |
 
-The final completed-file/two-fork results are 13.66 MiB (array objects),
-15.04 MiB (wide objects), and 15.02 MiB (wide scalars), versus paired pure
-cjson 27.16, 34.13, and 19.21 MiB respectively. The historical table above
+The final completed-file/two-fork results are 13.70 MiB (array objects),
+15.07 MiB (wide objects), and 15.18 MiB (wide scalars), versus paired pure
+cjson 27.22, 34.12, and 19.26 MiB respectively. The historical table above
 used two forks and the old import policy; do not attribute differences caused
 by branch count or corrected imports solely to runtime optimization.
 
@@ -108,13 +111,13 @@ local runs, not production throughput forecasts.
 
 | Shape | cjson RSS | LeanJSON RSS | cjson p50 | LeanJSON p50 |
 | --- | ---: | ---: | ---: | ---: |
-| 32,768 short array objects | 22.96 MiB | 13.69 MiB | 20 ms | 62 ms |
-| 32,768 small-object fields | 45.55 MiB | 17.16 MiB | 29 ms | 1387 ms |
+| 32,768 short array objects | 22.76 MiB | 13.59 MiB | 20 ms | 62 ms |
+| 32,768 small-object fields | 43.00 MiB | 17.18 MiB | 26 ms | 1413 ms |
 
 **Memory improved; wide-object processing is still much slower than cjson.**
 Exact duplicate handling spills large key maps to disk and performs many small
-synchronous I/O operations. The wide-object HTTP run recorded roughly 2.7
-million write syscalls and 5.6 million read syscalls over six requests. This is
+synchronous I/O operations. The wide-object HTTP run recorded 2,687,346
+write syscalls and 5,660,302 read syscalls over six requests. This is
 an explicit CPU/I/O/latency cost, not a speed improvement. Consider it before
 using this path for latency-sensitive workloads consisting of many small fields.
 
@@ -148,14 +151,58 @@ option forwarding. Normal/cold file and small-memory HTTP probes verify actual
 zero/tiny decoder settings; the benchmark driver now asserts effective index
 settings on each LeanJSON sample. The 32,768-member zero-budget iteration probe
 completes without a retained sibling cache; annotated iteration supplies exactly
-two input-length passes in its native window test. Final whole-branch review and
-exact committed runtime-image verification are recorded when complete.
+two input-length passes in its native window test. The final whole-branch
+review and scoped fix review are summarized below.
 
 Earlier candidate records remain at [bounded-metadata-after.jsonl](bounded-metadata-after.jsonl)
 and [bounded-metadata-http.jsonl](bounded-metadata-http.jsonl). They used the
 pre-review runtime with LeanJSON preloaded in cjson cells, and are retained for
 traceability rather than used as final acceptance evidence. The original
 [check receipts](bounded-metadata-checks.txt) apply to that earlier runtime.
+
+## Final review and hardened hash map
+
+The independent whole-branch review covered `6926158..e7b3218`. It found one
+important issue: public fixed FNV hashing with disk linear probing allowed
+chosen decoded keys to cause quadratic synchronous I/O. Commit `5729eb2`
+replaces it with a per-map standard-library `RandomState` hashing the complete
+key. Insertion, rehashing and current-occurrence lookup use consistent keyed
+fingerprints; full decoded-key comparison remains mandatory on hash matches.
+It adds constant state per active map and no new dependency.
+
+The deterministic shared-path work regression uses 1,024 keys that collide in
+the former FNV buckets. Insertion/rehash logical file reads fell from **920,807
+to 7,085**, and current/stale lookup reads from **1,053,696 to 7,138**. These
+are instrumented read operations, not kernel syscall counts. Production uses
+randomized state; tests inject a deterministic standard-library hasher into the
+same map implementation. Forced full-hash collisions still preserve exact
+comparison, growth, replacement and final-value/order semantics. This removes
+the demonstrated cheap collision construction, without claiming a universal
+worst-case CPU bound.
+
+The same grouped fix pins every benchmark Docker command to its resolved image
+ID, fingerprints packaged Lua contents, and removes trailing whitespace from
+selected receipts. Three host-side runner tests pass, including rejection of
+a Lua-only change when the native fingerprint is unchanged. The scoped
+`e7b3218..5729eb2` re-review marked all three findings **addressed**, with no
+new Critical, Important or Minor breakage. Refreshed process/HTTP/Valgrind
+results above apply to this hardened runtime, not the earlier reviewed binary.
+
+Exact committed runtime image: `lua-leanjson-openresty:bounded-5729eb2`, built from
+`5729eb2bcacf015f54dcbc039cb3192ac13a4e91`, ID
+`sha256:2de4db568da7f59aa895aae055080dffe4a3f2f3161268ed4e0a8d1bbd09b51c`. The smoke check used the immutable image ID and passed
+four memory/file/incremental length-and-SHA cases plus malformed-input
+rejection. The runtime contains neither Rust nor Cargo. No hosted CI,
+GitHub publication or package publication is claimed.
+
+The [raw-log archive](bounded-metadata-logs.tar.gz) retains original review
+reports, red/green and full-gate
+logs, prior final JSONL records, matrix summaries and image receipts. Earlier
+failed runs remain labeled by their original filenames. During the final
+Valgrind refresh OrbStack stopped and interrupted the fourth probe before a
+result; its Docker transport-error log is retained. The same probe passed after
+restoring the existing environment. All four accepted logs report zero errors
+and zero bytes remaining.
 
 ## Reproduction
 

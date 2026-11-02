@@ -227,13 +227,13 @@ direct mutation and no forced GC during measured phases:
 
 | Shape | lua-cjson peak RSS | LeanJSON peak RSS |
 | --- | ---: | ---: |
-| 32,768 short array objects | 18.65 MiB | 13.68 MiB |
-| 32,768 small-object fields | 23.19 MiB | 15.00 MiB |
-| 32,768 scalar fields | 15.93 MiB | 14.87 MiB |
+| 32,768 short array objects | 18.68 MiB | 13.70 MiB |
+| 32,768 small-object fields | 23.18 MiB | 15.07 MiB |
+| 32,768 scalar fields | 15.88 MiB | 14.87 MiB |
 
 **The memory reduction has a CPU/I/O cost.** In the paired local HTTP run with
-two concurrent clients, the wide-object case used 17.16 MiB versus cjson's
-45.55 MiB, but p50 latency was **1,387 ms versus 29 ms**. Wide exact-key
+two concurrent clients, the wide-object case used 17.18 MiB versus cjson's
+43.00 MiB, but p50 latency was **1,413 ms versus 26 ms**. Wide exact-key
 normalization currently uses many synchronous disk operations. This is not a
 speed improvement or a production latency guarantee.
 

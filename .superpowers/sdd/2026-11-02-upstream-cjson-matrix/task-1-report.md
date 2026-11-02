@@ -34,15 +34,18 @@ Owned files:
 - `tests/upstream-cjson/worker.lua`: original Lua definition execution, native or
   direct LeanJSON dispatch, explicit unavailable symbols, shared setup dependency
   tracking, original/logical verdicts, typed bounded observations and cleanup.
-- `tests/upstream-cjson/test_runner.py`: seven focused tests, including real
+- `tests/upstream-cjson/test_runner.py`: eight focused tests, including real
   native/target worker fault controls and source-inventory alias checks.
 - `tests/upstream-cjson/README.md`: reproduction, schema, adaptation and limits.
 - `Makefile`: `cjson-compat`, `cjson-compat-strict`, `cjson-compat-controls`, output,
   image and optional locale-directory variables.
-- This task report. Root-owned README/design/plan/final report were not edited.
+- `docs/verification/upstream-cjson-compatibility.md`: synchronized in formal-review
+  fix round 1 under explicit supervisor authorization.
+- This task report. Root-owned README/design/plan were not edited.
 
 Runtime sources, product semantics, and `vendor/lua-cjson` were not edited. No
-remote actions, pushes, PRs, merges, images changes, or additional agents occurred.
+remote actions, pushes, PRs, merges or image changes occurred; no additional agents
+were spawned by this implementer.
 
 All 131 `test.lua` rows execute in original order and shared state. The adapter
 replaces only the upstream *runner* entrypoints in `cjson.util`; original cases,
@@ -104,7 +107,7 @@ Its loaded source-built module reports `cjson`, version `2.1.0.11`; the rockspec
 SHA256s are all in `final/inventory.json`; definition hashes accompany stable IDs.
 
 Final reference library SHA256:
-`c70945c3a528bc88a787e2b6fc138f41819fbce8dc3d6c759d1164527f3561c3`.
+`6daf540edbc1fbdd1f0ee1ca331d901f5f94f29e59b05e8190b805ec212894ea`.
 The complete `.so` is retained as `final/native-reference.so`, with matching
 requested paths and process maps in baseline worker records. Build uses the
 upstream Makefile, GCC 11.4.0, LuaJIT 2.1 headers, `-O3 -Wall -pedantic -DNDEBUG -g`,
@@ -188,28 +191,29 @@ elements/object keys are selected using quoted JSONPath derived from the native
 typed observation. Scalars select `$`; empty containers report no selectable child.
 Original inputs, reference API/configuration and original case IDs remain attached.
 
-| Source | Combined pass | Combined difference | Stats-bearing proxies | Zero-index violations | Nonzero actual preloads | Unselected sibling reads | Sibling mismatches |
+| Source | Compatibility pass | Behavioral difference | Stats-bearing proxies | Zero-index violations | Nonzero actual preloads | Unselected sibling reads | Sibling mismatches |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| memory | 35 | 45 | 31 | 0 | 31 | 9 | 0 |
-| file | 35 | 45 | 31 | 0 | 31 | 9 | 0 |
-| feed | 35 | 45 | 31 | 0 | 31 | 9 | 0 |
+| memory | 36 | 44 | 31 | 0 | 31 | 9 | 0 |
+| file | 36 | 44 | 31 | 0 | 31 | 9 | 0 |
+| feed | 36 | 44 | 31 | 0 | 31 | 9 | 0 |
 
 Each source has 36 successful reference/target decodes with equal typed results;
 27 both-error outcomes with different exact details; 15 reference-success/target-
 failure outcomes; and 2 reference-failure/target-success outcomes. Settings and
 safe-module semantics are not emulated during ordinary-decode replay.
 
-The combined pass count additionally requires a complete encoded-output logical
-roundtrip. One value-equivalent case, `agentzh.t:TEST20#decode1` (2^53), fails that
-stronger check because default precision rounds the encoded number. It is a
-combined supplemental difference, not a decode-value mismatch. Native cjson's
-default 14-digit encoding has the same precision loss, so this extra lossless
-roundtrip failure is **not a target-only cjson incompatibility**. The primary
-precision difference is the target API's inability to select 15/16 digits. There are 37
-successful encoded roundtrips including the two reference-rejected values. Exact
-encoded bytes and that separate invariant are retained, so these totals must not
-be advertised as 35/80 direct-decode compatibility. Automatic-index checks and
-supplemental differences also feed strict mode.
+Lossless encoded-output roundtrip is a separate diagnostic. One compatible decode
+case, `agentzh.t:TEST20#decode1` (2^53), fails that stronger check because default
+precision rounds the encoded number. Native cjson's default 14-digit encoding has
+the same precision loss, so this is **not a target-only cjson incompatibility**
+and does not change classification or strict status. The primary precision
+difference is the target API's inability to select 15/16 digits. Each source
+separately reports 37 complete roundtrips (including two reference-rejected
+values), 1 incomplete roundtrip and 42 not run after decode failure. Exact encoded
+bytes remain retained. The 44 compatibility differences are the 27 error-detail
+mismatches, 15 reference-success/target-failure and 2 reference-failure/target-
+success outcomes. Actual decode/access differences and automatic-index checks
+feed strict mode; lossless-roundtrip diagnostics do not.
 
 ## Negative controls, execution and self-review
 
@@ -222,14 +226,17 @@ Tests were written and observed red before implementation. Evidence directory:
 - `review-behavior-red.log`: safe constant wrongly classified as a difference;
   getter after failed reset wrongly classified pass while its raw match was true.
 - `inventory-alias-red.log`: factory decode incorrectly categorized as settings.
-- `green.log`: final **7 tests pass**. Native/target controls exercise omitted,
+- `green.log`: initial **7 tests pass**; `roundtrip-review-green.log` records the
+  final **8 tests pass** after formal review. Native/target controls exercise omitted,
   duplicate and unexpected IDs; intentional wrong return after real target decode;
   missing API; failed helper dependency; malformed input with unmodified error;
   nil/false/null/bytes/NaN/infinity/arity; one-byte UTF-8/escape/exponent/structural
   splits; actual escaped-key sparse preload and unselected sibling access; missing
-  safe constant/module; failed-reset getter; strict/report/harness exit policy.
+  safe constant/module; failed-reset getter; strict/report/harness exit policy;
+  identical native/target default-precision loss remaining compatible with strict
+  exit 0 in the isolated selective regression.
 
-Authoritative final command (exit 1, 21.328 seconds):
+Authoritative final command (exit 1, 21.741 seconds):
 
 ```sh
 python3 scripts/verify-cjson-compat.py --docker --strict \
@@ -260,12 +267,15 @@ and a final source-inventory-annotation refresh were justified by the new inputs
 and classification corrections. The prior locale run is preserved in
 `locale-before-inventory-annotation-fix/`; final/ is authoritative.
 
-Self-review checks in `final/self-review-checks.json` independently re-read all
+Initial self-review checks, retained in `before-roundtrip-fix/self-review-checks.json`, independently re-read all
 164-record baseline/cell outputs and 80-record selective outputs, verify no
 missing/duplicate/unexpected IDs, confirm all actual source paths and empty
 cleanup errors, check every stats-bearing selective proxy has zero index bytes,
 verify **9,424 typed string lengths/SHA256s** against exact hex/blob data, and
-verify the saved reference library hash. `git diff --check` passed. The supervisor
+verify that run's saved reference library hash. The refreshed
+`final/roundtrip-review-validation.json` rechecks completeness, cleanup, zero
+indexes, new reference hash and the corrected precision-case classification.
+`git diff --check` passed. The supervisor
 independently reconciled inventory/source hashes, native maps, dispatch, cleanup,
 locale provenance and representative classifications, and reported that the
 original unmodified reference `test.lua` plus all nine fixtures passed 137/137
@@ -287,7 +297,7 @@ assertions (`root-original-upstream.log` beside this report).
   The canned-output branch remains the sole environment-inapplicable full case.
 - Full-root preload proves full-value preload behavior; sparse replay separately
   proves real selections, unselected access and complete observations. Supplemental
-  combined counts include the stricter encoding invariant described above.
+  compatibility counts exclude the separate lossless encoding diagnostic.
 - Deep/cyclic input diagnostics are bounded at 48 levels and point to unmodified
   generation definitions; outputs/errors retain typed exact values or complete
   deduplicated byte artifacts. Long strings are not repeatedly dumped into logs.
@@ -295,3 +305,81 @@ assertions (`root-original-upstream.log` beside this report).
   evidence for supervisor archival. The task commit includes only the focused
   source files and this report. No outstanding harness failure or counted-case
   classification omission remains in the final evidence.
+
+## Formal review fix round 1
+
+Base: `0014611`. Important finding: an additional lossless encode/decode check
+incorrectly changed a matching selective decode into `behavioral_difference` and
+could make strict compatibility fail even when native cjson lost the same precision.
+Fix commit: `c028011a17ead53400c11d54f5df8baffe6fc0d5`.
+
+`run_selective` now derives compatibility from the real reference/target decode
+result, unselected access and index checks. The existing `encoded_output`,
+`encoded_roundtrip_complete` and error evidence remain untouched. Each source
+summary exposes `encoded_roundtrip_diagnostics` separately; these counts do not
+change classifications or the compatibility boolean used by strict mode.
+
+The new real-process regression decodes `9007199254740992`, encodes it with native
+cjson and LeanJSON defaults, and re-decodes those encoded bytes. Both original
+workers satisfy the expected result, produce exactly `9.007199254741e+15`, and
+return false for equality to the original integer. It then runs both captured
+inputs through every selective source using the actual `run_selective` path.
+Before the fix the precision input was wrongly incompatible; after the fix both
+inputs pass and isolated strict status is 0 while the incomplete-roundtrip
+diagnostic remains false and the original encoded bytes remain available.
+
+Focused command:
+
+```sh
+python3 -m unittest discover -s tests/upstream-cjson -p 'test_*.py' -v
+```
+
+Observed red output in `task-1-artifacts/roundtrip-review-red.log`:
+
+```text
+selective-memory: {"behavioral_difference": 1, "pass": 1}
+selective-file: {"behavioral_difference": 1, "pass": 1}
+selective-feed: {"behavioral_difference": 1, "pass": 1}
+AssertionError: False is not true: compatible=false
+Ran 8 tests in 4.567s; FAILED (failures=1)
+```
+
+Observed green output in `task-1-artifacts/roundtrip-review-green.log`:
+
+```text
+selective-memory: {"pass": 2}
+selective-file: {"pass": 2}
+selective-feed: {"pass": 2}
+Ran 8 tests in 4.544s; OK
+```
+
+The prior `final/` directory was moved to `task-1-artifacts/before-roundtrip-fix/`.
+The authoritative command above was rerun into a fresh `final/` with the same
+prepared locale, preserving all prior evidence. New full-run output:
+
+```text
+baseline: {"pass":160,"setup_success":3,"environment_inapplicable":1}
+all nine cells: {"unsupported":134,"pass":15,"behavioral_difference":14,"environment_inapplicable":1}
+selective-memory: {"pass":36,"behavioral_difference":44}
+selective-file: {"pass":36,"behavioral_difference":44}
+selective-feed: {"pass":36,"behavioral_difference":44}
+harness_healthy=true, compatible=false; direct strict exit=1
+elapsed_seconds=21.741
+```
+
+Each source separately reports diagnostics `{complete:37,incomplete:1,not_run:42}`.
+`agentzh.t:TEST20#decode1` now has `matches_reference_result=true`,
+`encoded_roundtrip_complete=false`, and `classification=pass`. The main matrix
+remains incompatible because its genuine gaps are unchanged. New provenance
+and reference binary hash are reflected in this report and the verification doc.
+`final/roundtrip-review-validation.json` records refreshed case completeness,
+cleanup, zero-index checks, library hash and the precision record in all sources.
+
+Exact round-1 source/document manifest: `scripts/verify-cjson-compat.py`,
+`tests/upstream-cjson/test_runner.py`, `tests/upstream-cjson/README.md`,
+`docs/verification/upstream-cjson-compatibility.md`, and this task report. Runtime,
+vendor, worker dispatch, root audit scripts, ledger and archive were not edited.
+`make test` was not repeated, as requested; its earlier 428 Rust/439 Lua pass
+evidence remains retained. The Minor stale-status-artifact issue was deliberately
+left for supervisor triage. Formal scoped re-review and supervisor archive refresh
+remain supervisor work.

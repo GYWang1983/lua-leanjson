@@ -332,6 +332,14 @@ Additional boundaries:
 
 ## Compatibility and migration
 
+The [complete pinned upstream cjson matrix](docs/verification/upstream-cjson-compatibility.md)
+has been executed for lazy, `lazyload=false`, and preload modes across memory,
+file, and incremental input. It **does not establish full cjson compatibility**:
+missing configuration APIs, exact error differences, precision settings, and
+foreign array-proxy encoding remain gaps. Eager loading returns ordinary Lua
+values; it does not implement every cjson API. The report separates unsupported
+setup dependencies from actual value/output differences and links the raw evidence.
+
 All current public names use the new namespace:
 
 | Surface | LeanJSON name |

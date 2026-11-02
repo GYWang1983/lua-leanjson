@@ -16,6 +16,26 @@ import tempfile
 import time
 
 
+def unique_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssertionError(f"normalized output contains a duplicate key: {key!r}")
+        result[key] = value
+    return result
+
+
+def same_json(actual, expected):
+    if isinstance(expected, bool) or expected is None or isinstance(expected, str):
+        return type(actual) is type(expected) and actual == expected
+    if isinstance(expected, (int, float)):
+        return type(actual) in (int, float) and actual == expected
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(actual) == len(expected) and all(map(same_json, actual, expected))
+    return isinstance(actual, dict) and actual.keys() == expected.keys() and all(
+        same_json(actual[key], value) for key, value in expected.items())
+
+
 def arguments():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
@@ -67,9 +87,11 @@ def main():
         return completed.stdout, time.monotonic() - began
 
     image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
+    image_revision = subprocess.check_output(["docker", "image", "inspect", args.image, "--format",
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}'], text=True).strip()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip())
-    environment = {"kind": "environment", "image": args.image, "image_id": image_id,
+    environment = {"kind": "environment", "image": args.image, "image_id": image_id, "image_revision": image_revision,
                    "checkout_revision": revision, "checkout_dirty": dirty, "runtime_image": args.runtime_image,
                    "target_bytes": args.bytes, "branches": args.branches, "sources": args.sources,
                    "cases": args.cases, "index_budget_bytes": args.index_budget_bytes,
@@ -99,7 +121,7 @@ def main():
                         args.index_depth, args.index_array_limit])
                     row = json.loads(stdout.strip())
                     result = (output / result_name).read_bytes()
-                    if json.loads(result) != expected:
+                    if not same_json(json.loads(result, object_pairs_hook=unique_object), expected):
                         raise AssertionError(f"semantic oracle failed: {case}/{source}/{method}")
                     if len(result) != row["output_bytes"] or row["source_bytes"] != len(input_bytes):
                         raise AssertionError(f"byte count failed: {case}/{source}/{method}")

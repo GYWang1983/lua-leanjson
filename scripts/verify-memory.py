@@ -44,7 +44,7 @@ def arguments():
     parser.add_argument("--cases", nargs="+", default=[
         "short-elements", "wide-objects", "wide-scalars", "duplicate-tail",
         "wide-duplicates", "deep-objects", "prompt", "messages",
-        "short-elements:far", "wide-objects:scan",
+        "short-elements:far", "wide-objects:scan", "wide-objects:scan-auto",
     ])
     parser.add_argument("--sources", nargs="+", choices=["memory", "file", "feed"], default=["memory", "file", "feed"])
     parser.add_argument("--bytes", type=int, default=1048576)

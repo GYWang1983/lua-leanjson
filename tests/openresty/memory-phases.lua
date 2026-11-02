@@ -52,12 +52,12 @@ assert(file:close())
 sample("parsed")
 assert(body.model == "original")
 local visited = 0
-if access == "scan" then
+if access == "scan" or access == "scan-auto" then
     for _, value in (method == "cjson" and pairs or json.pairs)(body) do
         if type(value) == "table" then
             local id = value.id
             assert(type(id) == "number")
-            if method == "leanjson" then json.close(value) end
+            if method == "leanjson" and access == "scan" then json.close(value) end
             visited = visited + 1
         end
     end

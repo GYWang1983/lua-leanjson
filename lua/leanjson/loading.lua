@@ -168,17 +168,38 @@ end
 function M.rebuild(backend, handle, scope)
     local shared = require("leanjson.source_backend")
     local leases = require("leanjson.leases")
+    leases.check(scope)
     local result = ffi.new("leanjson_source_v1_result[1]")
     local source = C.leanjson_source_v2_new(shared.native_options(backend.opts), result)
     if source == nil then error(shared.result_error(result), 0) end
     source = ffi.gc(source, C.leanjson_source_v1_release)
+    local scratch, builder
+    local record = leases.track(scope, function()
+        if builder then
+            builder.root = nil
+            for _, frame in ipairs(builder.frames) do
+                frame.values, frame.keys, frame.entries, frame.raw, frame.parts, frame.key = nil, nil, nil, nil, nil, nil
+            end
+            builder.stack, builder.frames = {}, {}
+            builder = nil
+        end
+        if scratch then scratch.state.source = nil; scratch = nil end
+        if source then
+            local owned = source
+            source = nil
+            ffi.gc(owned, nil)
+            C.leanjson_source_v1_release(owned)
+        end
+    end)
+    local fallback = leases.fallback(scope, record)
     local ok, value = pcall(function()
-        local scratch = { state = { source = source }, opts = { lazyload = false } }
-        local builder = M.new(scratch)
+        scratch = { state = { source = source }, opts = { lazyload = false } }
+        builder = M.new(scratch)
         local first, last, offset = shared.exact(handle.raw_start), shared.exact(handle.raw_end), 0
         while first < last do
             local bytes = backend:read(first, math.min(last - first, backend.opts.chunk_size), scope)
             leases.check(scope)
+            if not fallback or not source then error("leanjson: source operation closed", 0) end
             shared.require_status(C.leanjson_source_v1_feed(source, offset, bytes, #bytes, result), 2, result)
             builder:drain()
             first, offset = first + #bytes, offset + #bytes
@@ -188,8 +209,8 @@ function M.rebuild(backend, handle, scope)
         leases.check(scope)
         return builder:take()
     end)
-    ffi.gc(source, nil)
-    C.leanjson_source_v1_release(source)
+    leases.finish(scope, record)
+    fallback = nil
     if not ok then error(value, 0) end
     return value
 end

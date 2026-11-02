@@ -316,6 +316,121 @@ describe("decode loading modes", function()
         assert.is_true(ok, failure)
     end)
 
+    for _, operation in ipairs({ "finish", "get" }) do
+        it("immediately releases a partially rebuilt eager " .. operation .. " while its worker stays suspended", function()
+            local loading = require("leanjson.loading")
+            local original_new = loading.new
+            local input = json.new_decoder({ lazyload = false, chunk_size = 64 })
+            assert.is_true(input:feed('{"a":[' .. string.rep("123,", 200) .. '0]}'))
+            local first = assert(input:finish())
+            local observed, calls
+            local weak = setmetatable({}, { __mode = "v" })
+            local ok, failure = pcall(function()
+                loading.new = function(backend)
+                    local builder = original_new(backend)
+                    observed = builder
+                    return builder
+                end
+                calls = 0
+                input.backend.opts.on_chunk = function()
+                    if observed then
+                        calls = calls + 1
+                        if calls == 4 then
+                            weak[1] = observed.stack[operation == "finish" and 2 or 1].values
+                            coroutine.yield("partial rebuild paused")
+                        end
+                    end
+                end
+                local worker = coroutine.create(function()
+                    if operation == "finish" then return input:finish() end
+                    return input:get("a")
+                end)
+                assert.are.same({ true, "partial rebuild paused" }, { coroutine.resume(worker) })
+                assert.is_true(#weak[1] >= 20, "pause must follow multiple populated source chunks")
+                assert.is_not_nil(observed.backend.state.source)
+                input:close()
+                assert.is_nil(input.backend.state.fd)
+                assert.is_nil(observed.backend.state.source, "close retained the scratch native source")
+                assert.is_nil(observed.root)
+                assert.are.equal(0, #observed.stack)
+                assert.are.equal(0, #observed.frames)
+                assert.is_nil(next(input.scope.active))
+                collectgarbage("collect")
+                assert.is_nil(weak[1], "suspended worker retained partially rebuilt values")
+                assert.are.equal("suspended", coroutine.status(worker))
+                local resumed, value, status, err = coroutine.resume(worker)
+                assert.is_true(resumed)
+                assert.is_nil(value)
+                if operation == "finish" then err = status else assert.are.equal("ERROR", status) end
+                assert.matches("closed", err, 1, true)
+                assert.is_nil(observed.backend.state.source)
+                assert.are.equal(201, #first.a)
+            end)
+            loading.new = original_new
+            input:close()
+            assert.is_true(ok, failure)
+        end)
+
+        it("cleans eager " .. operation .. " scratch ownership on success and source errors", function()
+            local loading = require("leanjson.loading")
+            local original_new = loading.new
+            local inputs = {}
+            local ok, failure = pcall(function()
+                for _, fail in ipairs({ false, true }) do
+                    local input = json.new_decoder({ lazyload = false, chunk_size = 64 })
+                    inputs[#inputs + 1] = input
+                    assert.is_true(input:feed('{"a":[' .. string.rep("123,", 200) .. '0]}'))
+                    assert(input:finish())
+                    local observed, calls
+                    local weak = setmetatable({}, { __mode = "v" })
+                    loading.new = function(backend)
+                        local builder = original_new(backend)
+                        observed = builder
+                        return builder
+                    end
+                    calls = 0
+                    input.backend.opts.on_chunk = function()
+                        if observed then
+                            calls = calls + 1
+                            if fail and calls == 4 then
+                                weak[1] = observed.stack[operation == "finish" and 2 or 1].values
+                                assert(#weak[1] >= 20)
+                                error("intentional repeated eager source error")
+                            end
+                        end
+                    end
+                    local value, status, err
+                    if operation == "finish" then value, err = input:finish()
+                    else value, status, err = input:get("a") end
+                    if fail then
+                        assert.is_nil(value)
+                        if operation == "get" then assert.are.equal("ERROR", status) end
+                        assert.matches("intentional repeated eager source error", err, 1, true)
+                    else
+                        assert.is_nil(err)
+                        if operation == "get" then assert.are.equal("READY", status)
+                        else value = value.a end
+                        assert.are.equal(201, #value)
+                        assert.are.equal(123, value[1])
+                        assert.are.equal(0, value[201])
+                    end
+                    assert.is_nil(observed.backend.state.source)
+                    assert.is_nil(observed.root)
+                    assert.are.equal(0, #observed.stack)
+                    assert.are.equal(0, #observed.frames)
+                    assert.is_nil(next(input.scope.active))
+                    collectgarbage("collect")
+                    assert.is_nil(weak[1])
+                    input:close()
+                    loading.new = original_new
+                end
+            end)
+            loading.new = original_new
+            for _, input in ipairs(inputs) do input:close() end
+            assert.is_true(ok, failure)
+        end)
+    end
+
     it("supports all loading modes without the optional cjson module", function()
         local interpreter = os.getenv("LUAJIT_BIN") or os.getenv("LUAJIT")
             or (arg and type(arg[-1]) == "string" and not arg[-1]:match("^%-") and arg[-1]) or "luajit"

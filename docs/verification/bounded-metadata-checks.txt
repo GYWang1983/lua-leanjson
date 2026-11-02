@@ -1,0 +1,218 @@
+Runtime revision: 1f21ab56f87327afa968f35536238b19f06182d3
+Environment: lua-qjson-dev:task3-repro, Linux ARM64, OpenResty 1.29.2.4, Rust 1.90
+Commands and scope are described in bounded-metadata.md.
+Selected receipts below preserve test summaries; no hosted CI or timed fuzz campaign is claimed.
+
+fullgate-reclamation.log
+original log SHA256: 223b7054cedcf0189f007d362f2cd7adb7c8449149fb883d7a6221a0e69b8f4d
+test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ndjson_edge_cases.rs (target/release/deps/ndjson_edge_cases-7612ecba6e3faefc)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.35s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.14s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ndjson_edge_cases.rs (target/release/deps/ndjson_edge_cases-1d80088703b08a5a)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.34s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.13s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ndjson_edge_cases.rs (target/release/deps/ndjson_edge_cases-ce906cdf314ba228)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.33s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.11s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 169 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+     Running tests/ndjson_edge_cases.rs (target/release/deps/ndjson_edge_cases-7612ecba6e3faefc)
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 76 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.32s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.15s
+test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 17 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+403 successes / 0 failures / 0 errors / 0 pending : 34.957597 seconds
+Total: 0 warnings / 0 errors in 62 files
+2 successes / 0 failures / 0 errors / 0 pending : 0.312409 seconds
+17 successes / 0 failures / 0 errors / 0 pending : 21.542221 seconds
+source stress: 500 valid + 500 mutated cases; seed 760076
+1..50
+
+fuzz-compile-reclamation.log
+original log SHA256: c0ecc19cd45e6e90cade4788d0b5340fcb6ddb2956229c39fc60646e77cf61fa
+    Checking leanjson v0.1.0 (/workspace)
+    Checking leanjson-fuzz v0.0.0 (/workspace/fuzz)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.32s
+
+installed-smoke-reclamation.log
+original log SHA256: 2381ace57699747d3f94d4840e6a2ac7508a0aaf48119862f58145505d9e1bc6
+No existing manifest. Attempting to rebuild...
+lua-leanjson scm-1 is now installed in /tmp/leanjson-bounded-rock (license: Apache-2.0)
+
+Installed LeanJSON memory/file/feed/fork/get/reader/close and OpenResty imports passed
+
+valgrind-reclaimed-unfinished.log
+original log SHA256: 89e7b6781f1d25ad6898350a0ce625d1a64985652fed851f3ce0768c21f1beb9
+==383== Memcheck, a memory error detector
+==383== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
+==383== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
+==383== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua unfinished /tmp/leanjson-valgrind
+==383== 
+==383== 
+==383== HEAP SUMMARY:
+==383==     in use at exit: 0 bytes in 0 blocks
+==383==   total heap usage: 3,350 allocs, 3,350 frees, 802,971 bytes allocated
+==383== 
+==383== All heap blocks were freed -- no leaks are possible
+==383== 
+==383== For lists of detected and suppressed errors, rerun with: -s
+==383== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+
+valgrind-reclaimed-collect.log
+original log SHA256: 499e6bcc42ed96e7e971503ec7b53a4b69ecc15c789453072d6c7169c024194d
+==389== Memcheck, a memory error detector
+==389== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
+==389== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
+==389== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua collect /tmp/leanjson-valgrind
+==389== 
+==389== 
+==389== HEAP SUMMARY:
+==389==     in use at exit: 0 bytes in 0 blocks
+==389==   total heap usage: 3,350 allocs, 3,350 frees, 802,971 bytes allocated
+==389== 
+==389== All heap blocks were freed -- no leaks are possible
+==389== 
+==389== For lists of detected and suppressed errors, rerun with: -s
+==389== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+
+valgrind-reclaimed-closed.log
+original log SHA256: 66afc4908d6f96e635d249740e91b36114c7959ebdc8556d60b5486567a2b5ee
+==395== Memcheck, a memory error detector
+==395== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
+==395== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
+==395== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua closed /tmp/leanjson-valgrind
+==395== 
+==395== 
+==395== HEAP SUMMARY:
+==395==     in use at exit: 0 bytes in 0 blocks
+==395==   total heap usage: 3,926 allocs, 3,926 frees, 978,267 bytes allocated
+==395== 
+==395== All heap blocks were freed -- no leaks are possible
+==395== 
+==395== For lists of detected and suppressed errors, rerun with: -s
+==395== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+
+valgrind-reclaimed-deep-spill.log
+original log SHA256: 369bb661a16559d8a42b89252aef566a78b8a8e8628ab29ed1cbb1204ecfd559
+==401== Memcheck, a memory error detector
+==401== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
+==401== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
+==401== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_deep_spill.lua
+==401== 
+==401== 
+==401== HEAP SUMMARY:
+==401==     in use at exit: 0 bytes in 0 blocks
+==401==   total heap usage: 180,766 allocs, 180,766 frees, 14,553,861 bytes allocated
+==401== 
+==401== All heap blocks were freed -- no leaks are possible
+==401== 
+==401== For lists of detected and suppressed errors, rerun with: -s
+==401== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

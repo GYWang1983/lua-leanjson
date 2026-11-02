@@ -39,6 +39,12 @@ values explicitly read. A long string becomes a complete Lua string when
 accessed. In-memory input retains its original string. LeanJSON does **not**
 promise constant memory or lower memory use for every JSON shape.
 
+The source APIs validate the entire input but retain only a bounded optional
+index. By default they index to depth **3** and retain the first **3** entries
+of each indexed array, within a shared **1 MiB** metadata budget. Reads outside
+that index scan the original source on demand. Array lengths remain exact;
+these limits never hide fields or truncate a document.
+
 ## What this fork adds
 
 | Capability | What it enables |
@@ -48,6 +54,7 @@ promise constant memory or lower memory use for every JSON shape.
 | Bounded JSON reader | Emit original spans and changed values in chunks, and calculate the encoded length without building a complete output string. |
 | File-backed decoding | Validate and access a file through bounded windows instead of reading the whole file into Lua. |
 | Incremental input | Feed incoming chunks into a parser and owned disk spool. Final values become available after complete validation. |
+| Bounded metadata | Configure indexing depth, array prefix and a per-source index budget; access deferred content without retaining a complete node tree. |
 | Native OpenResty adapter | Receive memory/file/request-socket input and send readers through lua-resty-http, with explicit cancellation and error handling. |
 | Explicit resource ownership | Close holders deterministically; independently held children, forks and readers keep their source alive. |
 
@@ -56,12 +63,12 @@ The JSON core does not depend on `ngx`. OpenResty integration is isolated in
 
 ## Install from source
 
-The renamed package has **not yet been published to LuaRocks**. Install from
-this fork's development branch; pin a commit for reproducible deployments:
+The renamed package has **not yet been published to LuaRocks**. From a checkout
+of this fork, install the checked-out revision with the command below. Pin the
+commit you have validated; published branches may not yet include the runtime
+described in the latest local verification report.
 
 ```sh
-git clone --branch feat/openresty-json-source https://github.com/GYWang1983/lua-leanjson.git
-cd lua-leanjson
 luarocks --lua-version=5.1 make rockspec/lua-leanjson-scm-1.rockspec
 ```
 
@@ -115,7 +122,12 @@ local json = require "leanjson"
 local body, variant, reader
 
 local ok, err = pcall(function()
-    body = json.decode_file("request.json", { chunk_size = 65536 })
+    body = json.decode_file("request.json", {
+        chunk_size = 65536,
+        index_depth = 3,
+        index_array_limit = 3,
+        index_budget_bytes = 1048576,
+    })
     variant = json.fork(body)
     variant.model = "provider-model"
     json.close(body)
@@ -151,6 +163,21 @@ The input file must stay immutable while holders use it. LeanJSON closes its
 file descriptor when the final holder releases it; it never deletes an
 original input file. Incremental decoder spools are owned by LeanJSON and are
 removed after their final holder closes.
+
+The three index settings above are defaults and also apply to `decode()`,
+`new_decoder()` and the OpenResty input adapters. Zero disables the respective
+optional index work; it does not disable validation. The root is depth 0, so
+`a.b.c` is at the default depth frontier. `max_depth` separately controls the
+allowed JSON nesting depth.
+
+The index budget covers rebuildable retained metadata shared by forks, not the
+whole process. Input strings, explicit materialization, user-held values,
+mutation payloads, active parser/iterator state and output buffers have their
+own storage. Lower budgets trade memory for rescanning. Wide-object duplicate
+normalization can spill its exact key index to temporary storage; choose a
+writable disk-backed `temp_dir` when that storage must not consume RAM. A
+memory-backed filesystem and the OS page cache still count toward system or
+container memory even when process RSS stays low.
 
 ## Native OpenResty integration
 
@@ -193,23 +220,29 @@ for buffering, disk storage, upstream settings and cancellation behavior.
 
 ## Measured advantages and current limits
 
-A recorded native OpenResty benchmark of this fork, **before the LeanJSON
-rename and final ownership/policy fixes**, measured these process RSS high-water
-marks under the same input, concurrency and branch count:
+The bounded-metadata runtime passed **63/63** paired native-process memory
+checks across memory/file/feed sources, defaults, zero/tiny budgets, traversal
+and forks. The following rows use 32,768 entries, completed-file input,
+direct mutation and no forced GC during measured phases:
 
-| Workload | lua-cjson | This fork's measured baseline |
+| Shape | lua-cjson peak RSS | LeanJSON peak RSS |
 | --- | ---: | ---: |
-| 8 MiB prompt dominated by a long string | 73.8 MiB | 15.1 MiB |
-| 8 MiB nested messages with long content | 73.8 MiB | 14.9 MiB |
-| 32,768 short objects, about 0.9 MiB input | 45.9 MiB | 254.3 MiB |
+| 32,768 short array objects | 19.15 MiB | 13.61 MiB |
+| 32,768 small-object fields | 23.68 MiB | 14.93 MiB |
+| 32,768 scalar fields | 16.36 MiB | 15.09 MiB |
 
-The long-string cases used much less memory but had **higher latency and lower
-throughput**. Many short objects were substantially worse in both memory and
-CPU. These historical measurements are not timings of the renamed revision or
-a production guarantee. The [full verification report](docs/verification/openresty-json-source.md)
-records commits, hardware, methodology, latency, throughput and limitations;
-[raw measurements](docs/verification/openresty-json-source-benchmarks.jsonl)
-retain their original qjson labels for traceability.
+**The memory reduction has a CPU/I/O cost.** In the paired local HTTP run with
+two concurrent clients, the wide-object case used 16.70 MiB versus cjson's
+46.82 MiB, but p50 latency was **1,461 ms versus 30 ms**. Wide exact-key
+normalization currently uses many synchronous disk operations. This is not a
+speed improvement or a production latency guarantee.
+
+The [bounded-metadata report](docs/verification/bounded-metadata.md) records
+exact revisions, fingerprints, all process modes, CPU/HTTP results, raw data and
+validation boundaries. These finite tests fix the measured small-object
+regression; they do not prove lower RSS for every JSON shape or caller behavior.
+Earlier [historical measurements](docs/verification/openresty-json-source.md)
+and their original qjson labels remain available for traceability.
 
 Additional boundaries:
 
@@ -262,6 +295,11 @@ checks Linux/macOS, multiple OpenResty versions, installed packaging, fuzz
 corpus replay and memory tooling. Test results describe their recorded revision;
 see the [CI runs](https://github.com/GYWang1983/lua-leanjson/actions/workflows/ci.yml)
 for the current branch.
+
+After building the Linux library in the Docker verification environment, run
+`make openresty-memory-gate` on the Docker host for fresh-process comparisons
+against native cjson. The gate defaults to direct mutation without forks;
+`scripts/verify-memory.py --help` exposes source modes, budgets and fork counts.
 
 - [Proxy, mutation and reader API](docs/source-proxy-api.md)
 - [File/incremental input and ownership](docs/file-source-api.md)

@@ -52,26 +52,26 @@ native interfaces must have panic boundaries, header/cdef/export parity, loader
 checks and existing-layout assertions. Shared cached nodes must preserve source
 identity and remain immutable beneath branch overlays.
 
-- [ ] Write focused red tests for ordinary eager values and selective cache loads
+- [x] Write focused red tests for ordinary eager values and selective cache loads
   at `a.b.c.d.e`/far array positions with depth/prefix/budget all zero; record exact
   commands and expected missing behavior before implementation.
-- [ ] Add validated immutable selector compilation, native scan integration and
+- [x] Add validated immutable selector compilation, native scan integration and
   eager/selected builders. Tests exercise `$`, escaped quoted keys, indexes,
   wildcards, empty/missing/overlapping paths, invalid syntax, and optional cjson
   absence. Default mode retains its original behavior.
-- [ ] Integrate immutable preloaded state into lookup/scalar/iteration/reader and
+- [x] Integrate immutable preloaded state into lookup/scalar/iteration/reader and
   sparse mutation paths. Test later duplicate ancestor replacement/no-match,
   numbers above Lua exact range, byte-preserved untouched output, fork isolation,
   linked children and normalized/lexical duplicate behavior.
-- [ ] Integrate all adapters and deterministic lifetime/error handling. Test one-
+- [x] Integrate all adapters and deterministic lifetime/error handling. Test one-
   byte feeds, file I/O failure, callback close/abort during builds, repeated finish/
   get after caller edits, malformed ignored subtrees, no leaked eager descriptors,
   and no retained unselected giant scalar/metadata tree.
-- [ ] Record focused read-count/storage/work regressions, then run one canonical
+- [x] Record focused read-count/storage/work regressions, then run one canonical
   `make openresty-verify` in the pinned dev image with the shared target/registry
   volumes. Run locked offline fuzz-target compilation and isolated installed-tree
   smoke if ABI/module changes require them. Coordinate heavy tests with supervisor.
-- [ ] Self-review, explicit-path commit, and report commands/output/remaining
+- [x] Self-review, explicit-path commit, and report commands/output/remaining
   limitations to the task report. No subagents or remote Git actions.
 
 ### Task 2: Independent acceptance and user documentation (supervisor)
@@ -81,13 +81,13 @@ identity and remain immutable beneath branch overlays.
 **Interfaces:** Task 1 options and documented diagnostics; no private test-only
 shortcuts for measured public behavior.
 
-- [ ] Independently verify selected reads perform no source I/O with every index
+- [x] Independently verify selected reads perform no source I/O with every index
   disabled; unselected content remains lazy, readable and fully encoded. Verify
   eager results work through ordinary Lua operations and release source ownership.
-- [ ] Measure matched eager cjson/LeanJSON wide small-object cases and selective
+- [x] Measure matched eager cjson/LeanJSON wide small-object cases and selective
   large-prompt/message cases, with external typed output oracles and separate CPU/
   RSS reporting. Preserve prior evidence and avoid concurrent builds/measurements.
-- [ ] Update README examples and report exact revisions, scopes, selected-memory
+- [x] Update README examples and report exact revisions, scopes, selected-memory
   accounting, path limitations and performance tradeoffs. Do not claim a complete
   JSONPath/Schema implementation or universal cjson performance equivalence.
 - [ ] Complete independent task/whole-change review and meaningful final checks;

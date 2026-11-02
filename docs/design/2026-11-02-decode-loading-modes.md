@@ -46,9 +46,12 @@ encoding must retain the complete JSON. Explicit `preload_paths` must ignore
 - Apply these options consistently to `decode`, `decode_file`, `new_decoder`, and
   OpenResty adapters through `opts.decode`. Eager file results own no descriptors;
   the incremental decoder retains its existing explicit ownership until close.
-  Repeated finish/get semantics remain independent of caller mutations: completed
-  decoder queries read its immutable input, and full eager results are independent
-  ordinary values. No provisional values are exposed before final validation.
+  Repeated `new_decoder` finish/get semantics remain independent of caller
+  mutations: completed decoder queries read its immutable input, and full eager
+  results are independent ordinary values. Preserve the existing OpenResty Session
+  contract instead: it exposes one completed value, and repeated Session get/finish
+  see edits to that value in both socket and completed-body fallback modes. No
+  provisional values are exposed before final validation.
 
 ```lua
 local plain = json.decode(raw, { lazyload = false })

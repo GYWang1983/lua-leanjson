@@ -44,6 +44,8 @@ index. By default they index to depth **3** and retain the first **3** entries
 of each indexed array, within a shared **1 MiB** metadata budget. Reads outside
 that index scan the original source on demand. Array lengths remain exact;
 these limits never hide fields or truncate a document.
+Explicit `preload_paths` selections bypass all three index limits, including
+zero: selected values and the paths needed to reach them have separate storage.
 
 ## What this fork adds
 
@@ -55,6 +57,8 @@ these limits never hide fields or truncate a document.
 | File-backed decoding | Validate and access a file through bounded windows instead of reading the whole file into Lua. |
 | Incremental input | Feed incoming chunks into a parser and owned disk spool. Final values become available after complete validation. |
 | Bounded metadata | Configure indexing depth, array prefix and a per-source index budget; access deferred content without retaining a complete node tree. |
+| Explicit path preloading | Load routing fields during scanning while preserving lazy access to the rest of the document and complete output. |
+| Eager decoding | Set `lazyload=false` to return ordinary Lua tables and scalars for consumers that need them. |
 | Native OpenResty adapter | Receive memory/file/request-socket input and send readers through lua-resty-http, with explicit cancellation and error handling. |
 | Explicit resource ownership | Close holders deterministically; independently held children, forks and readers keep their source alive. |
 
@@ -110,6 +114,63 @@ print(encoded)
 `encode()` is convenient for small results but allocates the complete output
 string. For large results, consume a reader instead. `materialize()` explicitly
 creates ordinary Lua values; reserve it for consumers that require them.
+
+## Choose what to load
+
+By default, `decode()` returns lazy proxies. Use `preload_paths` to have selected
+fields ready when decoding finishes:
+
+```lua
+local body = json.decode(raw, {
+    preload_paths = { "$.model", "$.stream", "$.messages[*].role" },
+    index_depth = 0,
+    index_array_limit = 0,
+    index_budget_bytes = 0,
+})
+
+print(body.model)              -- already loaded, despite all index limits being 0
+print(body.messages[1].role)   -- JSONPath indexes are 0-based; Lua indexes are 1-based
+body.model = "provider-model"
+local rewritten = json.encode(body)  -- includes unselected fields too
+json.close(body)
+```
+
+This is preloading, not projection. Unselected values stay available on demand,
+and all input is validated before a result is returned. Selecting an object or
+array loads its entire subtree; selecting a long string loads that complete
+string. Preloads are immutable source data, so merely reading them preserves
+original output bytes and number spellings. Explicit selected data is outside
+the automatic index budget; selecting `$` can use substantial memory.
+
+The supported JSONPath subset includes `$`, dot member names, quoted bracket
+member names, zero-based array indexes, and immediate `.*` / `[*]` wildcards.
+Missing fields do not match. Recursive descent, filters, slices, unions and
+negative indexes are rejected. This is not a JSON Schema API.
+
+For eager decoding, choose ordinary Lua values instead:
+
+```lua
+local value = json.decode(raw, { lazyload = false })
+for key, child in pairs(value) do print(key, child) end
+value.model = "provider-model"
+local encoded = json.encode(value)
+```
+
+This mode supports native `pairs`, `ipairs`, `next`, `rawget` and table writes;
+it does not retain proxies or require closing the returned values. Null uses
+`json.null`, numbers use Lua numbers, and duplicate object keys keep their final
+value. It fully loads the document even if `preload_paths` is also supplied.
+Use it when consumers need ordinary tables, with the corresponding full-value
+memory cost. It does not promise cjson's speed, allocation behavior or permissive
+handling of invalid JSON, and it works without cjson installed.
+Use `encode` for these ordinary values. A `reader` also accepts them, but takes
+an immutable snapshot of the table tree; this has additional memory cost compared
+with reading a source-backed lazy proxy.
+
+Both options apply to `decode`, `decode_file`, `new_decoder`, and OpenResty
+adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
+option concerns validation and does not disable source validation. See the
+[source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
 
 ## Rewrite a file without assembling the output
 
@@ -171,7 +232,7 @@ optional index work; it does not disable validation. The root is depth 0, so
 allowed JSON nesting depth.
 
 The index budget covers rebuildable retained metadata shared by forks, not the
-whole process. Input strings, explicit materialization, user-held values,
+whole process. Input strings, explicit preloads/materialization, user-held values,
 mutation payloads, active parser/iterator state and output buffers have their
 own storage. Lower budgets trade memory for rescanning. Wide-object duplicate
 normalization can spill its exact key index to temporary storage; choose a
@@ -244,13 +305,21 @@ regression; they do not prove lower RSS for every JSON shape or caller behavior.
 Earlier [historical measurements](docs/verification/openresty-json-source.md)
 and their original qjson labels remain available for traceability.
 
+The [loading-mode report](docs/verification/decode-loading-modes.md) separately
+records eager and explicit-preload results. In its 4.28 MiB completed-file case,
+selected fields plus bounded output peaked at **14.50 MiB**, compared with cjson's
+**36.45 MiB**. Eager ordinary values plus full encoding of 32,768 small-object
+fields used **35.99 MiB versus 24.34 MiB**. Both modes took more CPU than cjson in
+these runs. Disabling lazy loading is a compatibility option, not a promise of
+cjson's memory or speed.
+
 Additional boundaries:
 
 - File I/O is synchronous. Bounded buffers and yields do not make disk access
   asynchronous; storage latency can still delay an OpenResty worker.
 - This is not a transparent drop-in replacement for lua-cjson. Use
   `leanjson.encode` for proxies, or explicitly materialize for other encoders.
-- Native `next`, `rawget` and `rawset` bypass proxy behavior. Use
+- In lazy mode, native `next`, `rawget` and `rawset` bypass proxy behavior. Use
   `json.pairs`, `json.ipairs` and `json.len`; these also work on stock LuaJIT
   without Lua 5.2 compatibility support.
 - Proxy arrays stay dense. Use `array_insert` / `array_remove` for structural

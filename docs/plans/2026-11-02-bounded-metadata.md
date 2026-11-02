@@ -31,21 +31,21 @@
 **Files:** `src/source.rs`, `src/source/`, additive sparse-source modules if needed, `src/source_ffi.rs`, `src/lib.rs`, `include/leanjson.h`, `lua/leanjson/` (all runtime adapters), `lua/leanjson.lua` if required, focused Rust/Lua/source-stress tests, module manifest in rockspec and ABI loader tests. Exclude supervisor-owned README, design/plan, benchmark scripts/handler/driver and final report.
 **Interfaces:** Existing public Lua operations keep semantics; new options specified in Global Constraints flow through every high-level source API. Any additive ABI must be described in header and Lua cdef with panic boundaries. Internal targeted lookup/streamed iteration may change coherently across this task's files. Add honest stats needed to verify cache bounds (private test helper or documented diagnostic API; no misleading total-memory claims).
 
-- [ ] Write focused regressions demonstrating option propagation/defaults and the existing eager-member regression before changing runtime. Record the expected failures.
-- [ ] Implement validation/index separation, bounded retained state and stable span-based identities. Validate 0/1/3 settings, default frontier at a.b.c, far-array access and late duplicates across chunk boundaries.
-- [ ] Implement targeted proxy access and sparse COW mutation independent of index-cache lifetime. Tests retain children/readers/forks across budget eviction and structural array updates; confirm no lost edits or stale references.
-- [ ] Implement incremental normalized count/output and duplicate handling without full Lua member expansion. Tests cover untouched nested duplicates, decoded-key equality, null/false, whole-subtree replacements, wide keys, output byte/length correctness and tiny windows/budgets.
-- [ ] Reduce transient allocations/whole-container metadata duplication and expose bounded diagnostics. Work with supervisor's independent paired memory gate; required short/wide cases must not regress above cjson.
-- [ ] Run focused checks after each change, then one complete `make openresty-verify` gate in pinned Docker; locked fuzz target compilation and isolated installed-package smoke when ABI/module paths change. Coordinate exclusive build/benchmark timing with supervisor.
-- [ ] Self-review, run diff check, commit only owned paths and write Task 1 report with commands/results, limitations, ABI/options details and source SHA. Do not spawn other agents, push, or alter supervisor files.
+- [x] Write focused regressions demonstrating option propagation/defaults and the existing eager-member regression before changing runtime. Record the expected failures.
+- [x] Implement validation/index separation, bounded retained state and stable span-based identities. Validate 0/1/3 settings, default frontier at a.b.c, far-array access and late duplicates across chunk boundaries.
+- [x] Implement targeted proxy access and sparse COW mutation independent of index-cache lifetime. Tests retain children/readers/forks across budget eviction and structural array updates; confirm no lost edits or stale references.
+- [x] Implement incremental normalized count/output and duplicate handling without full Lua member expansion. Tests cover untouched nested duplicates, decoded-key equality, null/false, whole-subtree replacements, wide keys, output byte/length correctness and tiny windows/budgets.
+- [x] Reduce transient allocations/whole-container metadata duplication and expose bounded diagnostics. Work with supervisor's independent paired memory gate; required short/wide cases must not regress above cjson.
+- [x] Run focused checks after each change, then one complete `make openresty-verify` gate in pinned Docker; locked fuzz target compilation and isolated installed-package smoke when ABI/module paths change. Coordinate exclusive build/benchmark timing with supervisor.
+- [x] Self-review, run diff check, commit only owned paths and write Task 1 report with commands/results, limitations, ABI/options details and source SHA. Do not spawn other agents, push, or alter supervisor files.
 
 ### Task 2: Independent memory acceptance and documentation (supervisor)
 
 **Files:** `tests/openresty/benchmark.lua`, `tests/openresty/benchmark-handler.lua`, new bounded-memory probe/helpers under tests/openresty, `scripts/benchmark-openresty.sh` or new memory-gate script, Makefile gate target, README, docs/api.md if present (coordinate ownership), new verification report/raw JSONL, this plan/spec.
 **Interfaces:** Task 1 public options and unchanged proxy APIs. Same fixtures and operations for leanjson/cjson. Use real native processes, no mock allocator; use corpus/semantic oracle separate from timed output.
 
-- [ ] Add shallow 32768-key small-object and wide-scalar fixtures plus phase and cache-stress cases; preserve existing historical raw records. Capture baseline failure in the existing runtime.
-- [ ] Run paired native process memory checks on the integrated implementation, recording peak RSS, sampled Lua heap, elapsed/CPU and input/output semantics. Repeat only for code changes/noise affecting conclusions; no concurrent cargo builds during measurements.
-- [ ] If any required memory row exceeds native cjson, pass concrete measurements to Task 1 for correction; do not silently relax criteria.
-- [ ] Document defaults, semantics, budgets/caller-held-memory boundaries, CPU/I/O tradeoffs and fresh measured results; update README historical caveat with links to new results.
+- [x] Add shallow 32768-key small-object and wide-scalar fixtures plus phase and cache-stress cases; preserve existing historical raw records. Capture baseline failure in the existing runtime.
+- [x] Run paired native process memory checks on the integrated implementation, recording peak RSS, sampled Lua heap, elapsed/CPU and input/output semantics. Repeat only for code changes/noise affecting conclusions; no concurrent cargo builds during measurements.
+- [x] If any required memory row exceeds native cjson, pass concrete measurements to Task 1 for correction; do not silently relax criteria.
+- [x] Document defaults, semantics, budgets/caller-held-memory boundaries, CPU/I/O tradeoffs and fresh measured results; update README historical caveat with links to new results.
 - [ ] Independent whole-change review after functional/memory gates; resolve findings, verify exact committed runtime image and final diff. Leave local feature branch/worktree for user; no new push/publication requested.

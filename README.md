@@ -221,19 +221,19 @@ for buffering, disk storage, upstream settings and cancellation behavior.
 ## Measured advantages and current limits
 
 The bounded-metadata runtime passed **63/63** paired native-process memory
-checks across memory/file/feed sources, defaults, zero/tiny budgets, traversal
+checks against a pure-cjson baseline across memory/file/feed sources, defaults, zero/tiny budgets, traversal
 and forks. The following rows use 32,768 entries, completed-file input,
 direct mutation and no forced GC during measured phases:
 
 | Shape | lua-cjson peak RSS | LeanJSON peak RSS |
 | --- | ---: | ---: |
-| 32,768 short array objects | 19.15 MiB | 13.61 MiB |
-| 32,768 small-object fields | 23.68 MiB | 14.93 MiB |
-| 32,768 scalar fields | 16.36 MiB | 15.09 MiB |
+| 32,768 short array objects | 18.65 MiB | 13.68 MiB |
+| 32,768 small-object fields | 23.19 MiB | 15.00 MiB |
+| 32,768 scalar fields | 15.93 MiB | 14.87 MiB |
 
 **The memory reduction has a CPU/I/O cost.** In the paired local HTTP run with
-two concurrent clients, the wide-object case used 16.70 MiB versus cjson's
-46.82 MiB, but p50 latency was **1,461 ms versus 30 ms**. Wide exact-key
+two concurrent clients, the wide-object case used 17.16 MiB versus cjson's
+45.55 MiB, but p50 latency was **1,387 ms versus 29 ms**. Wide exact-key
 normalization currently uses many synchronous disk operations. This is not a
 speed improvement or a production latency guarantee.
 

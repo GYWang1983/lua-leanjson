@@ -7,7 +7,8 @@ The implementation remains independent of Kong and Gateway.
 
 `scripts/verify-memory.py` generates fixtures outside the measured processes and
 runs native OpenResty with LuaJIT in a fresh process for every method and source
-mode. Each pair consumes byte-identical JSON. The native cjson comparison fully
+mode. Final cjson cells load neither LeanJSON Lua modules nor its native library.
+The final harness is commit `8e07a36`; its runtime is `d4ea91c`. Each pair consumes byte-identical JSON. The native cjson comparison fully
 decodes and encodes; LeanJSON uses source spans, sparse mutation and a bounded
 reader. Both perform the same requested edits and number of independent forks.
 `--branches 0` modifies the decoded root directly, without an artificial copy.
@@ -31,8 +32,10 @@ The immutable baseline runtime is image
 `sha256:8af93a03e3820302f834fbb0824ed1b2bed2ae110b2a28235ccd3473f4017a89`,
 source revision `ea3c11a4f4809988cfac587f1cdc2109acc1e6ef`.
 The later `6926158` baseline checkout adds documentation, not runtime changes.
-These measurements use completed-file input, 32,768 entries and two independent
-forks. No compilation ran concurrently with the measurements.
+These historical measurements use completed-file input, 32,768 entries and two
+independent forks. The old harness preloaded LeanJSON in cjson cells, so this
+table is a historical comparison with both libraries loaded, not the final
+pure-cjson acceptance baseline. No compilation ran concurrently with the measurements.
 
 | Shape | Native cjson peak RSS | Previous LeanJSON peak RSS | Gate |
 | --- | ---: | ---: | --- |
@@ -47,17 +50,17 @@ normalized counting/output. Raw records are retained in
 
 ## Updated runtime
 
-Measured runtime commit: `1f21ab56f87327afa968f35536238b19f06182d3`.
+Measured runtime commit: `d4ea91c5dc28c8f8c6af922b50772956fede8f0a`.
 Pinned development image: `lua-qjson-dev:task3-repro`, image ID
 `sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47`. Linux ARM64, native OpenResty 1.29.2.4,
 LuaJIT 2.1 and Rust 1.90. Native library SHA256:
-`c3818c97b38a774660a7a8b39a21f504af2c2b5728746ee5c7254e035495bdab`; Lua runtime tree digest:
-`7b2aa1efab8bf927e812c871274505b3335839f5353a9dd30477982470a36738`. The image revision is the development
-image's own revision, not the mounted runtime revision. The checkout was dirty
-only because the supervisor was preparing documentation. Native and Lua
+`c21c9712521496f1952abf30ca14ce24400ae5a7752499052db79d1b370b43a2`; Lua runtime tree digest:
+`9472b8880f4d4949010ec210bf8962008539819a3b18d29d805efbcfd5390db3`. The image revision is the development
+image's own revision, not the mounted runtime revision. The runtime-only revision is stated above; the checkout revision in each record
+adds the corrected benchmark harness. Dirty status reflects supervisor documentation work. Native and Lua
 fingerprints remained unchanged throughout all four matrices.
 
-**63/63 paired process comparisons passed**, including every complete semantic,
+**63/63 paired process comparisons passed against a pure-cjson baseline**, including every complete semantic,
 duplicate-output, length/chunk and metadata-budget assertion:
 
 | Configuration | Cases across memory/file/feed | Passed pairs |
@@ -76,23 +79,23 @@ same routing-style edit in both implementations.
 
 | Shape | Source | cjson RSS | LeanJSON RSS | cjson CPU | LeanJSON CPU |
 | --- | --- | ---: | ---: | ---: | ---: |
-| 32,768 short array objects | memory | 19.10 MiB | 14.11 MiB | 10.7 ms | 36.3 ms |
-| 32,768 short array objects | file | 19.15 MiB | 13.61 MiB | 10.9 ms | 30.4 ms |
-| 32,768 short array objects | feed | 19.06 MiB | 13.55 MiB | 12.0 ms | 31.2 ms |
-| 32,768 small-object fields | memory | 23.64 MiB | 17.48 MiB | 15.9 ms | 696.6 ms |
-| 32,768 small-object fields | file | 23.68 MiB | 14.93 MiB | 17.2 ms | 757.8 ms |
-| 32,768 small-object fields | feed | 23.61 MiB | 14.49 MiB | 28.3 ms | 837.0 ms |
-| 32,768 scalar fields | memory | 16.36 MiB | 15.80 MiB | 10.5 ms | 678.9 ms |
-| 32,768 scalar fields | file | 16.36 MiB | 15.09 MiB | 7.8 ms | 717.8 ms |
-| 32,768 scalar fields | feed | 16.34 MiB | 14.70 MiB | 8.3 ms | 748.9 ms |
+| 32,768 short array objects | memory | 18.64 MiB | 14.18 MiB | 10.3 ms | 28.6 ms |
+| 32,768 short array objects | file | 18.65 MiB | 13.68 MiB | 10.0 ms | 30.9 ms |
+| 32,768 short array objects | feed | 18.64 MiB | 13.69 MiB | 10.0 ms | 30.0 ms |
+| 32,768 small-object fields | memory | 23.22 MiB | 17.55 MiB | 13.9 ms | 648.8 ms |
+| 32,768 small-object fields | file | 23.19 MiB | 15.00 MiB | 14.0 ms | 702.9 ms |
+| 32,768 small-object fields | feed | 23.21 MiB | 14.68 MiB | 14.3 ms | 708.8 ms |
+| 32,768 scalar fields | memory | 15.93 MiB | 15.81 MiB | 8.2 ms | 618.6 ms |
+| 32,768 scalar fields | file | 15.93 MiB | 14.87 MiB | 8.0 ms | 660.4 ms |
+| 32,768 scalar fields | feed | 15.93 MiB | 15.03 MiB | 8.3 ms | 689.1 ms |
 
-The old baseline above uses two forks. Its directly comparable updated
-completed-file/two-fork results are 13.62 MiB (array objects), 14.96 MiB (wide
-objects), and 14.84 MiB (wide scalars), versus paired cjson 27.54, 34.47, and
-19.61 MiB respectively. Do not compare the old two-fork rows to direct-mutation
-rows as if only the implementation changed.
+The final completed-file/two-fork results are 13.66 MiB (array objects),
+15.04 MiB (wide objects), and 15.02 MiB (wide scalars), versus paired pure
+cjson 27.16, 34.13, and 19.21 MiB respectively. The historical table above
+used two forks and the old import policy; do not attribute differences caused
+by branch count or corrected imports solely to runtime optimization.
 
-Raw process records: [bounded-metadata-after.jsonl](bounded-metadata-after.jsonl).
+Raw process records: [bounded-metadata-final.jsonl](bounded-metadata-final.jsonl).
 Each matrix starts with its own environment record. `source_stats.index_bytes`
 measures retained native index capacity, not the entire Rust/Lua allocator.
 
@@ -105,8 +108,8 @@ local runs, not production throughput forecasts.
 
 | Shape | cjson RSS | LeanJSON RSS | cjson p50 | LeanJSON p50 |
 | --- | ---: | ---: | ---: | ---: |
-| 32,768 short array objects | 30.17 MiB | 14.00 MiB | 24 ms | 63 ms |
-| 32,768 small-object fields | 46.82 MiB | 16.70 MiB | 30 ms | 1461 ms |
+| 32,768 short array objects | 22.96 MiB | 13.69 MiB | 20 ms | 62 ms |
+| 32,768 small-object fields | 45.55 MiB | 17.16 MiB | 29 ms | 1387 ms |
 
 **Memory improved; wide-object processing is still much slower than cjson.**
 Exact duplicate handling spills large key maps to disk and performs many small
@@ -115,12 +118,12 @@ million write syscalls and 5.6 million read syscalls over six requests. This is
 an explicit CPU/I/O/latency cost, not a speed improvement. Consider it before
 using this path for latency-sensitive workloads consisting of many small fields.
 
-Raw HTTP records: [bounded-metadata-http.jsonl](bounded-metadata-http.jsonl).
+Raw HTTP records: [bounded-metadata-final-http.jsonl](bounded-metadata-final-http.jsonl).
 
 ## Functional and resource checks
 
 On the same runtime: complete `make openresty-verify` passed Rust default,
-scalar-only and panic-injection suites, strict clippy, **403 Lua tests**, clean
+scalar-only and panic-injection suites, strict clippy, **408 Lua tests**, clean
 luacheck (62 files), 2,000 encode property cases, 1,000 mutation cases x100
 steps, 500 valid +500 mutated source stress cases, the pinned source corpus,
 and **50/50 native HTTP checks**. All fuzz targets compiled with the locked
@@ -138,9 +141,21 @@ regions, bounded backing-file high-water, and zero file/live/free state on final
 release. These address actual shutdown double-release and active-workspace
 reclamation defects found during implementation.
 
-Selected check receipts: [bounded-metadata-checks.txt](bounded-metadata-checks.txt).
-Independent review and exact committed runtime-image smoke are recorded after
-their final completion; they are not claimed by the process measurements.
+Selected check receipts: [bounded-metadata-final-checks.txt](bounded-metadata-final-checks.txt).
+Independent task reviews found and verified fixes for canonical object-child
+iteration, object ipairs compatibility, cjson import isolation and HTTP decoder
+option forwarding. Normal/cold file and small-memory HTTP probes verify actual
+zero/tiny decoder settings; the benchmark driver now asserts effective index
+settings on each LeanJSON sample. The 32,768-member zero-budget iteration probe
+completes without a retained sibling cache; annotated iteration supplies exactly
+two input-length passes in its native window test. Final whole-branch review and
+exact committed runtime-image verification are recorded when complete.
+
+Earlier candidate records remain at [bounded-metadata-after.jsonl](bounded-metadata-after.jsonl)
+and [bounded-metadata-http.jsonl](bounded-metadata-http.jsonl). They used the
+pre-review runtime with LeanJSON preloaded in cjson cells, and are retained for
+traceability rather than used as final acceptance evidence. The original
+[check receipts](bounded-metadata-checks.txt) apply to that earlier runtime.
 
 ## Reproduction
 

@@ -47,6 +47,11 @@ pub struct leanjson_source_v2_stats {
     pub budget_bytes: u64, pub index_bytes: u64, pub indexed_nodes: u64, pub indexed_depth: u64,
     pub index_depth: u64, pub index_array_limit: u64,
 }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct leanjson_source_v2_workspace_stats {
+    pub spill_file_bytes: u64, pub spill_live_regions: u64, pub spill_free_regions: u64,
+}
 enum CacheWalk { Prefix { ordinal: u64, offset: u64 }, Index(u64), Object { remaining: usize, hash: u64 }, Streaming, Finished }
 pub struct leanjson_source_v2_iter {
     source: Rc<leanjson_source_v1>, span: Span, normalize: bool, lookup: Option<Lookup>,
@@ -105,6 +110,21 @@ pub unsafe extern "C" fn leanjson_source_v2_get_stats(handle: *const leanjson_so
         *stats = leanjson_source_v2_stats { budget_bytes: options.budget_bytes as u64,
             index_bytes: source.index_bytes() as u64, indexed_nodes: source.indexed_nodes() as u64,
             indexed_depth: source.indexed_depth() as u64, index_depth: options.depth as u64, index_array_limit: options.array_limit as u64 };
+        Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
+    })
+}
+/// Report active shared spill file length and current allocated/free regions.
+/// Free intervals are coalesced, reused, and trailing free bytes are truncated.
+/// No active spill map returns all zeros; this is disk, not native heap or RSS.
+/// # Safety
+/// Handle and output pointers obey the v1 source contract.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_get_workspace_stats(handle: *const leanjson_source_v1, stats: *mut leanjson_source_v2_workspace_stats, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        if stats.is_null() { return Err(invalid_arg()); }
+        let source = source(handle)?.inner.borrow(); source.ready()?;
+        let (spill_file_bytes, spill_live_regions, spill_free_regions) = source.workspace().stats()?;
+        *stats = leanjson_source_v2_workspace_stats { spill_file_bytes, spill_live_regions, spill_free_regions };
         Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
     })
 }

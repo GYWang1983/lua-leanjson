@@ -135,6 +135,11 @@ leanjson_source_v1 *leanjson_source_v2_new(const leanjson_source_v2_options *, l
 int leanjson_source_v2_root(const leanjson_source_v1 *, leanjson_source_v2_node *, leanjson_source_v1_result *);
 int leanjson_source_v2_get_stats(const leanjson_source_v1 *, leanjson_source_v2_stats *, leanjson_source_v1_result *);
 int leanjson_source_v2_clear_indexes(const leanjson_source_v1 *, leanjson_source_v1_result *);
+typedef struct {
+    uint64_t spill_file_bytes, spill_live_regions, spill_free_regions;
+} leanjson_source_v2_workspace_stats;
+int leanjson_source_v2_get_workspace_stats(const leanjson_source_v1 *, leanjson_source_v2_workspace_stats *, leanjson_source_v1_result *);
+
 /* normalize=0 yields every lexical occurrence; normalize=1 yields first-key
  * position with final whole value. Arrays are zero-based. iter_next returns
  * READY, DONE, NEED_READ or ERROR. Supply NEED_READ with a nonempty window at
@@ -193,6 +198,7 @@ local required_symbols = {
     "leanjson_source_v2_new",
     "leanjson_source_v2_root",
     "leanjson_source_v2_get_stats",
+    "leanjson_source_v2_get_workspace_stats",
     "leanjson_source_v2_clear_indexes",
     "leanjson_source_v2_iter_begin",
     "leanjson_source_v2_lookup_begin",

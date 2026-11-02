@@ -169,3 +169,55 @@ fn bad_windows_are_sticky_per_iterator_and_abort_invalidates_cached_and_streamin
         leanjson_source_v1_release(source);
     }
 }
+
+#[test]
+fn v2_option_status_and_scalar_operation_contracts_preserve_v1_layouts() {
+    unsafe {
+        assert_eq!(std::mem::size_of::<leanjson_source_v1_options>(), 16);
+        assert_eq!(std::mem::size_of::<leanjson_source_v1_node>(), 16);
+        for options in [
+            leanjson_source_v2_options { api_version: 1, ..Default::default() },
+            leanjson_source_v2_options { mode: 1, ..Default::default() },
+            leanjson_source_v2_options { reserved: 1, ..Default::default() },
+        ] {
+            let mut result = leanjson_source_v1_result::default();
+            assert!(leanjson_source_v2_new(&options, &mut result).is_null());
+            assert_eq!((result.status, result.detail), (5, 6));
+        }
+        let mut result = leanjson_source_v1_result::default();
+        let source = leanjson_source_v2_new(ptr::null(), &mut result);
+        assert!(!source.is_null());
+        assert_eq!(result.status, 2);
+        let mut node = leanjson_source_v2_node::default();
+        assert_eq!(leanjson_source_v2_root(source, &mut node, &mut result), 2);
+        let bytes = br#""\u0041""#;
+        assert_eq!(leanjson_source_v1_feed(source, 0, bytes.as_ptr(), bytes.len(), &mut result), 2);
+        assert_eq!(leanjson_source_v2_root(source, &mut node, &mut result), 2);
+        assert_eq!(leanjson_source_v1_finish(source, bytes.len() as u64, &mut result), 0);
+        assert_eq!(leanjson_source_v2_root(source, &mut node, &mut result), 0);
+        let mut stats = leanjson_source_v2_stats::default();
+        assert_eq!(leanjson_source_v2_get_stats(source, &mut stats, &mut result), 0);
+        assert_eq!((stats.index_depth, stats.index_array_limit, stats.budget_bytes), (3, 3, 1048576));
+        let mut op = ptr::null_mut();
+        assert_eq!(leanjson_source_v2_node_scalar_begin(node, &mut op, &mut result), 3);
+        assert_eq!(leanjson_source_v2_clear_indexes(source, &mut result), 0);
+        leanjson_source_v1_release(source);
+        let mut output = Vec::new();
+        loop {
+            let mut pointer = ptr::null();
+            let mut length = 0;
+            match leanjson_source_v1_op_step(op, &mut pointer, &mut length, &mut result) {
+                0 => output.extend_from_slice(std::slice::from_raw_parts(pointer, length)),
+                1 => break,
+                3 => {
+                    assert_eq!(leanjson_source_v1_provide_window(op, result.offset,
+                        bytes[result.offset as usize..].as_ptr(), 1, &mut result), 0);
+                },
+                status => panic!("unexpected status {status}: {result:?}"),
+            }
+        }
+        assert_eq!(output, b"A");
+        leanjson_source_v1_op_release(op);
+        leanjson_source_v2_iter_release(ptr::null_mut());
+    }
+}

@@ -50,6 +50,11 @@ function M.stats(self)
     for _, name in ipairs({ "budget_bytes", "index_bytes", "indexed_nodes", "indexed_depth", "index_depth", "index_array_limit" }) do
         out[name] = M.exact(stats[0][name])
     end
+    local workspace = ffi.new("leanjson_source_v2_workspace_stats[1]")
+    M.require_status(C.leanjson_source_v2_get_workspace_stats(self.state.source, workspace, result), READY, result)
+    for _, name in ipairs({ "spill_file_bytes", "spill_live_regions", "spill_free_regions" }) do
+        out[name] = M.exact(workspace[0][name])
+    end
     return out
 end
 function M.clear_indexes(self)

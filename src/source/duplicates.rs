@@ -5,6 +5,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use super::{SourceError, Span, SpanMember, DETAIL_IO};
@@ -40,15 +41,68 @@ impl Temporary {
     }
 }
 impl Drop for Temporary { fn drop(&mut self) { if let Some(path) = &self.path { let _ = std::fs::remove_file(path); } } }
-struct Store { temporary: Temporary, end: u64 }
+struct Store { temporary: Temporary, end: u64, free: BTreeMap<u64, u64>, live_regions: u64 }
+impl Store {
+    fn allocate(&mut self, capacity: u64) -> Result<u64, SourceError> {
+        let available = self.free.iter().find_map(|(&base, &length)| (length >= capacity).then_some((base, length)));
+        let base = if let Some((base, length)) = available {
+            self.free.remove(&base);
+            if length > capacity { self.free.insert(base + capacity, length - capacity); }
+            base
+        } else {
+            let base = self.end;
+            let end = base.checked_add(capacity).ok_or_else(|| io_error(std::io::Error::other("index overflow")))?;
+            self.temporary.file.set_len(end).map_err(io_error)?;
+            self.end = end;
+            base
+        };
+        self.live_regions += 1;
+        // Reused extents contain old hash slots and data. Every new virtual
+        // region has file-like zero-filled contents before any partial writes.
+        let zero = (|| {
+            let buffer = [0; 8192];
+            self.temporary.file.seek(SeekFrom::Start(base)).map_err(io_error)?;
+            let mut remaining = capacity;
+            while remaining != 0 {
+                let count = remaining.min(buffer.len() as u64) as usize;
+                self.temporary.file.write_all(&buffer[..count]).map_err(io_error)?;
+                remaining -= count as u64;
+            }
+            Ok::<_, SourceError>(())
+        })();
+        if let Err(error) = zero { let _ = self.release(base, capacity); return Err(error); }
+        Ok(base)
+    }
+    fn release(&mut self, mut base: u64, capacity: u64) -> Result<(), SourceError> {
+        if capacity == 0 { return Ok(()); }
+        self.live_regions -= 1;
+        let mut end = base + capacity;
+        if let Some((&left, &length)) = self.free.range(..base).next_back() {
+            if left + length == base { self.free.remove(&left); base = left; }
+        }
+        if let Some((&right, &length)) = self.free.range(end..).next() {
+            if right == end { self.free.remove(&right); end += length; }
+        }
+        if end == self.end {
+            self.end = base;
+            self.temporary.file.set_len(base).map_err(io_error)?;
+        } else { self.free.insert(base, end - base); }
+        Ok(())
+    }
+}
 #[derive(Clone, Default)]
 pub(crate) struct WorkspacePool(Rc<RefCell<Weak<RefCell<Store>>>>);
 impl WorkspacePool {
     fn open(&self, directory: &Path) -> Result<Rc<RefCell<Store>>, SourceError> {
         if let Some(store) = self.0.borrow().upgrade() { return Ok(store); }
-        let store = Rc::new(RefCell::new(Store { temporary: Temporary::new(directory)?, end: 0 }));
+        let store = Rc::new(RefCell::new(Store { temporary: Temporary::new(directory)?, end: 0, free: BTreeMap::new(), live_regions: 0 }));
         *self.0.borrow_mut() = Rc::downgrade(&store);
         Ok(store)
+    }
+    pub(crate) fn stats(&self) -> Result<(u64, u64, u64), SourceError> {
+        let Some(store) = self.0.borrow().upgrade() else { return Ok((0, 0, 0)); };
+        let store = store.borrow();
+        Ok((store.temporary.file.metadata().map_err(io_error)?.len(), store.live_regions, store.free.len() as u64))
     }
 }
 // Each active map has constant-size region descriptors. Regions grow by
@@ -61,24 +115,31 @@ impl Region {
         if length > self.capacity {
             let capacity = length.checked_next_power_of_two().ok_or_else(|| io_error(std::io::Error::other("index overflow")))?;
             let mut store = self.store.borrow_mut();
-            let base = store.end;
-            let end = base.checked_add(capacity).ok_or_else(|| io_error(std::io::Error::other("index overflow")))?;
-            store.temporary.file.set_len(end).map_err(io_error)?;
-            let mut buffer = [0; 8192];
-            let mut copied = 0;
-            while copied < self.length {
-                let count = (self.length - copied).min(buffer.len() as u64) as usize;
-                store.temporary.file.seek(SeekFrom::Start(self.base + copied)).map_err(io_error)?;
-                store.temporary.file.read_exact(&mut buffer[..count]).map_err(io_error)?;
-                store.temporary.file.seek(SeekFrom::Start(base + copied)).map_err(io_error)?;
-                store.temporary.file.write_all(&buffer[..count]).map_err(io_error)?;
-                copied += count as u64;
-            }
-            self.base = base; self.capacity = capacity; store.end = end;
+            let base = store.allocate(capacity)?;
+            let copy = (|| {
+                let mut buffer = [0; 8192];
+                let mut copied = 0;
+                while copied < self.length {
+                    let count = (self.length - copied).min(buffer.len() as u64) as usize;
+                    store.temporary.file.seek(SeekFrom::Start(self.base + copied)).map_err(io_error)?;
+                    store.temporary.file.read_exact(&mut buffer[..count]).map_err(io_error)?;
+                    store.temporary.file.seek(SeekFrom::Start(base + copied)).map_err(io_error)?;
+                    store.temporary.file.write_all(&buffer[..count]).map_err(io_error)?;
+                    copied += count as u64;
+                }
+                Ok::<_, SourceError>(())
+            })();
+            if let Err(error) = copy { let _ = store.release(base, capacity); return Err(error); }
+            let old = (self.base, self.capacity);
+            self.base = base; self.capacity = capacity;
+            store.release(old.0, old.1)?;
         }
         self.length = length;
         Ok(())
     }
+}
+impl Drop for Region {
+    fn drop(&mut self) { let _ = self.store.borrow_mut().release(self.base, self.capacity); }
 }
 fn read_at(region: &mut Region, offset: u64, bytes: &mut [u8]) -> Result<(), SourceError> {
     if offset.checked_add(bytes.len() as u64).is_none_or(|end| end > region.length) {
@@ -260,4 +321,28 @@ mod tests {
         assert_eq!((second.key.as_slice(), second.value.raw_start), (b"bravo".as_slice(), 3));
         assert!(map.next().unwrap().is_none());
     }
+    #[test]
+    fn held_workspace_does_not_accumulate_historical_traversal_regions() {
+        let pool = WorkspacePool::default();
+        let mut held = DiskMap::new(&std::env::temp_dir(), &pool).unwrap();
+        for i in 0..256 { held.insert(entry(format!("held-{i}").as_bytes(), i)).unwrap(); }
+        let store = held.slots.store.clone();
+        let mut warm_bytes = 0;
+        for pass in 0..24 {
+            let mut temporary = DiskMap::new(&std::env::temp_dir(), &pool).unwrap();
+            for i in 0..128 { temporary.insert(entry(format!("temporary-{i}").as_bytes(), i)).unwrap(); }
+            drop(temporary);
+            let bytes = store.borrow().end;
+            if pass == 0 { warm_bytes = bytes; }
+            assert!(bytes <= warm_bytes * 2, "held map accumulated historical regions: {bytes} > {}", warm_bytes * 2);
+        }
+        assert_eq!(held.next().unwrap().unwrap().key, b"held-0");
+        drop(held);
+        let store = store.borrow();
+        assert_eq!(store.end, 0);
+        assert_eq!(store.temporary.file.metadata().unwrap().len(), 0);
+        assert_eq!(store.live_regions, 0);
+        assert!(store.free.is_empty());
+    }
+
 }

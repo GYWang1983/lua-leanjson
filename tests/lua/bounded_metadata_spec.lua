@@ -144,4 +144,34 @@ describe("bounded source metadata", function()
         end
     end)
 
+    it("reuses spill storage across normalization while an older reader stays held", function()
+        local raw, expected = {}, {}
+        for i = 1, 128 do
+            raw[i] = '"k' .. i .. '":{"v":0,"v":' .. i .. '}'
+            expected[i] = '"k' .. i .. '":{"v":' .. i .. '}'
+        end
+        expected = '{' .. table.concat(expected, ',') .. '}'
+        local body = json.decode('{' .. table.concat(raw, ',') .. '}', { index_budget_bytes = 0 })
+        local held = json.reader(body, { normalize_duplicates = true, chunk_size = 1 })
+        local prefix = assert(held:next()) .. assert(held:next())
+        local initial = json.source_stats(body)
+        assert.is_number(initial.spill_file_bytes)
+        assert.is_true(initial.spill_file_bytes > 0)
+        for _ = 1, 24 do
+            local repeated = json.reader(body, { normalize_duplicates = true, chunk_size = 7 })
+            assert.are.equal(#expected, repeated:length())
+            assert.are.equal(expected, drain(repeated))
+            local current = json.source_stats(body)
+            assert.are.equal(initial.spill_live_regions, current.spill_live_regions)
+            assert.is_true(current.spill_free_regions <= current.spill_live_regions + 1)
+            assert.is_true(current.spill_file_bytes <= initial.spill_file_bytes * 2 + 65536,
+                "held reader retained disk regions from historical traversals")
+        end
+        assert.are.equal(expected, prefix .. drain(held))
+        local closed = json.source_stats(body)
+        assert.are.equal(0, closed.spill_file_bytes)
+        assert.are.equal(0, closed.spill_live_regions)
+        json.close(body)
+    end)
+
 end)

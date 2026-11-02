@@ -74,4 +74,10 @@ and raw report archive, this spec/plan/ledger. Read-only audit of Task 1 runtime
 - [x] Verify baseline source/native provenance and no cjson target delegation.
 - [x] Reproduce representative mismatch categories and audit selective source dispatch.
 - [x] Record complete per-cell totals, limitations and exact reproduction commands.
-- [ ] Independent task/final review; preserve local branch and all evidence.
+- [x] Independent task/final review; preserve local branch and all evidence.
+
+Completed on local branch `test/upstream-cjson-matrix`. The full matrix is
+executed and reports incompatibility; runtime repair remains outside this plan.
+Task review precision classification and final review status-reuse findings were
+fixed and independently re-reviewed. See
+`docs/verification/upstream-cjson-compatibility.md` and its evidence archive.

@@ -8,10 +8,12 @@ performed between the measured parse/read/edit/length/output phases.
 """
 import argparse
 import hashlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 
@@ -68,6 +70,9 @@ def main():
     output.mkdir(parents=True, exist_ok=True)
     if any(output.iterdir()):
         raise RuntimeError(f"output directory must be empty: {output}")
+    image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
+    image_revision = subprocess.check_output(["docker", "image", "inspect", image_id, "--format",
+        '{{index .Config.Labels "org.opencontainers.image.revision"}}'], text=True).strip()
     library = "/opt/leanjson/lua" if args.runtime_image else "/workspace/lua"
     library_path = "/opt/leanjson/lib" if args.runtime_image else "/workspace/target/release"
     base = ["docker", "run", "--rm", "--mount", f"type=bind,source={repo},target=/workspace,readonly",
@@ -75,17 +80,29 @@ def main():
             "--env", f"LD_LIBRARY_PATH={library_path}"]
     if args.target_volume:
         base.extend(["--mount", f"type=volume,source={args.target_volume},target=/workspace/target,readonly"])
-    digest_command = base + ["--entrypoint", "sha256sum", args.image, f"{library_path}/libleanjson.so"]
-    base.extend(["--entrypoint", "/usr/local/openresty/bin/resty", args.image,
+    digest_command = base + ["--entrypoint", "sha256sum", image_id, f"{library_path}/libleanjson.so"]
+    lua_archive_command = base + ["--entrypoint", "tar", image_id, "-C", "/opt/leanjson", "-cf", "-", "lua"]
+    base.extend(["--entrypoint", "/usr/local/openresty/bin/resty", image_id,
                  "-I", library, "-I", "/workspace/tests/openresty"])
 
     def runtime_fingerprint():
         native = subprocess.check_output(digest_command, text=True).split()[0]
         lua_digest = hashlib.sha256()
-        if not args.runtime_image:
+        if args.runtime_image:
+            # Read regular Lua files without extracting paths. Hash the same
+            # relative names/content as mounted mode, excluding tar metadata.
+            archive_bytes = subprocess.check_output(lua_archive_command)
+            with tarfile.open(fileobj=io.BytesIO(archive_bytes), mode="r:") as archive:
+                members = sorted((member for member in archive if member.isfile() and member.name.endswith(".lua")), key=lambda member: Path(member.name))
+                if not members:
+                    raise RuntimeError("runtime image contains no installed Lua sources")
+                for member in members:
+                    with archive.extractfile(member) as source:
+                        lua_digest.update(member.name.encode() + b"\0" + source.read() + b"\0")
+        else:
             for path in sorted((repo / "lua").rglob("*.lua")):
                 lua_digest.update(str(path.relative_to(repo)).encode() + b"\0" + path.read_bytes() + b"\0")
-        return {"native_sha256": native, "lua_sha256": None if args.runtime_image else lua_digest.hexdigest()}
+        return {"native_sha256": native, "lua_sha256": lua_digest.hexdigest()}
 
     def run(script, values):
         began = time.monotonic()
@@ -95,9 +112,6 @@ def main():
             raise RuntimeError(f"{script} failed ({completed.returncode}):\n{completed.stdout}\n{completed.stderr}")
         return completed.stdout, time.monotonic() - began
 
-    image_id = subprocess.check_output(["docker", "image", "inspect", args.image, "--format", "{{.Id}}"], text=True).strip()
-    image_revision = subprocess.check_output(["docker", "image", "inspect", args.image, "--format",
-        '{{index .Config.Labels "org.opencontainers.image.revision"}}'], text=True).strip()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip())
     runtime = runtime_fingerprint()

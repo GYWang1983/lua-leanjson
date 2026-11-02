@@ -5,7 +5,8 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, hash_map::RandomState};
+use std::hash::BuildHasher;
 use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use super::{SourceError, Span, SpanMember, DETAIL_IO};
@@ -41,7 +42,10 @@ impl Temporary {
     }
 }
 impl Drop for Temporary { fn drop(&mut self) { if let Some(path) = &self.path { let _ = std::fs::remove_file(path); } } }
-struct Store { temporary: Temporary, end: u64, free: BTreeMap<u64, u64>, live_regions: u64 }
+struct Store {
+    temporary: Temporary, end: u64, free: BTreeMap<u64, u64>, live_regions: u64,
+    #[cfg(test)] read_operations: u64,
+}
 impl Store {
     fn allocate(&mut self, capacity: u64) -> Result<u64, SourceError> {
         let available = self.free.iter().find_map(|(&base, &length)| (length >= capacity).then_some((base, length)));
@@ -95,7 +99,9 @@ pub(crate) struct WorkspacePool(Rc<RefCell<Weak<RefCell<Store>>>>);
 impl WorkspacePool {
     fn open(&self, directory: &Path) -> Result<Rc<RefCell<Store>>, SourceError> {
         if let Some(store) = self.0.borrow().upgrade() { return Ok(store); }
-        let store = Rc::new(RefCell::new(Store { temporary: Temporary::new(directory)?, end: 0, free: BTreeMap::new(), live_regions: 0 }));
+        let store = Rc::new(RefCell::new(Store { temporary: Temporary::new(directory)?, end: 0, free: BTreeMap::new(), live_regions: 0,
+            #[cfg(test)] read_operations: 0,
+        }));
         *self.0.borrow_mut() = Rc::downgrade(&store);
         Ok(store)
     }
@@ -122,6 +128,7 @@ impl Region {
                 while copied < self.length {
                     let count = (self.length - copied).min(buffer.len() as u64) as usize;
                     store.temporary.file.seek(SeekFrom::Start(self.base + copied)).map_err(io_error)?;
+                    #[cfg(test)] { store.read_operations += 1; }
                     store.temporary.file.read_exact(&mut buffer[..count]).map_err(io_error)?;
                     store.temporary.file.seek(SeekFrom::Start(base + copied)).map_err(io_error)?;
                     store.temporary.file.write_all(&buffer[..count]).map_err(io_error)?;
@@ -147,6 +154,7 @@ fn read_at(region: &mut Region, offset: u64, bytes: &mut [u8]) -> Result<(), Sou
     }
     let mut store = region.store.borrow_mut();
     store.temporary.file.seek(SeekFrom::Start(region.base + offset)).map_err(io_error)?;
+    #[cfg(test)] { store.read_operations += 1; }
     store.temporary.file.read_exact(bytes).map_err(io_error)
 }
 fn write_at(region: &mut Region, offset: u64, bytes: &[u8]) -> Result<(), SourceError> {
@@ -155,11 +163,6 @@ fn write_at(region: &mut Region, offset: u64, bytes: &[u8]) -> Result<(), Source
     let mut store = region.store.borrow_mut();
     store.temporary.file.seek(SeekFrom::Start(region.base + offset)).map_err(io_error)?;
     store.temporary.file.write_all(bytes).map_err(io_error)
-}
-fn hash(key: &[u8]) -> u64 {
-    let mut value = 0xcbf29ce484222325u64;
-    for byte in key { value ^= *byte as u64; value = value.wrapping_mul(0x100000001b3); }
-    value
 }
 fn pack(member: &SpanMember, fingerprint: u64) -> [u8; HEADER] {
     let fields = [member.ordinal, member.key_start, member.key_end,
@@ -183,14 +186,23 @@ fn member(fields: [u64; 9], key: Vec<u8>) -> SpanMember {
     SpanMember { ordinal: fields[0], key_start: fields[1], key_end: fields[2], key,
         value: Span { kind, flags: (fields[3] >> 32) as u32, raw_start: fields[4], raw_end: fields[5], child_count: fields[6] } }
 }
-struct DiskMap { slots: Region, data: Region, capacity: u64, count: u64, end: u64, cursor: u64 }
+struct DiskMap<S = RandomState> { slots: Region, data: Region, capacity: u64, count: u64, end: u64, cursor: u64, hash_builder: S }
 impl DiskMap {
     fn new(directory: &Path, pool: &WorkspacePool) -> Result<Self, SourceError> {
+        Self::with_hasher(directory, pool, RandomState::new())
+    }
+}
+impl<S: BuildHasher> DiskMap<S> {
+    fn with_hasher(directory: &Path, pool: &WorkspacePool, hash_builder: S) -> Result<Self, SourceError> {
         let store = pool.open(directory)?;
         let mut slots = Region::new(store.clone());
         slots.set_len(16 * 16)?;
-        Ok(Self { slots, data: Region::new(store), capacity: 16, count: 0, end: 0, cursor: 0 })
+        Ok(Self { slots, data: Region::new(store), capacity: 16, count: 0, end: 0, cursor: 0, hash_builder })
     }
+    // Hash the complete decoded key with a per-map keyed state. Keep that
+    // state for rehashing and current-occurrence lookup; no input-chosen FNV
+    // bucket pattern survives into the disk probe sequence.
+    fn hash(&self, key: &[u8]) -> u64 { self.hash_builder.hash_one(key) }
     fn slot(file: &mut Region, slot: u64) -> Result<(u64, u64), SourceError> {
         let mut bytes = [0; 16]; read_at(file, slot * 16, &mut bytes)?;
         Ok((u64::from_le_bytes(bytes[..8].try_into().unwrap()), u64::from_le_bytes(bytes[8..].try_into().unwrap())))
@@ -222,7 +234,7 @@ impl DiskMap {
     }
     fn insert(&mut self, entry: SpanMember) -> Result<bool, SourceError> {
         if self.count >= self.capacity * 3 / 4 { self.grow()?; }
-        let fingerprint = hash(&entry.key);
+        let fingerprint = self.hash(&entry.key);
         let mut slot = fingerprint & (self.capacity - 1);
         loop {
             let (candidate_hash, location) = Self::slot(&mut self.slots, slot)?;
@@ -249,7 +261,7 @@ impl DiskMap {
         }
     }
     fn is_current(&mut self, entry: &SpanMember) -> Result<bool, SourceError> {
-        let fingerprint = hash(&entry.key);
+        let fingerprint = self.hash(&entry.key);
         let mut slot = fingerprint & (self.capacity - 1);
         loop {
             let (candidate_hash, location) = Self::slot(&mut self.slots, slot)?;
@@ -318,9 +330,50 @@ impl KeyMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::BuildHasherDefault;
     fn entry(key: &[u8], start: u64) -> SpanMember {
         SpanMember { ordinal: start, key_start: 0, key_end: 0, key: key.to_vec(),
             value: Span { kind: leanjson_type::LEANJSON_T_NUM, flags: 1, raw_start: start, raw_end: start + 1, child_count: 0 } }
+    }
+    fn legacy_bucket_keys() -> Vec<Vec<u8>> {
+        let mut keys = Vec::new();
+        for candidate in 0..2_100_000 {
+            let key = format!("k{candidate}").into_bytes();
+            let mut fingerprint = 0xcbf29ce484222325u64;
+            for byte in &key { fingerprint ^= *byte as u64; fingerprint = fingerprint.wrapping_mul(0x100000001b3); }
+            if fingerprint & 2047 == 0 { keys.push(key); }
+            if keys.len() == 1024 { break; }
+        }
+        assert_eq!(keys.len(), 1024);
+        assert_eq!(keys[0], b"k990");
+        assert_eq!(keys[1023], b"k2034177");
+        keys
+    }
+    #[test]
+    fn legacy_fnv_bucket_keys_have_linear_insertion_and_rehash_work() {
+        let keys = legacy_bucket_keys();
+        let pool = WorkspacePool::default();
+        let mut map = DiskMap::with_hasher(&std::env::temp_dir(), &pool, BuildHasherDefault::<DefaultHasher>::default()).unwrap();
+        for (i, key) in keys.iter().enumerate() { assert!(!map.insert(entry(key, i as u64 + 1)).unwrap()); }
+        let reads = map.slots.store.borrow().read_operations;
+        eprintln!("1024 legacy bucket keys: insertion/rehash {reads} file reads");
+        assert!(reads <= 64 * keys.len() as u64, "insertion/rehash amplified {reads} reads for {} keys", keys.len());
+    }
+    #[test]
+    fn legacy_fnv_bucket_keys_have_linear_current_lookup_work() {
+        let keys = legacy_bucket_keys();
+        let pool = WorkspacePool::default();
+        let mut map = DiskMap::with_hasher(&std::env::temp_dir(), &pool, BuildHasherDefault::<DefaultHasher>::default()).unwrap();
+        for (i, key) in keys.iter().enumerate() { map.insert(entry(key, i as u64 + 1)).unwrap(); }
+        let before = map.slots.store.borrow().read_operations;
+        for (i, key) in keys.iter().enumerate() {
+            assert!(map.is_current(&entry(key, i as u64 + 1)).unwrap());
+            assert!(!map.is_current(&entry(key, i as u64 + 1025)).unwrap());
+        }
+        let reads = map.slots.store.borrow().read_operations - before;
+        eprintln!("1024 legacy bucket keys: current/stale lookup {reads} file reads");
+        assert!(reads <= 32 * keys.len() as u64, "current lookup amplified {reads} reads for {} keys", keys.len());
     }
     #[test]
     fn fingerprint_collision_still_compares_full_decoded_keys() {
@@ -329,13 +382,17 @@ mod tests {
         map.insert(entry(b"alpha", 1)).unwrap();
         // Give the existing slot the next key's fingerprint, simulating a
         // collision without relying on finding an accidental 64-bit collision.
-        let old_slot = hash(b"alpha") & (map.capacity - 1);
-        let old_location = DiskMap::slot(&mut map.slots, old_slot).unwrap().1;
-        DiskMap::put_slot(&mut map.slots, old_slot, 0, 0).unwrap();
-        let collision = hash(b"bravo");
-        DiskMap::put_slot(&mut map.slots, collision & (map.capacity - 1), collision, old_location).unwrap();
+        let old_slot = map.hash(b"alpha") & (map.capacity - 1);
+        let old_location = DiskMap::<RandomState>::slot(&mut map.slots, old_slot).unwrap().1;
+        DiskMap::<RandomState>::put_slot(&mut map.slots, old_slot, 0, 0).unwrap();
+        let collision = map.hash(b"bravo");
+        DiskMap::<RandomState>::put_slot(&mut map.slots, collision & (map.capacity - 1), collision, old_location).unwrap();
         assert!(!map.insert(entry(b"bravo", 2)).unwrap());
+        map.grow().unwrap();
+        assert!(map.is_current(&entry(b"bravo", 2)).unwrap());
         assert!(map.insert(entry(b"bravo", 3)).unwrap());
+        assert!(!map.is_current(&entry(b"bravo", 2)).unwrap());
+        assert!(map.is_current(&entry(b"bravo", 3)).unwrap());
         let first = map.next().unwrap().unwrap();
         let second = map.next().unwrap().unwrap();
         assert_eq!((first.key.as_slice(), first.value.raw_start), (b"alpha".as_slice(), 1));

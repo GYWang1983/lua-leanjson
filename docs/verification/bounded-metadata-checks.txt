@@ -155,14 +155,14 @@ original log SHA256: 89e7b6781f1d25ad6898350a0ce625d1a64985652fed851f3ce0768c21f
 ==383== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
 ==383== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
 ==383== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua unfinished /tmp/leanjson-valgrind
-==383== 
-==383== 
+==383==
+==383==
 ==383== HEAP SUMMARY:
 ==383==     in use at exit: 0 bytes in 0 blocks
 ==383==   total heap usage: 3,350 allocs, 3,350 frees, 802,971 bytes allocated
-==383== 
+==383==
 ==383== All heap blocks were freed -- no leaks are possible
-==383== 
+==383==
 ==383== For lists of detected and suppressed errors, rerun with: -s
 ==383== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 
@@ -172,14 +172,14 @@ original log SHA256: 499e6bcc42ed96e7e971503ec7b53a4b69ecc15c789453072d6c7169c02
 ==389== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
 ==389== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
 ==389== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua collect /tmp/leanjson-valgrind
-==389== 
-==389== 
+==389==
+==389==
 ==389== HEAP SUMMARY:
 ==389==     in use at exit: 0 bytes in 0 blocks
 ==389==   total heap usage: 3,350 allocs, 3,350 frees, 802,971 bytes allocated
-==389== 
+==389==
 ==389== All heap blocks were freed -- no leaks are possible
-==389== 
+==389==
 ==389== For lists of detected and suppressed errors, rerun with: -s
 ==389== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 
@@ -189,14 +189,14 @@ original log SHA256: 66afc4908d6f96e635d249740e91b36114c7959ebdc8556d60b5486567a
 ==395== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
 ==395== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
 ==395== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_shutdown.lua closed /tmp/leanjson-valgrind
-==395== 
-==395== 
+==395==
+==395==
 ==395== HEAP SUMMARY:
 ==395==     in use at exit: 0 bytes in 0 blocks
 ==395==   total heap usage: 3,926 allocs, 3,926 frees, 978,267 bytes allocated
-==395== 
+==395==
 ==395== All heap blocks were freed -- no leaks are possible
-==395== 
+==395==
 ==395== For lists of detected and suppressed errors, rerun with: -s
 ==395== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
 
@@ -206,13 +206,13 @@ original log SHA256: 369bb661a16559d8a42b89252aef566a78b8a8e8628ab29ed1cbb1204ec
 ==401== Copyright (C) 2002-2017, and GNU GPL'd, by Julian Seward et al.
 ==401== Using Valgrind-3.18.1 and LibVEX; rerun with -h for copyright info
 ==401== Command: /usr/local/openresty/luajit/bin/luajit -joff tests/lua/fixtures/source_deep_spill.lua
-==401== 
-==401== 
+==401==
+==401==
 ==401== HEAP SUMMARY:
 ==401==     in use at exit: 0 bytes in 0 blocks
 ==401==   total heap usage: 180,766 allocs, 180,766 frees, 14,553,861 bytes allocated
-==401== 
+==401==
 ==401== All heap blocks were freed -- no leaks are possible
-==401== 
+==401==
 ==401== For lists of detected and suppressed errors, rerun with: -s
 ==401== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)

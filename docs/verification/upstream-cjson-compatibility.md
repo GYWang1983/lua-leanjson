@@ -161,6 +161,11 @@ returns, missing APIs, failed setup, malformed input, typed values/return arity,
 one-byte chunk boundaries, actual partial preload, and strict/report exit policy.
 A real native/target regression proves identical default-precision loss stays
 compatible through all three selective sources and returns strict exit 0.
+Those eight tests passed in the preceding round. A ninth, separately run focused
+test now covers real CLI output reuse in both directions (success to failure and
+failure to success), proving current status files are mutually exclusive while
+other diagnostics remain. The final status-housekeeping change was verified only
+with that focused test; the recorded matrix and project gate were not repeated.
 Observed red and green logs are retained. The independent supervisor audit
 reconciles suite locations/hashes, all 1,476 primary records, native binary hash,
 UTF-8 fixture, real source dispatch, loading options, cleanup and summary totals.

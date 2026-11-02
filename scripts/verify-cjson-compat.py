@@ -607,6 +607,8 @@ def main():
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     try:
+        for status in ("summary.json", "harness-error.json"):
+            (output / status).unlink(missing_ok=True)
         if args.inventory_only:
             write_json(output / "inventory.json", inventory(ROOT / "vendor/lua-cjson"))
             return 0
@@ -616,6 +618,7 @@ def main():
         print(json.dumps({"harness_healthy": report["harness_healthy"], "compatible": report["compatible"], "output": str(output)}))
         return exit_status(report, args.strict)
     except (HarnessError, OSError, ValueError, KeyError) as error:
+        (output / "summary.json").unlink(missing_ok=True)
         write_json(output / "harness-error.json", {"harness_healthy": False, "error": str(error)})
         print("HARNESS FAILURE: " + str(error), file=sys.stderr)
         return 2

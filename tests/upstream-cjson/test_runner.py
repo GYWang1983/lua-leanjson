@@ -7,6 +7,8 @@ The worker controls use the same pinned Docker image as the complete matrix.
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -116,6 +118,39 @@ class RunnerControls(unittest.TestCase):
                 self.assertFalse(rows[0]["encoded_roundtrip_complete"])
                 self.assertEqual("pass", rows[0]["classification"])
                 self.assertEqual(reference[0]["result"]["values"][1], rows[0]["encoded_output"])
+
+    def test_reusing_output_keeps_only_the_current_invocation_status(self):
+        scratch = ROOT / ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts/status-reuse-controls"
+        scratch.mkdir(parents=True, exist_ok=True)
+        for transition in (("success", "failure"), ("failure", "success")):
+            with self.subTest(transition=" -> ".join(transition)):
+                output = Path(tempfile.mkdtemp(prefix="-".join(transition) + "-", dir=scratch))
+                history = output / "historical-diagnostic.log"
+                history.write_text("preserve historical diagnostics\n")
+                for step, operation in enumerate(transition, 1):
+                    command = [sys.executable, str(SCRIPT), "--docker", "--output", str(output)]
+                    if operation == "success":
+                        # Real focused worker controls generate a healthy summary.
+                        command.append("--controls")
+                    else:
+                        # Invalid locale preparation fails before any full-matrix
+                        # worker starts, exercising the real CLI error handler.
+                        command += ["--locale-dir", str(output / "missing-locale")]
+                    result = subprocess.run(command, cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                    (output / f"{step}-{operation}.log").write_text(result.stdout)
+                    summary, error = output / "summary.json", output / "harness-error.json"
+                    with (output / "invocations.jsonl").open("a") as stream:
+                        stream.write(json.dumps({"command": command, "exit_code": result.returncode,
+                                                 "summary_exists": summary.exists(), "harness_error_exists": error.exists()}) + "\n")
+                    self.assertEqual("preserve historical diagnostics\n", history.read_text())
+                    if operation == "success":
+                        self.assertEqual(0, result.returncode, result.stdout)
+                        self.assertTrue(json.loads(summary.read_text())["healthy"])
+                        self.assertFalse(error.exists(), "successful invocation retained an older harness-error.json")
+                    else:
+                        self.assertEqual(2, result.returncode, result.stdout)
+                        self.assertIn("locale directory does not contain cs_CZ/LC_NUMERIC", json.loads(error.read_text())["error"])
+                        self.assertFalse(summary.exists(), "failed invocation retained an older healthy summary.json")
 
 
 if __name__ == "__main__":

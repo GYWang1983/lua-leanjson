@@ -102,3 +102,8 @@ strict mode. Baseline failures, unsupported APIs/dependencies, behavioral
 differences, environment exclusions, helper setup outcomes, and raw assertion
 matches have separate fields/counts. The matrix is functional validation, not a
 performance measurement or a claim of full cjson API support.
+
+Each CLI invocation clears prior `summary.json` and `harness-error.json` before
+work. A failure removes any partial summary before writing its current error;
+other logs and diagnostics are retained. Use separate output directories when
+preserving previous runs.

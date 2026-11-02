@@ -1,4 +1,4 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 local cjson = require("cjson")
 local LONG_ESC_A = "\\u0061\\u0062\\u0063\\u0064\\u0065"
 local LONG_ESC_B = "\\u0066\\u0067\\u0068\\u0069\\u006A"
@@ -20,41 +20,41 @@ local function count_string_sub_calls(fn)
     return calls
 end
 
-describe("qjson.materialize keep_origin", function()
+describe("leanjson.materialize keep_origin", function()
     it("keeps default materialize semantics when keep_origin is not set", function()
         local src = '{"blob":"\\u0061"}'
-        local t = qjson.materialize(qjson.decode(src))
+        local t = leanjson.materialize(leanjson.decode(src))
 
         assert.is_nil(getmetatable(t))
         assert.are.equal("a", t.blob)
-        assert.are.equal('{"blob":"a"}', qjson.encode(t))
+        assert.are.equal('{"blob":"a"}', leanjson.encode(t))
     end)
 
     it("accepts keep_origin=true and validates options", function()
-        local t = qjson.materialize(qjson.decode('{"a":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"a":1}'), { keep_origin = true })
         assert.is_nil(getmetatable(t))
         assert.are.equal(1, t.a)
 
         assert.has_error(function()
-            qjson.materialize(qjson.decode('{"a":1}'), true)
-        end, "qjson.materialize: opts must be a table")
+            leanjson.materialize(leanjson.decode('{"a":1}'), true)
+        end, "leanjson.materialize: opts must be a table")
 
         assert.has_error(function()
-            qjson.materialize(qjson.decode('{"a":1}'), { keep_origin = 1 })
-        end, "qjson.materialize: opts.keep_origin must be a boolean")
+            leanjson.materialize(leanjson.decode('{"a":1}'), { keep_origin = 1 })
+        end, "leanjson.materialize: opts.keep_origin must be a boolean")
     end)
 
     it("does not guarantee reuse for short escaped strings when parent is changed", function()
-        local t = qjson.materialize(qjson.decode('{"blob":"\\u0061","x":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"blob":"\\u0061","x":1}'), { keep_origin = true })
         t.x = 2
 
-        assert.are.equal('{"blob":"a","x":2}', qjson.encode(t))
+        assert.are.equal('{"blob":"a","x":2}', leanjson.encode(t))
     end)
 
     it("does not slice raw tokens for dropped provenance records", function()
-        local doc = qjson.decode('{"n":1,"b":true,"u":null,"s":"x","arr":[1,2],"obj":{"x":1}}')
+        local doc = leanjson.decode('{"n":1,"b":true,"u":null,"s":"x","arr":[1,2],"obj":{"x":1}}')
         local sub_calls = count_string_sub_calls(function()
-            qjson.materialize(doc, { keep_origin = true })
+            leanjson.materialize(doc, { keep_origin = true })
         end)
 
         assert.are.equal(0, sub_calls)
@@ -63,31 +63,31 @@ describe("qjson.materialize keep_origin", function()
     it("does not treat an exact 24-byte string token as above threshold", function()
         assert.are.equal(24, #('"' .. EXACT_24_ESC .. '"'))
 
-        local t = qjson.materialize(qjson.decode('{"blob":"' .. EXACT_24_ESC .. '","x":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"blob":"' .. EXACT_24_ESC .. '","x":1}'), { keep_origin = true })
         t.x = 2
 
-        assert.are.equal('{"blob":"ababcdefghij","x":2}', qjson.encode(t))
+        assert.are.equal('{"blob":"ababcdefghij","x":2}', leanjson.encode(t))
     end)
 
     it("reuses unchanged escaped string token when raw token is above threshold", function()
         local src = '{"blob":"' .. LONG_ESC_A .. '","x":1}'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
         t.x = 2
 
-        assert.are.equal('{"blob":"' .. LONG_ESC_A .. '","x":2}', qjson.encode(t))
+        assert.are.equal('{"blob":"' .. LONG_ESC_A .. '","x":2}', leanjson.encode(t))
     end)
 
     it("falls back to normal escaping for changed string children", function()
-        local t = qjson.materialize(qjson.decode('{"blob":"\\u0061","x":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"blob":"\\u0061","x":1}'), { keep_origin = true })
         t.blob = "line1\nline2"
 
-        assert.are.equal('{"blob":"line1\\nline2","x":1}', qjson.encode(t))
+        assert.are.equal('{"blob":"line1\\nline2","x":1}', leanjson.encode(t))
     end)
 
     it("re-emits small-scalar containers field-by-field when unmodified", function()
         local src = '{ "n":1.0, "s":"\\u0061", "b":true, "u":null }'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
-        local out = qjson.encode(t)
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
+        local out = leanjson.encode(t)
 
         assert.are.equal('{"n":1,"s":"a","b":true,"u":null}', out)
         assert.are_not.equal(src, out)
@@ -95,9 +95,9 @@ describe("qjson.materialize keep_origin", function()
 
     it("returns original slice for unmodified containers with complete large children", function()
         local src = '{ "a":"' .. LONG_ESC_A .. '" , "b":"' .. LONG_ESC_B .. '" }'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
 
-        assert.are.equal(src, qjson.encode(t))
+        assert.are.equal(src, leanjson.encode(t))
     end)
 
     it("does not treat an exact 64-byte child container as above threshold", function()
@@ -105,58 +105,58 @@ describe("qjson.materialize keep_origin", function()
         assert.are.equal(64, #child)
 
         local src = '{ "child" : ' .. child .. ' }'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
 
-        assert.are.equal('{"child":' .. child .. '}', qjson.encode(t))
+        assert.are.equal('{"child":' .. child .. '}', leanjson.encode(t))
     end)
 
     it("does not reintroduce duplicate keys after materialization", function()
-        local t = qjson.materialize(qjson.decode('{"a":1,"a":2}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"a":1,"a":2}'), { keep_origin = true })
         t.b = 3
 
-        local out = qjson.encode(t)
+        local out = leanjson.encode(t)
         assert.are.equal('{"a":2,"b":3}', out)
         local _, count = out:gsub('"a":', "")
         assert.are.equal(1, count)
     end)
 
     it("does not splice standalone numeric tokens in changed parents", function()
-        local t = qjson.materialize(qjson.decode('{"n":1.0,"e":1e3,"z":-0,"x":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"n":1.0,"e":1e3,"z":-0,"x":1}'), { keep_origin = true })
         t.x = 2
 
-        assert.are.equal('{"n":1,"e":1000,"z":0,"x":2}', qjson.encode(t))
+        assert.are.equal('{"n":1,"e":1000,"z":0,"x":2}', leanjson.encode(t))
     end)
 
     it("partial origins do not hide nested table mutations behind a parent raw slice", function()
-        local t = qjson.materialize(qjson.decode('{"a":{"x":1},"b":2}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"a":{"x":1},"b":2}'), { keep_origin = true })
         t.a.x = 9
 
-        assert.are.equal('{"a":{"x":9},"b":2}', qjson.encode(t))
+        assert.are.equal('{"a":{"x":9},"b":2}', leanjson.encode(t))
     end)
 
     it("falls back to normal array/object classification for incomplete arrays", function()
         local src = '[ 1 , 2 , 3 ]'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
 
-        assert.are.equal("[1,2,3]", qjson.encode(t))
+        assert.are.equal("[1,2,3]", leanjson.encode(t))
     end)
 
     it("still reports circular references after materialization", function()
-        local t = qjson.materialize(qjson.decode('{"a":1}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"a":1}'), { keep_origin = true })
         t.self = t
 
         assert.has_error(function()
-            qjson.encode(t)
-        end, "qjson.encode: circular reference")
+            leanjson.encode(t)
+        end, "leanjson.encode: circular reference")
     end)
 
     it("still reports circular references through origin child tables", function()
-        local t = qjson.materialize(qjson.decode('{"a":{"x":1},"b":2}'), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode('{"a":{"x":1},"b":2}'), { keep_origin = true })
         t.a.self = t
 
         assert.has_error(function()
-            qjson.encode(t)
-        end, "qjson.encode: circular reference")
+            leanjson.encode(t)
+        end, "leanjson.encode: circular reference")
     end)
 
     it("still reports max-depth errors for unchanged origin trees", function()
@@ -168,26 +168,26 @@ describe("qjson.materialize keep_origin", function()
         for _ = 1, 1001 do
             parts[#parts + 1] = '}'
         end
-        local t = qjson.materialize(qjson.decode(table.concat(parts)), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(table.concat(parts)), { keep_origin = true })
 
         assert.has_error(function()
-            qjson.encode(t)
-        end, "qjson.encode: max depth exceeded")
+            leanjson.encode(t)
+        end, "leanjson.encode: max depth exceeded")
     end)
 
     it("preserves lazy mutations made before keep_origin materialization", function()
-        local lazy = qjson.decode('{"a":{"x":1},"b":2}')
+        local lazy = leanjson.decode('{"a":{"x":1},"b":2}')
         lazy.a.x = 9
-        local t = qjson.materialize(lazy, { keep_origin = true })
+        local t = leanjson.materialize(lazy, { keep_origin = true })
 
         assert.are.equal(9, t.a.x)
         assert.are.equal(2, t.b)
     end)
 
     it("preserves lazy array child mutations made before keep_origin materialization", function()
-        local lazy = qjson.decode('[{"x":1},{"y":2}]')
+        local lazy = leanjson.decode('[{"x":1},{"y":2}]')
         lazy[1].x = 9
-        local t = qjson.materialize(lazy, { keep_origin = true })
+        local t = leanjson.materialize(lazy, { keep_origin = true })
 
         assert.are.equal(9, t[1].x)
         assert.are.equal(2, t[2].y)
@@ -196,21 +196,21 @@ describe("qjson.materialize keep_origin", function()
     it("keeps source bytes alive for provenance-backed reuse", function()
         local function materialized()
             local src = '{"blob":"' .. LONG_ESC_A .. '","x":1}'
-            return qjson.materialize(qjson.decode(src), { keep_origin = true })
+            return leanjson.materialize(leanjson.decode(src), { keep_origin = true })
         end
         local t = materialized()
         collectgarbage("collect")
         t.x = 2
 
-        assert.are.equal('{"blob":"' .. LONG_ESC_A .. '","x":2}', qjson.encode(t))
+        assert.are.equal('{"blob":"' .. LONG_ESC_A .. '","x":2}', leanjson.encode(t))
     end)
 
     it("reuses large complete child subtrees when parent is modified", function()
         local src = '{"x":0,"big": { "a":"' .. LONG_ESC_A .. '" , "b":"' .. LONG_ESC_B .. '" }}'
-        local t = qjson.materialize(qjson.decode(src), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(src), { keep_origin = true })
         t.x = 9
 
-        local out = qjson.encode(t)
+        local out = leanjson.encode(t)
         assert.are.equal(9, cjson.decode(out).x)
         assert.is_truthy(string.find(out, '"big":{ "a":"' .. LONG_ESC_A .. '" , "b":"' .. LONG_ESC_B .. '" }', 1, true))
     end)

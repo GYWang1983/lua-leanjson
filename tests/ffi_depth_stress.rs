@@ -11,34 +11,34 @@
 //! - a pathologically deep input rejecting fast without recursing, and
 //! - cursor reachability of an accepted at-limit document.
 
-use qjson::error::qjson_err;
-use qjson::ffi::{
-    qjson_cursor, qjson_cursor_bytes, qjson_cursor_index, qjson_cursor_len, qjson_doc, qjson_error,
-    qjson_free, qjson_open, qjson_parse_ex,
+use leanjson::error::leanjson_err;
+use leanjson::ffi::{
+    leanjson_cursor, leanjson_cursor_bytes, leanjson_cursor_index, leanjson_cursor_len, leanjson_doc, leanjson_error,
+    leanjson_free, leanjson_open, leanjson_parse_ex,
 };
-use qjson::options::{
-    Options, QJSON_DEFAULT_MAX_DEPTH, QJSON_MAX_MAX_DEPTH, QJSON_MODE_EAGER, QJSON_MODE_LAZY,
+use leanjson::options::{
+    Options, LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY,
 };
 use std::mem::MaybeUninit;
 use std::os::raw::{c_char, c_int};
 
-const MODES: [u32; 2] = [QJSON_MODE_EAGER, QJSON_MODE_LAZY];
+const MODES: [u32; 2] = [LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY];
 
 fn opts(mode: u32, max_depth: u32) -> Options {
     Options { mode, max_depth }
 }
 
-struct DocGuard(*mut qjson_doc);
+struct DocGuard(*mut leanjson_doc);
 
 impl Drop for DocGuard {
     fn drop(&mut self) {
-        unsafe { qjson_free(self.0) }
+        unsafe { leanjson_free(self.0) }
     }
 }
 
 fn parse_ok(buf: &[u8], o: &Options) -> DocGuard {
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
     assert!(
         !doc.is_null(),
         "parse_ex unexpectedly failed (mode={} max_depth={}): {:?}",
@@ -46,13 +46,13 @@ fn parse_ok(buf: &[u8], o: &Options) -> DocGuard {
         o.max_depth,
         err,
     );
-    assert_eq!(err.code, qjson_err::QJSON_OK as c_int);
+    assert_eq!(err.code, leanjson_err::LEANJSON_OK as c_int);
     DocGuard(doc)
 }
 
-fn parse_err(buf: &[u8], o: &Options) -> qjson_error {
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
+fn parse_err(buf: &[u8], o: &Options) -> leanjson_error {
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
     assert!(
         doc.is_null(),
         "parse_ex unexpectedly succeeded (mode={} max_depth={})",
@@ -108,18 +108,18 @@ fn nested_mixed(depth: usize) -> Vec<u8> {
 
 #[test]
 fn default_depth_accepts_1024_rejects_1025_both_modes() {
-    let at_limit = nested_arrays(QJSON_DEFAULT_MAX_DEPTH as usize);
-    let one_past = nested_arrays(QJSON_DEFAULT_MAX_DEPTH as usize + 1);
+    let at_limit = nested_arrays(LEANJSON_DEFAULT_MAX_DEPTH as usize);
+    let one_past = nested_arrays(LEANJSON_DEFAULT_MAX_DEPTH as usize + 1);
 
     for mode in MODES {
         // max_depth = 0 must resolve to the documented 1024 default.
         let _doc = parse_ok(&at_limit, &opts(mode, 0));
 
         let err = parse_err(&one_past, &opts(mode, 0));
-        assert_eq!(err.code, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
+        assert_eq!(err.code, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
         // Offset points at the opening bracket that first exceeds the limit:
         // the (1025th) '[' lives at byte index 1024.
-        assert_eq!(err.offset, QJSON_DEFAULT_MAX_DEPTH as usize);
+        assert_eq!(err.offset, LEANJSON_DEFAULT_MAX_DEPTH as usize);
     }
 }
 
@@ -127,36 +127,36 @@ fn default_depth_accepts_1024_rejects_1025_both_modes() {
 
 #[test]
 fn ceiling_accepts_4096_rejects_4097_both_modes() {
-    let at_ceiling = nested_arrays(QJSON_MAX_MAX_DEPTH as usize);
-    let one_past = nested_arrays(QJSON_MAX_MAX_DEPTH as usize + 1);
+    let at_ceiling = nested_arrays(LEANJSON_MAX_MAX_DEPTH as usize);
+    let one_past = nested_arrays(LEANJSON_MAX_MAX_DEPTH as usize + 1);
 
     for mode in MODES {
-        let _doc = parse_ok(&at_ceiling, &opts(mode, QJSON_MAX_MAX_DEPTH));
+        let _doc = parse_ok(&at_ceiling, &opts(mode, LEANJSON_MAX_MAX_DEPTH));
 
-        let err = parse_err(&one_past, &opts(mode, QJSON_MAX_MAX_DEPTH));
-        assert_eq!(err.code, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
-        assert_eq!(err.offset, QJSON_MAX_MAX_DEPTH as usize);
+        let err = parse_err(&one_past, &opts(mode, LEANJSON_MAX_MAX_DEPTH));
+        assert_eq!(err.code, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
+        assert_eq!(err.offset, LEANJSON_MAX_MAX_DEPTH as usize);
     }
 }
 
 #[test]
 fn request_above_ceiling_clamps_to_4096_not_honored() {
-    let at_ceiling = nested_arrays(QJSON_MAX_MAX_DEPTH as usize);
-    let one_past = nested_arrays(QJSON_MAX_MAX_DEPTH as usize + 1);
+    let at_ceiling = nested_arrays(LEANJSON_MAX_MAX_DEPTH as usize);
+    let one_past = nested_arrays(LEANJSON_MAX_MAX_DEPTH as usize + 1);
 
     // Both an explicit over-ceiling request and u32::MAX must behave exactly
     // like max_depth = 4096 (clamp, not honor the larger request).
-    for requested in [QJSON_MAX_MAX_DEPTH + 1, 5000, u32::MAX] {
+    for requested in [LEANJSON_MAX_MAX_DEPTH + 1, 5000, u32::MAX] {
         for mode in MODES {
             let _doc = parse_ok(&at_ceiling, &opts(mode, requested));
 
             let err = parse_err(&one_past, &opts(mode, requested));
             assert_eq!(
                 err.code,
-                qjson_err::QJSON_NESTING_TOO_DEEP as c_int,
-                "requested={requested} should clamp to {QJSON_MAX_MAX_DEPTH}",
+                leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int,
+                "requested={requested} should clamp to {LEANJSON_MAX_MAX_DEPTH}",
             );
-            assert_eq!(err.offset, QJSON_MAX_MAX_DEPTH as usize);
+            assert_eq!(err.offset, LEANJSON_MAX_MAX_DEPTH as usize);
         }
     }
 }
@@ -173,7 +173,7 @@ fn object_only_depth_boundary_both_modes() {
         let _doc = parse_ok(&at_limit, &opts(mode, limit));
 
         let err = parse_err(&one_past, &opts(mode, limit));
-        assert_eq!(err.code, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
+        assert_eq!(err.code, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
         // The (limit+1)-th '{' opens at byte limit * 5 (5-byte `{"k":` levels).
         assert_eq!(err.offset, limit as usize * 5);
     }
@@ -189,7 +189,7 @@ fn mixed_nesting_depth_boundary_both_modes() {
         let _doc = parse_ok(&at_limit, &opts(mode, limit));
 
         let err = parse_err(&one_past, &opts(mode, limit));
-        assert_eq!(err.code, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
+        assert_eq!(err.code, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
     }
 }
 
@@ -198,13 +198,13 @@ fn mixed_nesting_depth_boundary_both_modes() {
 #[test]
 fn pathological_depth_rejects_without_stack_overflow() {
     // Far beyond the ceiling: an honest recursive-descent parser would blow
-    // the stack here. qjson walks `indices` iteratively, so this must return
+    // the stack here. leanjson walks `indices` iteratively, so this must return
     // a clean NESTING_TOO_DEEP at the default limit's boundary.
     let deep = nested_arrays(100_000);
     for mode in MODES {
         let err = parse_err(&deep, &opts(mode, 0));
-        assert_eq!(err.code, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
-        assert_eq!(err.offset, QJSON_DEFAULT_MAX_DEPTH as usize);
+        assert_eq!(err.code, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
+        assert_eq!(err.offset, LEANJSON_DEFAULT_MAX_DEPTH as usize);
     }
 }
 
@@ -212,16 +212,16 @@ fn pathological_depth_rejects_without_stack_overflow() {
 
 #[test]
 fn at_limit_document_is_reachable_via_cursor() {
-    let depth = QJSON_DEFAULT_MAX_DEPTH as usize;
+    let depth = LEANJSON_DEFAULT_MAX_DEPTH as usize;
     let json = nested_arrays(depth);
 
     for mode in MODES {
         let doc = parse_ok(&json, &opts(mode, 0));
         unsafe {
-            let mut cur = MaybeUninit::<qjson_cursor>::uninit();
+            let mut cur = MaybeUninit::<leanjson_cursor>::uninit();
             assert_eq!(
-                qjson_open(doc.0, std::ptr::null::<c_char>(), 0, cur.as_mut_ptr()),
-                qjson_err::QJSON_OK as c_int,
+                leanjson_open(doc.0, std::ptr::null::<c_char>(), 0, cur.as_mut_ptr()),
+                leanjson_err::LEANJSON_OK as c_int,
             );
             let mut cur = cur.assume_init();
 
@@ -229,15 +229,15 @@ fn at_limit_document_is_reachable_via_cursor() {
             for _ in 0..depth {
                 let mut len = usize::MAX;
                 assert_eq!(
-                    qjson_cursor_len(&cur, std::ptr::null::<c_char>(), 0, &mut len),
-                    qjson_err::QJSON_OK as c_int,
+                    leanjson_cursor_len(&cur, std::ptr::null::<c_char>(), 0, &mut len),
+                    leanjson_err::LEANJSON_OK as c_int,
                 );
                 assert_eq!(len, 1);
 
-                let mut next = MaybeUninit::<qjson_cursor>::uninit();
+                let mut next = MaybeUninit::<leanjson_cursor>::uninit();
                 assert_eq!(
-                    qjson_cursor_index(&cur, 0, next.as_mut_ptr()),
-                    qjson_err::QJSON_OK as c_int,
+                    leanjson_cursor_index(&cur, 0, next.as_mut_ptr()),
+                    leanjson_err::LEANJSON_OK as c_int,
                 );
                 cur = next.assume_init();
             }
@@ -246,8 +246,8 @@ fn at_limit_document_is_reachable_via_cursor() {
             let mut start = usize::MAX;
             let mut end = usize::MAX;
             assert_eq!(
-                qjson_cursor_bytes(&cur, &mut start, &mut end),
-                qjson_err::QJSON_OK as c_int,
+                leanjson_cursor_bytes(&cur, &mut start, &mut end),
+                leanjson_err::LEANJSON_OK as c_int,
             );
             assert!(start < end && end <= json.len());
             assert_eq!(&json[start..end], b"0");

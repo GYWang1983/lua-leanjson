@@ -1,21 +1,21 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 
-describe("qjson encode depth guard", function()
+describe("leanjson encode depth guard", function()
     it("raises a circular reference error before reaching the max-depth guard", function()
         local t = {}
         t.self = t
         assert.has_error(function()
-            qjson.encode(t)
-        end, "qjson.encode: circular reference")
+            leanjson.encode(t)
+        end, "leanjson.encode: circular reference")
     end)
 
     it("allows shared table references that are not recursive cycles", function()
         local child = { x = 1 }
-        local encoded = qjson.encode({
+        local encoded = leanjson.encode({
             a = child,
             b = child,
         })
-        local decoded = qjson.decode(encoded)
+        local decoded = leanjson.decode(encoded)
 
         assert.are.equal(1, decoded.a.x)
         assert.are.equal(1, decoded.b.x)
@@ -29,8 +29,8 @@ describe("qjson encode depth guard", function()
             cur = cur.x
         end
         assert.has_error(function()
-            qjson.encode(root)
-        end, "qjson.encode: max depth exceeded")
+            leanjson.encode(root)
+        end, "leanjson.encode: max depth exceeded")
     end)
 
     it("succeeds when nesting depth is exactly 1000", function()
@@ -40,7 +40,7 @@ describe("qjson encode depth guard", function()
             cur.x = {}
             cur = cur.x
         end
-        local ok, result = pcall(qjson.encode, root)
+        local ok, result = pcall(leanjson.encode, root)
         assert.is_true(ok, result)
         assert.is_string(result)
     end)

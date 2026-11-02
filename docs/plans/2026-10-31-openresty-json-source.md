@@ -1,5 +1,7 @@
 # OpenResty JSON Source Implementation Plan
 
+> Historical implementation plan written before the rename. Original `qjson` paths and publication target describe that work only. See the [LeanJSON rename plan](2026-11-01-leanjson-rename.md) and [current API](../file-source-api.md) for the current namespace.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Deliver lazy mutable JSON proxies, independent snapshots, bounded serialization, file sources, and incremental input in the independent lua-qjson fork, verified under native OpenResty.

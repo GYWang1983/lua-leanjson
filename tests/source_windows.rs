@@ -1,5 +1,5 @@
 use proptest::prelude::*;
-use qjson::source::{ReadStep, Source, SourceReader, DETAIL_BAD_WINDOW};
+use leanjson::source::{ReadStep, Source, SourceReader, DETAIL_BAD_WINDOW};
 
 fn parsed(bytes: &[u8], window: usize) -> Source {
     let mut source = Source::new(0, window);

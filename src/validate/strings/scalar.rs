@@ -18,12 +18,12 @@
 //! pins down which wins on mixed input, so the position-ordered choice here
 //! is the natural single-pass behavior.
 
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 
 /// Validate `span` byte-by-byte. The caller passes the unescaped string
 /// interior (between the JSON `"…"` quotes) — `\` therefore introduces an
 /// RFC 8259 escape sequence, not a literal backslash byte.
-pub(crate) fn validate_span_scalar(span: &[u8]) -> Result<(), qjson_err> {
+pub(crate) fn validate_span_scalar(span: &[u8]) -> Result<(), leanjson_err> {
     let mut i: usize = 0;
     let n = span.len();
     while i < n {
@@ -32,7 +32,7 @@ pub(crate) fn validate_span_scalar(span: &[u8]) -> Result<(), qjson_err> {
         // Fast path: plain ASCII non-escape non-control.
         if b < 0x80 {
             if b < 0x20 {
-                return Err(qjson_err::QJSON_INVALID_STRING);
+                return Err(leanjson_err::LEANJSON_INVALID_STRING);
             }
             if b == b'\\' {
                 i = validate_escape(span, i + 1)?;
@@ -51,10 +51,10 @@ pub(crate) fn validate_span_scalar(span: &[u8]) -> Result<(), qjson_err> {
 /// At entry `i` points to the byte AFTER the `\`. Returns the index of the
 /// next byte to validate (i.e. one past the last consumed escape byte).
 #[inline]
-fn validate_escape(span: &[u8], i: usize) -> Result<usize, qjson_err> {
+fn validate_escape(span: &[u8], i: usize) -> Result<usize, leanjson_err> {
     if i >= span.len() {
         // Dangling `\` at end of span.
-        return Err(qjson_err::QJSON_INVALID_STRING);
+        return Err(leanjson_err::LEANJSON_INVALID_STRING);
     }
     match span[i] {
         b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => Ok(i + 1),
@@ -62,7 +62,7 @@ fn validate_escape(span: &[u8], i: usize) -> Result<usize, qjson_err> {
             let hex_start = i + 1;
             let hex_end = hex_start + 4;
             if hex_end > span.len() {
-                return Err(qjson_err::QJSON_INVALID_STRING);
+                return Err(leanjson_err::LEANJSON_INVALID_STRING);
             }
             let unit = parse_hex4(&span[hex_start..hex_end])?;
 
@@ -71,26 +71,26 @@ fn validate_escape(span: &[u8], i: usize) -> Result<usize, qjson_err> {
                 let low_hex_start = low_escape + 2;
                 let low_hex_end = low_hex_start + 4;
                 if low_hex_end > span.len() || &span[low_escape..low_escape + 2] != b"\\u" {
-                    return Err(qjson_err::QJSON_INVALID_STRING);
+                    return Err(leanjson_err::LEANJSON_INVALID_STRING);
                 }
                 let low = parse_hex4(&span[low_hex_start..low_hex_end])?;
                 if !(0xDC00..=0xDFFF).contains(&low) {
-                    return Err(qjson_err::QJSON_INVALID_STRING);
+                    return Err(leanjson_err::LEANJSON_INVALID_STRING);
                 }
                 return Ok(low_hex_end);
             }
 
             if (0xDC00..=0xDFFF).contains(&unit) {
-                return Err(qjson_err::QJSON_INVALID_STRING);
+                return Err(leanjson_err::LEANJSON_INVALID_STRING);
             }
 
             Ok(hex_end)
         }
-        _ => Err(qjson_err::QJSON_INVALID_STRING),
+        _ => Err(leanjson_err::LEANJSON_INVALID_STRING),
     }
 }
 
-fn parse_hex4(bytes: &[u8]) -> Result<u16, qjson_err> {
+fn parse_hex4(bytes: &[u8]) -> Result<u16, leanjson_err> {
     let mut v = 0u16;
     for &h in bytes {
         v <<= 4;
@@ -98,7 +98,7 @@ fn parse_hex4(bytes: &[u8]) -> Result<u16, qjson_err> {
             b'0'..=b'9' => (h - b'0') as u16,
             b'a'..=b'f' => (h - b'a' + 10) as u16,
             b'A'..=b'F' => (h - b'A' + 10) as u16,
-            _ => return Err(qjson_err::QJSON_INVALID_STRING),
+            _ => return Err(leanjson_err::LEANJSON_INVALID_STRING),
         };
     }
     Ok(v)
@@ -109,18 +109,18 @@ fn parse_hex4(bytes: &[u8]) -> Result<u16, qjson_err> {
 /// encodings and UTF-16 surrogates U+D800..=U+DFFF). Returns the index one
 /// past the last byte of the sequence.
 #[inline]
-fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, qjson_err> {
+fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, leanjson_err> {
     let lead = span[i];
     let n = span.len();
 
     // 2-byte: 110xxxxx 10xxxxxx, lead in C2..=DF (C0/C1 are overlong).
     if (0xC2..=0xDF).contains(&lead) {
         if i + 1 >= n {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         let b1 = span[i + 1];
         if !(0x80..=0xBF).contains(&b1) {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         return Ok(i + 2);
     }
@@ -130,7 +130,7 @@ fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, qjson_err> {
     //                    ED second must be 80..9F (else surrogate U+D800..=DFFF).
     if (0xE0..=0xEF).contains(&lead) {
         if i + 2 >= n {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         let b1 = span[i + 1];
         let b2 = span[i + 2];
@@ -143,10 +143,10 @@ fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, qjson_err> {
             _    => 0xBF,
         };
         if b1 < b1_lo || b1 > b1_hi {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         if !(0x80..=0xBF).contains(&b2) {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         return Ok(i + 3);
     }
@@ -156,7 +156,7 @@ fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, qjson_err> {
     //                    F4 second must be 80..8F (else > U+10FFFF).
     if (0xF0..=0xF4).contains(&lead) {
         if i + 3 >= n {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         let b1 = span[i + 1];
         let b2 = span[i + 2];
@@ -170,18 +170,18 @@ fn validate_utf8_sequence(span: &[u8], i: usize) -> Result<usize, qjson_err> {
             _    => 0xBF,
         };
         if b1 < b1_lo || b1 > b1_hi {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         if !(0x80..=0xBF).contains(&b2) {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         if !(0x80..=0xBF).contains(&b3) {
-            return Err(qjson_err::QJSON_INVALID_UTF8);
+            return Err(leanjson_err::LEANJSON_INVALID_UTF8);
         }
         return Ok(i + 4);
     }
 
     // C0, C1 (overlong 2-byte lead), F5..FF (out of range), or a bare
     // continuation byte (80..BF with no lead) — all invalid.
-    Err(qjson_err::QJSON_INVALID_UTF8)
+    Err(leanjson_err::LEANJSON_INVALID_UTF8)
 }

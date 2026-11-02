@@ -1,13 +1,13 @@
 //! Strict RFC 8259 §6 number-format validation.
 
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 
 /// Returns Ok if `bytes` matches the JSON `number` grammar exactly.
-/// Otherwise returns `QJSON_INVALID_NUMBER`.
+/// Otherwise returns `LEANJSON_INVALID_NUMBER`.
 ///
 /// Out-of-range (i.e. f64 overflow) is NOT detected here; the f64 decode
-/// step surfaces it as `QJSON_NUMBER_OUT_OF_RANGE`.
-pub(crate) fn validate_number(bytes: &[u8]) -> Result<(), qjson_err> {
+/// step surfaces it as `LEANJSON_NUMBER_OUT_OF_RANGE`.
+pub(crate) fn validate_number(bytes: &[u8]) -> Result<(), leanjson_err> {
     let mut i = 0;
 
     // optional minus
@@ -23,7 +23,7 @@ pub(crate) fn validate_number(bytes: &[u8]) -> Result<(), qjson_err> {
                 i += 1;
             }
         }
-        _ => return Err(qjson_err::QJSON_INVALID_NUMBER),
+        _ => return Err(leanjson_err::LEANJSON_INVALID_NUMBER),
     }
 
     // optional frac: "." 1*digit
@@ -34,7 +34,7 @@ pub(crate) fn validate_number(bytes: &[u8]) -> Result<(), qjson_err> {
             if !c.is_ascii_digit() { break; }
             i += 1;
         }
-        if i == frac_start { return Err(qjson_err::QJSON_INVALID_NUMBER); }
+        if i == frac_start { return Err(leanjson_err::LEANJSON_INVALID_NUMBER); }
     }
 
     // optional exp: ("e"|"E") ["+"|"-"] 1*digit
@@ -46,10 +46,10 @@ pub(crate) fn validate_number(bytes: &[u8]) -> Result<(), qjson_err> {
             if !c.is_ascii_digit() { break; }
             i += 1;
         }
-        if i == exp_start { return Err(qjson_err::QJSON_INVALID_NUMBER); }
+        if i == exp_start { return Err(leanjson_err::LEANJSON_INVALID_NUMBER); }
     }
 
-    if i != bytes.len() { return Err(qjson_err::QJSON_INVALID_NUMBER); }
+    if i != bytes.len() { return Err(leanjson_err::LEANJSON_INVALID_NUMBER); }
     Ok(())
 }
 

@@ -11,8 +11,8 @@ use std::os::raw::{c_char, c_int};
 use std::path::PathBuf;
 use std::ptr;
 
-use qjson::error::qjson_err;
-use qjson::ffi::*;
+use leanjson::error::leanjson_err;
+use leanjson::ffi::*;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -44,7 +44,7 @@ struct Check {
     len: Option<u64>,
 }
 
-const OK: c_int = qjson_err::QJSON_OK as c_int;
+const OK: c_int = leanjson_err::LEANJSON_OK as c_int;
 
 fn type_tag(name: &str) -> c_int {
     match name {
@@ -58,19 +58,19 @@ fn type_tag(name: &str) -> c_int {
     }
 }
 
-unsafe fn parse(buf: &[u8]) -> *mut qjson_doc {
-    let mut err = qjson_error::default();
-    let d = qjson_parse(buf.as_ptr(), buf.len(), &mut err);
+unsafe fn parse(buf: &[u8]) -> *mut leanjson_doc {
+    let mut err = leanjson_error::default();
+    let d = leanjson_parse(buf.as_ptr(), buf.len(), &mut err);
     assert!(!d.is_null(), "parse failed (code={})", err.code);
     d
 }
 
-unsafe fn run_check(doc: *mut qjson_doc, ctx: &str, c: &Check) {
+unsafe fn run_check(doc: *mut leanjson_doc, ctx: &str, c: &Check) {
     let p = c.path.as_ptr() as *const c_char;
     let pl = c.path.len();
 
     let mut ty: c_int = -1;
-    let rc = qjson_typeof(doc, p, pl, &mut ty);
+    let rc = leanjson_typeof(doc, p, pl, &mut ty);
     assert_eq!(rc, OK, "{ctx}: typeof rc={rc}");
     assert_eq!(ty, type_tag(&c.ty), "{ctx}: type mismatch");
 
@@ -78,7 +78,7 @@ unsafe fn run_check(doc: *mut qjson_doc, ctx: &str, c: &Check) {
         "string" => {
             let mut sp: *const u8 = ptr::null();
             let mut sl: usize = 0;
-            let rc = qjson_get_str(doc, p, pl, &mut sp, &mut sl);
+            let rc = leanjson_get_str(doc, p, pl, &mut sp, &mut sl);
             assert_eq!(rc, OK, "{ctx}: get_str rc={rc}");
             let s = std::slice::from_raw_parts(sp, sl);
             if let Some(v) = &c.value {
@@ -92,7 +92,7 @@ unsafe fn run_check(doc: *mut qjson_doc, ctx: &str, c: &Check) {
         "number" => {
             if let Some(v) = &c.value {
                 let mut out: f64 = 0.0;
-                let rc = qjson_get_f64(doc, p, pl, &mut out);
+                let rc = leanjson_get_f64(doc, p, pl, &mut out);
                 assert_eq!(rc, OK, "{ctx}: get_f64 rc={rc}");
                 let want = v.as_f64().expect("number check `value` must be a number");
                 assert_eq!(out, want, "{ctx}: number value mismatch");
@@ -101,7 +101,7 @@ unsafe fn run_check(doc: *mut qjson_doc, ctx: &str, c: &Check) {
         "bool" => {
             if let Some(v) = &c.value {
                 let mut out: c_int = -1;
-                let rc = qjson_get_bool(doc, p, pl, &mut out);
+                let rc = leanjson_get_bool(doc, p, pl, &mut out);
                 assert_eq!(rc, OK, "{ctx}: get_bool rc={rc}");
                 let want = v.as_bool().expect("bool check `value` must be a bool");
                 assert_eq!(out != 0, want, "{ctx}: bool value mismatch");
@@ -109,14 +109,14 @@ unsafe fn run_check(doc: *mut qjson_doc, ctx: &str, c: &Check) {
         }
         "null" => {
             let mut out: c_int = -1;
-            let rc = qjson_is_null(doc, p, pl, &mut out);
+            let rc = leanjson_is_null(doc, p, pl, &mut out);
             assert_eq!(rc, OK, "{ctx}: is_null rc={rc}");
             assert_eq!(out, 1, "{ctx}: expected null");
         }
         "object" | "array" => {
             if let Some(l) = c.len {
                 let mut out: usize = 0;
-                let rc = qjson_len(doc, p, pl, &mut out);
+                let rc = leanjson_len(doc, p, pl, &mut out);
                 assert_eq!(rc, OK, "{ctx}: len rc={rc}");
                 assert_eq!(out as u64, l, "{ctx}: container len mismatch");
             }
@@ -176,7 +176,7 @@ fn manifest_fixtures_validate() {
                 unsafe {
                     let doc = parse(line);
                     run_check(doc, &format!("{}#rec{rec}:{}", f.id, c.path), c);
-                    qjson_free(doc);
+                    leanjson_free(doc);
                 }
             }
         } else {
@@ -185,7 +185,7 @@ fn manifest_fixtures_validate() {
                 for c in &f.checks {
                     run_check(doc, &format!("{}:{}", f.id, c.path), c);
                 }
-                qjson_free(doc);
+                leanjson_free(doc);
             }
         }
     }

@@ -20,7 +20,7 @@ local bytes, max_chunk = 0, 0
 local output, capture
 local id = ngx.req.get_headers()["x-capture-id"]
 if id and id:match("^[a-zA-Z0-9_-]+$") then
-    capture = os.getenv("QJSON_TEST_PREFIX") .. "/capture-" .. id .. ".json"
+    capture = os.getenv("LEANJSON_TEST_PREFIX") .. "/capture-" .. id .. ".json"
     output = assert(io.open(capture, "wb"))
 end
 local started = ngx.now()

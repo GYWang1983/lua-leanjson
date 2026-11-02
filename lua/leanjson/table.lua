@@ -1,8 +1,8 @@
 -- Lazy JSON views, explicit materialization and the compatible full encoder.
 local ffi = require("ffi")
-local proxy = require("qjson.proxy")
-local bounded_reader = require("qjson.reader")
-local leases = require("qjson.leases")
+local proxy = require("leanjson.proxy")
+local bounded_reader = require("leanjson.reader")
+local leases = require("leanjson.leases")
 local has_cjson, cjson = pcall(require, "cjson")
 local _M = {}
 _M.null = has_cjson and cjson.null or setmetatable({}, { __tostring = function() return "null" end })
@@ -32,7 +32,7 @@ _M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
 _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
 function _M.decode(raw, opts)
-    local backend, root = require("qjson.source_memory").open(raw, opts)
+    local backend, root = require("leanjson.source_memory").open(raw, opts)
     return proxy.from_backend(backend, root)
 end
 
@@ -43,9 +43,9 @@ local function read_all(backend, first, last, scope)
     while first < last do
         local wanted = math.min(65536, last - first)
         local chunk, err = backend:read(first, wanted, scope)
-        if type(chunk) ~= "string" then error(err or "qjson: source read failed", 0) end
-        if #chunk == 0 then error("qjson: unexpected source EOF", 0) end
-        if #chunk > wanted then error("qjson: source exceeded read bound", 0) end
+        if type(chunk) ~= "string" then error(err or "leanjson: source read failed", 0) end
+        if #chunk == 0 then error("leanjson: unexpected source EOF", 0) end
+        if #chunk > wanted then error("leanjson: source exceeded read bound", 0) end
         parts[#parts + 1] = chunk
         first = first + #chunk
     end
@@ -96,13 +96,13 @@ materialize_node = function(node, keep_origin, scope)
 end
 
 function _M.materialize(value, options)
-    if options ~= nil and type(options) ~= "table" then error("qjson.materialize: opts must be a table", 0) end
+    if options ~= nil and type(options) ~= "table" then error("leanjson.materialize: opts must be a table", 0) end
     local keep = options and options.keep_origin
-    if keep ~= nil and type(keep) ~= "boolean" then error("qjson.materialize: opts.keep_origin must be a boolean", 0) end
+    if keep ~= nil and type(keep) ~= "boolean" then error("leanjson.materialize: opts.keep_origin must be a boolean", 0) end
     local node = proxy.node(value)
     if node then
         if keep and leases.managed(node) then
-            error("qjson.materialize: keep_origin is unsupported for file and incremental sources", 0)
+            error("leanjson.materialize: keep_origin is unsupported for file and incremental sources", 0)
         end
         return leases.guard(proxy.scope(value), node, function()
             return materialize_node(node, keep == true, proxy.scope(value))
@@ -176,7 +176,7 @@ end
 
 local function encode_number(n, fmt)
     if n ~= n or n == math.huge or n == -math.huge then
-        error("qjson.encode: cannot encode non-finite number")
+        error("leanjson.encode: cannot encode non-finite number")
     end
     if n == math.floor(n) and math.abs(n) < 1e15 then
         return string_format("%d", n)
@@ -189,7 +189,7 @@ local function encode_cdata(v)
         local s = tostring(v):gsub("[UuLl]+$", "")
         return s
     end
-    error("qjson.encode: unsupported value type: cdata")
+    error("leanjson.encode: unsupported value type: cdata")
 end
 
 -- Forward declaration so encode_lazy_object_walking, encode_lazy_array_walking,
@@ -201,8 +201,8 @@ local ENCODE_MAX_DEPTH = 1000
 local ENCODE_SPARSE_CONVERT = false
 local ENCODE_SPARSE_RATIO = 2
 local ENCODE_SPARSE_SAFE = 10
-local ENCODE_DEPTH_ERROR = "qjson.encode: max depth exceeded"
-local ENCODE_CYCLE_ERROR = "qjson.encode: circular reference"
+local ENCODE_DEPTH_ERROR = "leanjson.encode: max depth exceeded"
+local ENCODE_CYCLE_ERROR = "leanjson.encode: circular reference"
 
 local function validate_non_negative_integer(value, arg_index)
     if type(value) ~= "number"
@@ -214,7 +214,7 @@ local function validate_non_negative_integer(value, arg_index)
     then
         error(
             "bad argument #" .. tostring(arg_index)
-                .. " to qjson.encode_sparse_array (expected non-negative integer)",
+                .. " to leanjson.encode_sparse_array (expected non-negative integer)",
             2
         )
     end
@@ -222,7 +222,7 @@ end
 
 function _M.encode_sparse_array(convert, ratio, safe, ...)
     if select("#", ...) > 0 then
-        error("bad argument #4 to qjson.encode_sparse_array (found too many arguments)", 2)
+        error("bad argument #4 to leanjson.encode_sparse_array (found too many arguments)", 2)
     end
 
     local new_convert = ENCODE_SPARSE_CONVERT
@@ -311,7 +311,7 @@ local function encode_object(t, depth, active)
         if kt == "number" then
             k = tostring(k)
         elseif kt ~= "string" then
-            error("qjson.encode: object key must be a string or number, got " .. kt)
+            error("leanjson.encode: object key must be a string or number, got " .. kt)
         end
         parts[#parts+1] = encode_string(k) .. ":" .. encode(v, depth + 1, active)
     end
@@ -454,7 +454,7 @@ local function encode_object_with_origin(t, depth, active, origin)
             elseif key_type == "number" then
                 encoded_key = tostring(key)
             else
-                error("qjson.encode: object key must be a string or number, got " .. key_type)
+                error("leanjson.encode: object key must be a string or number, got " .. key_type)
             end
             parts[#parts + 1] = encode_string(encoded_key) .. ":" .. encode(value, depth + 1, active)
         end
@@ -527,7 +527,7 @@ encode = function(v, depth, active)
         active[v] = nil
         return encoded
     end
-    error("qjson.encode: unsupported value type: " .. tv)
+    error("leanjson.encode: unsupported value type: " .. tv)
 end
 
 function _M._new_reader(value, options, depth)
@@ -546,7 +546,7 @@ _M.encode = function(v)
 end
 
 -- Debug convenience: tostring(lazy_view) returns the original JSON bytes.
--- Not the canonical encoder — callers should still use qjson.encode for output.
+-- Not the canonical encoder — callers should still use leanjson.encode for output.
 LazyObject.__tostring = function(t) return encode_proxy(t, 1, {}) end
 LazyArray.__tostring  = function(t) return encode_proxy(t, 1, {}) end
 

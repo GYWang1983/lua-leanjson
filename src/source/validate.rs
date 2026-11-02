@@ -1,5 +1,5 @@
 //! Fixed-size token state shared by incremental validation and string output.
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 
 #[derive(Clone, Copy)]
 enum NumberPhase { Start, Minus, Zero, Integer, Dot, Fraction, Exponent, Sign, ExponentDigits }
@@ -9,7 +9,7 @@ pub(super) struct NumberState(NumberPhase);
 impl NumberState {
     pub(super) fn new() -> Self { Self(NumberPhase::Start) }
 
-    pub(super) fn feed(&mut self, byte: u8) -> Result<(), qjson_err> {
+    pub(super) fn feed(&mut self, byte: u8) -> Result<(), leanjson_err> {
         use NumberPhase::*;
         self.0 = match (self.0, byte) {
             (Start, b'-') => Minus,
@@ -20,15 +20,15 @@ impl NumberState {
             (Zero | Integer | Fraction, b'e' | b'E') => Exponent,
             (Exponent, b'+' | b'-') => Sign,
             (Exponent | Sign | ExponentDigits, b'0'..=b'9') => ExponentDigits,
-            _ => return Err(qjson_err::QJSON_INVALID_NUMBER),
+            _ => return Err(leanjson_err::LEANJSON_INVALID_NUMBER),
         };
         Ok(())
     }
 
-    pub(super) fn finish(&self) -> Result<(), qjson_err> {
+    pub(super) fn finish(&self) -> Result<(), leanjson_err> {
         use NumberPhase::*;
         if matches!(self.0, Zero | Integer | Fraction | ExponentDigits) { Ok(()) }
-        else { Err(qjson_err::QJSON_INVALID_NUMBER) }
+        else { Err(leanjson_err::LEANJSON_INVALID_NUMBER) }
     }
 }
 
@@ -73,16 +73,16 @@ impl StringState {
         matches!(self.phase, StringPhase::Plain) && self.utf8_remaining == 0
     }
 
-    pub(super) fn finish(&self) -> Result<(), qjson_err> {
-        if self.utf8_remaining != 0 { Err(qjson_err::QJSON_INVALID_UTF8) }
-        else if !matches!(self.phase, StringPhase::Plain) { Err(qjson_err::QJSON_INVALID_STRING) }
+    pub(super) fn finish(&self) -> Result<(), leanjson_err> {
+        if self.utf8_remaining != 0 { Err(leanjson_err::LEANJSON_INVALID_UTF8) }
+        else if !matches!(self.phase, StringPhase::Plain) { Err(leanjson_err::LEANJSON_INVALID_STRING) }
         else { Ok(()) }
     }
 
-    pub(super) fn feed(&mut self, byte: u8) -> Result<Decoded, qjson_err> {
+    pub(super) fn feed(&mut self, byte: u8) -> Result<Decoded, leanjson_err> {
         use StringPhase::*;
         if self.utf8_remaining != 0 {
-            if !(self.utf8_low..=self.utf8_high).contains(&byte) { return Err(qjson_err::QJSON_INVALID_UTF8); }
+            if !(self.utf8_low..=self.utf8_high).contains(&byte) { return Err(leanjson_err::LEANJSON_INVALID_UTF8); }
             self.utf8_remaining -= 1;
             self.utf8_low = 0x80;
             self.utf8_high = 0xBF;
@@ -90,7 +90,7 @@ impl StringState {
         }
         match self.phase {
             Plain => match byte {
-                0..=0x1F | b'"' => return Err(qjson_err::QJSON_INVALID_STRING),
+                0..=0x1F | b'"' => return Err(leanjson_err::LEANJSON_INVALID_STRING),
                 b'\\' => self.phase = Escape,
                 0x20..=0x7F => return Ok(Decoded::byte(byte)),
                 0xC2..=0xDF => self.utf8_remaining = 1,
@@ -104,7 +104,7 @@ impl StringState {
                     self.utf8_low = if byte == 0xF0 { 0x90 } else { 0x80 };
                     self.utf8_high = if byte == 0xF4 { 0x8F } else { 0xBF };
                 },
-                _ => return Err(qjson_err::QJSON_INVALID_UTF8),
+                _ => return Err(leanjson_err::LEANJSON_INVALID_UTF8),
             },
             Escape => {
                 self.phase = Plain;
@@ -113,32 +113,32 @@ impl StringState {
                     b'b' => Decoded::byte(8), b'f' => Decoded::byte(12),
                     b'n' => Decoded::byte(b'\n'), b'r' => Decoded::byte(b'\r'), b't' => Decoded::byte(b'\t'),
                     b'u' => { self.phase = Hex { unit: 0, digits: 0, high: None }; Decoded::empty() },
-                    _ => return Err(qjson_err::QJSON_INVALID_STRING),
+                    _ => return Err(leanjson_err::LEANJSON_INVALID_STRING),
                 });
             },
             Hex { mut unit, mut digits, high } => {
                 let value = match byte {
                     b'0'..=b'9' => byte - b'0', b'a'..=b'f' => byte - b'a' + 10,
                     b'A'..=b'F' => byte - b'A' + 10,
-                    _ => return Err(qjson_err::QJSON_INVALID_STRING),
+                    _ => return Err(leanjson_err::LEANJSON_INVALID_STRING),
                 };
                 unit = (unit << 4) | value as u16;
                 digits += 1;
                 if digits < 4 { self.phase = Hex { unit, digits, high }; }
                 else if let Some(high) = high {
-                    if !(0xDC00..=0xDFFF).contains(&unit) { return Err(qjson_err::QJSON_INVALID_STRING); }
+                    if !(0xDC00..=0xDFFF).contains(&unit) { return Err(leanjson_err::LEANJSON_INVALID_STRING); }
                     self.phase = Plain;
                     return Ok(Decoded::codepoint(0x10000 + (((high as u32 - 0xD800) << 10) | (unit as u32 - 0xDC00))));
                 } else if (0xD800..=0xDBFF).contains(&unit) { self.phase = LowBackslash(unit); }
-                else if (0xDC00..=0xDFFF).contains(&unit) { return Err(qjson_err::QJSON_INVALID_STRING); }
+                else if (0xDC00..=0xDFFF).contains(&unit) { return Err(leanjson_err::LEANJSON_INVALID_STRING); }
                 else { self.phase = Plain; return Ok(Decoded::codepoint(unit as u32)); }
             },
             LowBackslash(high) => {
-                if byte != b'\\' { return Err(qjson_err::QJSON_INVALID_STRING); }
+                if byte != b'\\' { return Err(leanjson_err::LEANJSON_INVALID_STRING); }
                 self.phase = LowU(high);
             },
             LowU(high) => {
-                if byte != b'u' { return Err(qjson_err::QJSON_INVALID_STRING); }
+                if byte != b'u' { return Err(leanjson_err::LEANJSON_INVALID_STRING); }
                 self.phase = Hex { unit: 0, digits: 0, high: Some(high) };
             },
         }

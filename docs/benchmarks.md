@@ -1,5 +1,7 @@
 # Benchmarks
 
+> Historical benchmark report from upstream `api7/lua-qjson`. The original `qjson` labels and measurements are preserved; they are not measurements of the renamed LeanJSON fork. The current harness uses `leanjson`; see [current OpenResty API and verification](verification/openresty-json-source.md).
+
 Throughput and memory comparison of `qjson` (this library) against
 `lua-cjson` and `lua-resty-simdjson` on a multimodal chat-completion payload
 ladder from 2 KB to 10 MB.

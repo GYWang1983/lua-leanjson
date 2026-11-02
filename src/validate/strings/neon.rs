@@ -6,20 +6,20 @@
 //! can be skipped entirely. The first non-zero chunk hands off to the
 //! scalar state machine, which handles correctness for the remainder.
 
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 use core::arch::aarch64::*;
 
 use super::scalar::validate_span_scalar;
 
 /// Validate `span` using NEON to bulk-skip pure-ASCII 16-byte chunks.
-pub(crate) fn validate_span_neon(span: &[u8]) -> Result<(), qjson_err> {
+pub(crate) fn validate_span_neon(span: &[u8]) -> Result<(), leanjson_err> {
     // SAFETY: aarch64 NEON is always available on aarch64 (it is part of
     // the AArch64 base ISA), so no runtime feature check is required.
     unsafe { validate_span_neon_impl(span) }
 }
 
 #[target_feature(enable = "neon")]
-unsafe fn validate_span_neon_impl(span: &[u8]) -> Result<(), qjson_err> {
+unsafe fn validate_span_neon_impl(span: &[u8]) -> Result<(), leanjson_err> {
     let mut i: usize = 0;
     let n = span.len();
 

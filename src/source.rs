@@ -1,7 +1,7 @@
 //! Bounded, strictly validated JSON source metadata. Input storage belongs to the caller.
 
-use crate::error::{qjson_err, qjson_type};
-use crate::options::{QJSON_DEFAULT_MAX_DEPTH, QJSON_MAX_MAX_DEPTH};
+use crate::error::{leanjson_err, leanjson_type};
+use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
 mod window;
@@ -18,18 +18,18 @@ pub const DETAIL_BAD_OPTIONS: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceError {
-    pub code: qjson_err,
+    pub code: leanjson_err,
     pub detail: u32,
     pub offset: u64,
 }
 
 impl SourceError {
-    pub(crate) fn json(code: qjson_err, offset: u64) -> Self {
+    pub(crate) fn json(code: leanjson_err, offset: u64) -> Self {
         Self { code, detail: DETAIL_NONE, offset }
     }
 
     pub(crate) fn argument(detail: u32, offset: u64) -> Self {
-        Self { code: qjson_err::QJSON_INVALID_ARG, detail, offset }
+        Self { code: leanjson_err::LEANJSON_INVALID_ARG, detail, offset }
     }
 }
 
@@ -42,7 +42,7 @@ pub struct Member {
 
 #[derive(Debug)]
 pub struct Node {
-    pub kind: qjson_type,
+    pub kind: leanjson_type,
     pub raw_start: u64,
     pub raw_end: u64,
     pub complete: bool,
@@ -88,7 +88,7 @@ impl Source {
         Self {
             nodes: Vec::new(), frames: Vec::new(), token: None,
             next_offset: 0, finished: false, failure: None,
-            max_depth: if max_depth == 0 { QJSON_DEFAULT_MAX_DEPTH } else { max_depth.min(QJSON_MAX_MAX_DEPTH) },
+            max_depth: if max_depth == 0 { LEANJSON_DEFAULT_MAX_DEPTH } else { max_depth.min(LEANJSON_MAX_MAX_DEPTH) },
             window_size: if window_size == 0 { 65536 } else { window_size },
         }
     }
@@ -152,14 +152,14 @@ impl Source {
             },
             Some(Token::String { start, state, .. }) => Some(match state.finish() {
                 Err(code) => SourceError::json(code, start),
-                Ok(()) => SourceError::json(qjson_err::QJSON_PARSE_ERROR, total_len),
+                Ok(()) => SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len),
             }),
-            Some(Token::Literal { .. }) => Some(SourceError::json(qjson_err::QJSON_PARSE_ERROR, total_len)),
+            Some(Token::Literal { .. }) => Some(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len)),
             None => None,
         };
         if let Some(error) = eof_error { return self.fail(error); }
         if self.nodes.is_empty() || !self.frames.is_empty() || !self.nodes[0].complete {
-            return self.fail(SourceError::json(qjson_err::QJSON_PARSE_ERROR, total_len));
+            return self.fail(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len));
         }
         self.finished = true;
         Ok(())
@@ -175,7 +175,7 @@ impl Source {
     }
 
     pub fn abort(&mut self, detail: u32) -> SourceError {
-        *self.failure.get_or_insert(SourceError { code: qjson_err::QJSON_OK, detail, offset: self.next_offset })
+        *self.failure.get_or_insert(SourceError { code: leanjson_err::LEANJSON_OK, detail, offset: self.next_offset })
     }
 
     fn complete(&mut self, id: usize, end: u64) {
@@ -183,7 +183,7 @@ impl Source {
         self.nodes[id].complete = true;
     }
 
-    fn allocate(&mut self, kind: qjson_type, offset: u64) -> usize {
+    fn allocate(&mut self, kind: leanjson_type, offset: u64) -> usize {
         let id = self.nodes.len();
         self.nodes.push(Node { kind, raw_start: offset, raw_end: offset, complete: false, members: Vec::new() });
         if let Some(frame) = self.frames.last_mut() {
@@ -200,16 +200,16 @@ impl Source {
 
     fn start_value(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
         let kind = match byte {
-            b'{' => qjson_type::QJSON_T_OBJ,
-            b'[' => qjson_type::QJSON_T_ARR,
-            b'"' => qjson_type::QJSON_T_STR,
-            b't' | b'f' => qjson_type::QJSON_T_BOOL,
-            b'n' => qjson_type::QJSON_T_NULL,
-            b'-' | b'0'..=b'9' => qjson_type::QJSON_T_NUM,
-            _ => return Err(SourceError::json(qjson_err::QJSON_PARSE_ERROR, offset)),
+            b'{' => leanjson_type::LEANJSON_T_OBJ,
+            b'[' => leanjson_type::LEANJSON_T_ARR,
+            b'"' => leanjson_type::LEANJSON_T_STR,
+            b't' | b'f' => leanjson_type::LEANJSON_T_BOOL,
+            b'n' => leanjson_type::LEANJSON_T_NULL,
+            b'-' | b'0'..=b'9' => leanjson_type::LEANJSON_T_NUM,
+            _ => return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
         };
         if matches!(byte, b'{' | b'[') && self.frames.len() as u32 >= self.max_depth {
-            return Err(SourceError::json(qjson_err::QJSON_NESTING_TOO_DEEP, offset));
+            return Err(SourceError::json(leanjson_err::LEANJSON_NESTING_TOO_DEEP, offset));
         }
         let node = self.allocate(kind, offset);
         match byte {
@@ -234,7 +234,7 @@ impl Source {
         use FrameState::*;
         match self.frames.last().map(|f| f.state) {
             None if self.nodes.is_empty() => self.start_value(byte, offset),
-            None => Err(SourceError::json(qjson_err::QJSON_TRAILING_CONTENT, offset)),
+            None => Err(SourceError::json(leanjson_err::LEANJSON_TRAILING_CONTENT, offset)),
             Some(ArrayFirst) if byte == b']' => self.close_container(offset),
             Some(ArrayFirst | ArrayValue | ObjectValue) => self.start_value(byte, offset),
             Some(ObjectFirst) if byte == b'}' => self.close_container(offset),
@@ -256,7 +256,7 @@ impl Source {
             },
             Some(ArrayAfter) if byte == b']' => self.close_container(offset),
             Some(ObjectAfter) if byte == b'}' => self.close_container(offset),
-            _ => Err(SourceError::json(qjson_err::QJSON_PARSE_ERROR, offset)),
+            _ => Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
         }
     }
 
@@ -294,7 +294,7 @@ impl Source {
             },
             Token::Literal { node, expected, mut matched } => {
                 if byte != expected[matched] {
-                    return Err(SourceError::json(qjson_err::QJSON_PARSE_ERROR, offset));
+                    return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset));
                 }
                 matched += 1;
                 if matched == expected.len() { self.complete(node, offset + 1); }

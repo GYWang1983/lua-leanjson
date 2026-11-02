@@ -1,6 +1,6 @@
 local cjson = require "cjson"
-local qjson = require "qjson"
-local adapter = require "qjson.openresty"
+local leanjson = require "leanjson"
+local adapter = require "leanjson.openresty"
 local http = require "resty.http"
 if ngx.var.uri == "/gc" then
     collectgarbage(ngx.var.arg_action == "stop" and "stop" or "restart")
@@ -8,7 +8,7 @@ if ngx.var.uri == "/gc" then
     return
 end
 local started = ngx.now()
-local opts = { chunk_size = 16384, temp_dir = os.getenv("QJSON_TEST_PREFIX") .. "/decoder" }
+local opts = { chunk_size = 16384, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder" }
 local output_phase = "input"
 if ngx.var.arg_prepare_delay == "1" then
     local delayed = false
@@ -17,11 +17,11 @@ if ngx.var.arg_prepare_delay == "1" then
     end
 end
 if ngx.var.arg_hook == "1" then opts.on_chunk = function() error("intentional source hook failure") end end
-if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/qjson-unwritable-spool" end
+if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/leanjson-unwritable-spool" end
 if ngx.var.uri == "/external-abort" then assert(ngx.on_abort(function() end)) end
 if ngx.var.uri == "/abort-file-parse" then
     opts.on_chunk = function()
-        local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/file-parse-started", "w"))
+        local marker = assert(io.open(os.getenv("LEANJSON_TEST_PREFIX") .. "/file-parse-started", "w"))
         marker:write("scanning")
         marker:close()
         ngx.sleep(0.03)
@@ -30,7 +30,7 @@ end
 if ngx.var.uri == "/abort-output-length" or ngx.var.uri == "/output-hook-failure" then
     opts.on_chunk = function()
         if output_phase == "length" and ngx.var.uri == "/abort-output-length" then
-            local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/output-length-started", "w"))
+            local marker = assert(io.open(os.getenv("LEANJSON_TEST_PREFIX") .. "/output-length-started", "w"))
             marker:write("counting")
             marker:close()
             ngx.sleep(0.03)
@@ -42,7 +42,7 @@ end
 local body, session, branch, sibling, nested, httpc, unregister
 local model_view, other_view, original_view
 local function phase(name)
-    local records = package.loaded["qjson.test_state"]
+    local records = package.loaded["leanjson.test_state"]
     local record = records and records[ngx.var.arg_case]
     if record then
         record.phase = name
@@ -57,14 +57,14 @@ local function close(fn, value)
 end
 local function cleanup()
     if unregister then unregister(); unregister = nil end
-    if model_view ~= nil then close(qjson.close, model_view); model_view = nil end
-    if other_view ~= nil then close(qjson.close, other_view); other_view = nil end
-    if original_view ~= nil then close(qjson.close, original_view); original_view = nil end
-    if nested ~= nil then close(qjson.close, nested); nested = nil end
-    if branch ~= nil then close(qjson.close, branch); branch = nil end
-    if sibling ~= nil then close(qjson.close, sibling); sibling = nil end
+    if model_view ~= nil then close(leanjson.close, model_view); model_view = nil end
+    if other_view ~= nil then close(leanjson.close, other_view); other_view = nil end
+    if original_view ~= nil then close(leanjson.close, original_view); original_view = nil end
+    if nested ~= nil then close(leanjson.close, nested); nested = nil end
+    if branch ~= nil then close(leanjson.close, branch); branch = nil end
+    if sibling ~= nil then close(leanjson.close, sibling); sibling = nil end
     if session then close(session.close, session); session = nil; body = nil
-    elseif body ~= nil then close(qjson.close, body); body = nil end
+    elseif body ~= nil then close(leanjson.close, body); body = nil end
     if httpc then close(httpc.close, httpc); httpc = nil end
 end
 
@@ -115,13 +115,13 @@ local function run()
             info.other_status = other_status
             if not err then
                 phase("materialize-query")
-                info.model = qjson.materialize(model_view)
-                info.other_model = qjson.materialize(other_view)
+                info.model = leanjson.materialize(model_view)
+                info.other_model = leanjson.materialize(other_view)
             end
             -- Repeated attached queries may alias one public child. Materialize
             -- both results before closing either; close is idempotent on aliases.
-            qjson.close(model_view)
-            qjson.close(other_view)
+            leanjson.close(model_view)
+            leanjson.close(other_view)
             model_view, other_view = nil, nil
             phase("queries-closed")
             if not err then body, err = session:finish() end
@@ -141,45 +141,45 @@ local function run()
     if ngx.var.uri == "/abort-callbacks" then
         assert(adapter.on_abort(function() error("intentional abort callback failure") end))
         assert(adapter.on_abort(function()
-            local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/abort-cleanup-ran", "w"))
+            local marker = assert(io.open(os.getenv("LEANJSON_TEST_PREFIX") .. "/abort-cleanup-ran", "w"))
             marker:write("closed")
             marker:close()
-            qjson.close(body)
+            leanjson.close(body)
         end))
         ngx.say("ready")
         ngx.flush(true)
         ngx.sleep(2)
-        qjson.close(body)
+        leanjson.close(body)
         return
     end
     if ngx.var.uri == "/scalar" then
         ngx.say(cjson.encode { value = body, input = info })
-        qjson.close(body)
+        leanjson.close(body)
         return
     end
     if ngx.var.uri == "/ownership" then
         local _, ownership_error = adapter.start_body(opts)
         ngx.say(cjson.encode { error = ownership_error })
-        qjson.close(body)
+        leanjson.close(body)
         return
     end
-    branch = qjson.fork(body)
+    branch = leanjson.fork(body)
     phase("forked")
     branch.model = "rewritten"
     if ngx.var.arg_mixed == "1" then
         branch.remove_me = nil
-        branch.added = { enabled = true, value = qjson.null }
+        branch.added = { enabled = true, value = leanjson.null }
         nested = branch.nested
         nested.flag = false
-        qjson.close(nested)
+        leanjson.close(nested)
         nested = nil
     end
-    sibling = qjson.fork(body)
+    sibling = leanjson.fork(body)
     sibling.model = "independent"
     original_view = body.model
     phase("materialize-original")
-    local original_model, sibling_model = qjson.materialize(original_view), sibling.model
-    qjson.close(original_view)
+    local original_model, sibling_model = leanjson.materialize(original_view), sibling.model
+    leanjson.close(original_view)
     original_view = nil
     phase("original-closed")
     if ngx.var.uri == "/io-failure" then
@@ -195,7 +195,7 @@ local function run()
     httpc = http.new()
     httpc:set_timeouts(1000, 3000, 3000)
     local ok
-    ok, err = httpc:connect { scheme = "http", host = "127.0.0.1", port = ngx.var.uri == "/connect-failure" and 1 or tonumber(os.getenv("QJSON_SINK_PORT")) }
+    ok, err = httpc:connect { scheme = "http", host = "127.0.0.1", port = ngx.var.uri == "/connect-failure" and 1 or tonumber(os.getenv("LEANJSON_SINK_PORT")) }
     if not ok then error(err) end
     phase("connected")
     local headers = { ["Content-Length"] = "1", ["Transfer-Encoding"] = "chunked",

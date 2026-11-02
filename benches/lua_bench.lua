@@ -1,7 +1,7 @@
 package.path  = package.path  .. ";./lua/?.lua;./benches/?.lua"
 package.cpath = package.cpath .. ";./target/release/lib?.so"
 
-local qjson    = require("qjson")
+local leanjson    = require("leanjson")
 local cjson = require("cjson")
 local manifest_mod = require("manifest")
 local simdjson_ok, simdjson_or_err = pcall(function()
@@ -203,7 +203,7 @@ local function content_paths(n)
     return paths
 end
 
-local function default_qjson_access(d)
+local function default_leanjson_access(d)
     local _ = d:get_str("model")
     local _ = d:get_f64("temperature")
     local n = d:len("messages") or 0
@@ -217,7 +217,7 @@ local function default_table_access(t)
     local _ = t.model
     local _ = t.temperature
     if t.messages then
-        for i = 1, qjson.len(t.messages) do
+        for i = 1, leanjson.len(t.messages) do
             local msg = t.messages[i]
             local _ = msg.content
         end
@@ -234,7 +234,7 @@ local function default_table_modify_add(t)
 end
 
 local function default_table_modify_nested(t)
-    if t.messages and qjson.len(t.messages) > 0 then
+    if t.messages and leanjson.len(t.messages) > 0 then
         t.messages[1].content = "modified"
     end
 end
@@ -246,7 +246,7 @@ local function github_cjson_access(obj)
     local _ = obj[1] and obj[1].user and obj[1].user.login
 end
 
-local function github_qjson_access(d)
+local function github_leanjson_access(d)
     local _ = d:get_i64("[0].id")
     local _ = d:get_str("[0].title")
     local _ = d:get_str("[0].user.login")
@@ -278,7 +278,7 @@ local function array_len(v)
     if not v then
         return 0
     end
-    return qjson.len(v)
+    return leanjson.len(v)
 end
 
 local function content_metric(v)
@@ -293,7 +293,7 @@ local function content_metric(v)
         }
     end
     if type(v) == "table" then
-        local n = qjson.len(v)
+        local n = leanjson.len(v)
         local out = {
             kind = "array",
             len = n,
@@ -342,7 +342,7 @@ local function doc_content_metric(d, path)
         return {kind = "nil"}
     end
     ty = tonumber(ty)
-    if ty == qjson.T_STR then
+    if ty == leanjson.T_STR then
         local v = d:get_str(path)
         return {
             kind = "string",
@@ -350,10 +350,10 @@ local function doc_content_metric(d, path)
             prefix = v:sub(1, 32),
         }
     end
-    if ty == qjson.T_ARR then
+    if ty == leanjson.T_ARR then
         return content_array_metric_from_doc(d, path)
     end
-    if ty == qjson.T_OBJ then
+    if ty == leanjson.T_OBJ then
         return {
             kind = "object",
             len = d:len(path),
@@ -419,7 +419,7 @@ local scenarios = {
     {name = "small",  iters = 5000, payload = read_file("benches/fixtures/small_api.json")},
     {name = "medium", iters = 500,  payload = read_file("benches/fixtures/medium_resp.json")},
     {name = "github-100k", iters = 100, payload = make_github_issues_payload(100 * 1024),
-     cjson_access = github_cjson_access, qjson_access = github_qjson_access, table_access = github_table_access,
+     cjson_access = github_cjson_access, leanjson_access = github_leanjson_access, table_access = github_table_access,
      modify_top = github_table_modify_top, modify_add = github_table_modify_add, modify_nested = github_table_modify_nested,
      table_summary = github_table_summary, doc_summary = github_doc_summary},
     {name = "100k",   iters = 100,  payload = make_payload(100 * 1024)},
@@ -431,10 +431,10 @@ local scenarios = {
     {name = "10m",    iters = 20,   payload = make_payload(10 * 1024 * 1024)},
 }
 
--- The pooled API (qjson.new_decoder + :parse) only exists on commits that
+-- The pooled API (leanjson.new_decoder + :parse) only exists on commits that
 -- landed the Decoder refactor. Probe so the bench still runs on older builds.
-local has_pooled_api = type(qjson.new_decoder) == "function"
-local pooled_decoder = has_pooled_api and qjson.new_decoder() or nil
+local has_pooled_api = type(leanjson.new_decoder) == "function"
+local pooled_decoder = has_pooled_api and leanjson.new_decoder() or nil
 
 local function scenario_by_name(n)
     for _, s in ipairs(scenarios) do
@@ -517,20 +517,20 @@ local function fail_smoke(scenario, workload, path, expected, actual)
         scenario, workload, path, value_repr(expected), value_repr(actual)), 0)
 end
 
-local qjson_type_names = {
-    [qjson.T_NULL] = "null",
-    [qjson.T_BOOL] = "bool",
-    [qjson.T_NUM]  = "number",
-    [qjson.T_STR]  = "string",
-    [qjson.T_ARR]  = "array",
-    [qjson.T_OBJ]  = "object",
+local leanjson_type_names = {
+    [leanjson.T_NULL] = "null",
+    [leanjson.T_BOOL] = "bool",
+    [leanjson.T_NUM]  = "number",
+    [leanjson.T_STR]  = "string",
+    [leanjson.T_ARR]  = "array",
+    [leanjson.T_OBJ]  = "object",
 }
 
 local function type_name(ty)
     if ty == nil then
         return "nil"
     end
-    return qjson_type_names[tonumber(ty)] or tostring(ty)
+    return leanjson_type_names[tonumber(ty)] or tostring(ty)
 end
 
 local function semantic_equal(expected, actual, path)
@@ -590,22 +590,22 @@ end
 
 local function collect_empty_container_shapes(v, path, out)
     local mt = getmetatable(v)
-    if mt == qjson._LazyArray then
-        local n = qjson.len(v)
+    if mt == leanjson._LazyArray then
+        local n = leanjson.len(v)
         if n == 0 then
-            out[#out + 1] = {path = path, kind = qjson.T_ARR}
+            out[#out + 1] = {path = path, kind = leanjson.T_ARR}
             return
         end
-        for i, child in qjson.ipairs(v) do
+        for i, child in leanjson.ipairs(v) do
             collect_empty_container_shapes(child, path_for_child(path, i, true), out)
         end
-    elseif mt == qjson._LazyObject then
-        local n = qjson.len(v)
+    elseif mt == leanjson._LazyObject then
+        local n = leanjson.len(v)
         if n == 0 then
-            out[#out + 1] = {path = path, kind = qjson.T_OBJ}
+            out[#out + 1] = {path = path, kind = leanjson.T_OBJ}
             return
         end
-        for k, child in qjson.pairs(v) do
+        for k, child in leanjson.pairs(v) do
             local child_path = path_for_child(path, k, false)
             if child_path then
                 collect_empty_container_shapes(child, child_path, out)
@@ -616,7 +616,7 @@ end
 
 local function empty_container_shapes(json)
     local shapes = {}
-    collect_empty_container_shapes(qjson.decode(json), "", shapes)
+    collect_empty_container_shapes(leanjson.decode(json), "", shapes)
     return shapes
 end
 
@@ -626,7 +626,7 @@ local function assert_empty_container_shapes(scenario, workload, expected_json, 
         return
     end
 
-    local actual_doc = qjson.parse(actual_json)
+    local actual_doc = leanjson.parse(actual_json)
     for _, shape in ipairs(shapes) do
         local actual_type = actual_doc:typeof(shape.path)
         if tonumber(actual_type) ~= shape.kind then
@@ -641,15 +641,15 @@ local function assert_empty_container_shapes(scenario, workload, expected_json, 
 end
 
 local function smoke_mutation_roundtrip(payload, mutator)
-    local t = qjson.decode(payload)
+    local t = leanjson.decode(payload)
     mutator(t)
-    local encoded = qjson.encode(t)
+    local encoded = leanjson.encode(t)
     return cjson.decode(encoded), encoded
 end
 
 local function run_scenario_smoke(s)
     local cjson_access = s.cjson_access or default_cjson_access
-    local qjson_access = s.qjson_access or default_qjson_access
+    local leanjson_access = s.leanjson_access or default_leanjson_access
     local table_access = s.table_access or default_table_access
     local modify_top = s.modify_top or default_table_modify_top
     local modify_add = s.modify_add or default_table_modify_add
@@ -661,27 +661,27 @@ local function run_scenario_smoke(s)
     cjson_access(baseline)
     local expected_summary = table_summary(baseline)
 
-    local parsed = qjson.parse(s.payload)
-    qjson_access(parsed)
-    assert_semantic_equal(s.name, "qjson.parse + access fields",
+    local parsed = leanjson.parse(s.payload)
+    leanjson_access(parsed)
+    assert_semantic_equal(s.name, "leanjson.parse + access fields",
         expected_summary, doc_summary(parsed))
 
     if has_pooled_api then
         local pooled = pooled_decoder:parse(s.payload)
-        qjson_access(pooled)
-        assert_semantic_equal(s.name, "qjson pooled :parse + access fields",
+        leanjson_access(pooled)
+        assert_semantic_equal(s.name, "leanjson pooled :parse + access fields",
             expected_summary, doc_summary(pooled))
 
-        local dec = qjson.new_decoder()
+        local dec = leanjson.new_decoder()
         local one_shot = dec:parse(s.payload)
-        qjson_access(one_shot)
-        assert_semantic_equal(s.name, "qjson new_decoder()+parse (one-shot)",
+        leanjson_access(one_shot)
+        assert_semantic_equal(s.name, "leanjson new_decoder()+parse (one-shot)",
             expected_summary, doc_summary(one_shot))
     end
 
-    local lazy = qjson.decode(s.payload)
+    local lazy = leanjson.decode(s.payload)
     table_access(lazy)
-    assert_semantic_equal(s.name, "qjson.decode + access content",
+    assert_semantic_equal(s.name, "leanjson.decode + access content",
         expected_summary, table_summary(lazy))
 
     if simdjson then
@@ -691,31 +691,31 @@ local function run_scenario_smoke(s)
             expected_summary, table_summary(simd))
     end
 
-    local unmodified = qjson.encode(qjson.decode(s.payload))
+    local unmodified = leanjson.encode(leanjson.decode(s.payload))
     local unmodified_decoded = cjson.decode(unmodified)
-    assert_semantic_equal(s.name, "qjson.decode + qjson.encode (unmodified)",
+    assert_semantic_equal(s.name, "leanjson.decode + leanjson.encode (unmodified)",
         baseline, unmodified_decoded)
-    assert_empty_container_shapes(s.name, "qjson.decode + qjson.encode (unmodified)",
+    assert_empty_container_shapes(s.name, "leanjson.decode + leanjson.encode (unmodified)",
         s.payload, unmodified)
 
     local expect_top = cjson.decode(s.payload)
     modify_top(expect_top)
     local actual_top, encoded_top = smoke_mutation_roundtrip(s.payload, modify_top)
-    local modify_top_workload = "qjson.decode + modify top + encode"
+    local modify_top_workload = "leanjson.decode + modify top + encode"
     assert_semantic_equal(s.name, modify_top_workload, expect_top, actual_top)
     assert_empty_container_shapes(s.name, modify_top_workload, s.payload, encoded_top)
 
     local expect_add = cjson.decode(s.payload)
     modify_add(expect_add)
     local actual_add, encoded_add = smoke_mutation_roundtrip(s.payload, modify_add)
-    local modify_add_workload = "qjson.decode + add field + encode"
+    local modify_add_workload = "leanjson.decode + add field + encode"
     assert_semantic_equal(s.name, modify_add_workload, expect_add, actual_add)
     assert_empty_container_shapes(s.name, modify_add_workload, s.payload, encoded_add)
 
     local expect_nested = cjson.decode(s.payload)
     modify_nested(expect_nested)
     local actual_nested, encoded_nested = smoke_mutation_roundtrip(s.payload, modify_nested)
-    local modify_nested_workload = "qjson.decode + modify nested + encode"
+    local modify_nested_workload = "leanjson.decode + modify nested + encode"
     assert_semantic_equal(s.name, modify_nested_workload, expect_nested, actual_nested)
     assert_empty_container_shapes(s.name, modify_nested_workload, s.payload, encoded_nested)
 end
@@ -729,18 +729,18 @@ local function run_interleaved_smoke()
         default_cjson_access(baseline)
         local expected_summary = default_table_summary(baseline)
 
-        local parsed = qjson.parse(payload)
-        default_qjson_access(parsed)
-        assert_semantic_equal("interleaved", workload .. " qjson.parse + access fields",
+        local parsed = leanjson.parse(payload)
+        default_leanjson_access(parsed)
+        assert_semantic_equal("interleaved", workload .. " leanjson.parse + access fields",
             expected_summary, default_doc_summary(parsed))
 
-        local lazy = qjson.decode(payload)
+        local lazy = leanjson.decode(payload)
         default_table_access(lazy)
-        assert_semantic_equal("interleaved", workload .. " qjson.decode + access content",
+        assert_semantic_equal("interleaved", workload .. " leanjson.decode + access content",
             expected_summary, default_table_summary(lazy))
 
-        local unmodified = qjson.encode(qjson.decode(payload))
-        local encode_workload = workload .. " qjson.decode + qjson.encode (unmodified)"
+        local unmodified = leanjson.encode(leanjson.decode(payload))
+        local encode_workload = workload .. " leanjson.decode + leanjson.encode (unmodified)"
         assert_semantic_equal("interleaved", encode_workload, baseline, cjson.decode(unmodified))
         assert_empty_container_shapes("interleaved", encode_workload, payload, unmodified)
 
@@ -783,7 +783,7 @@ local function run_benchmarks()
         print(string.format("=== %s (%d bytes) ===", s.name, #s.payload))
 
         local cjson_access = s.cjson_access or default_cjson_access
-        local qjson_access = s.qjson_access or default_qjson_access
+        local leanjson_access = s.leanjson_access or default_leanjson_access
         local table_access = s.table_access or default_table_access
         local modify_top = s.modify_top or default_table_modify_top
         local modify_add = s.modify_add or default_table_modify_add
@@ -825,54 +825,54 @@ local function run_benchmarks()
             end)
         end
 
-        bench("qjson.parse + access fields", s.iters, function()
-            local d = qjson.parse(s.payload)
-            qjson_access(d)
+        bench("leanjson.parse + access fields", s.iters, function()
+            local d = leanjson.parse(s.payload)
+            leanjson_access(d)
         end)
 
         if has_pooled_api then
-            bench("qjson pooled :parse + access fields", s.iters, function()
+            bench("leanjson pooled :parse + access fields", s.iters, function()
                 local d = pooled_decoder:parse(s.payload)
-                qjson_access(d)
+                leanjson_access(d)
             end)
 
-            bench("qjson new_decoder()+parse (one-shot)", s.iters, function()
-                local dec = qjson.new_decoder()
+            bench("leanjson new_decoder()+parse (one-shot)", s.iters, function()
+                local dec = leanjson.new_decoder()
                 local d = dec:parse(s.payload)
-                qjson_access(d)
+                leanjson_access(d)
             end)
         end
 
-        bench("qjson.decode + access content", s.iters, function()
-            local t = qjson.decode(s.payload)
+        bench("leanjson.decode + access content", s.iters, function()
+            local t = leanjson.decode(s.payload)
             table_access(t)
         end)
 
-        bench("qjson.decode + qjson.encode (unmodified)", s.iters, function()
-            local t = qjson.decode(s.payload)
-            local _enc = qjson.encode(t)
-            if #_enc < 2 then error("qjson.encode produced too-short result") end
+        bench("leanjson.decode + leanjson.encode (unmodified)", s.iters, function()
+            local t = leanjson.decode(s.payload)
+            local _enc = leanjson.encode(t)
+            if #_enc < 2 then error("leanjson.encode produced too-short result") end
         end)
 
-        bench("qjson.decode + modify top + encode", s.iters, function()
-            local t = qjson.decode(s.payload)
+        bench("leanjson.decode + modify top + encode", s.iters, function()
+            local t = leanjson.decode(s.payload)
             modify_top(t)
-            local _enc = qjson.encode(t)
-            if #_enc < 2 then error("qjson.encode produced too-short result") end
+            local _enc = leanjson.encode(t)
+            if #_enc < 2 then error("leanjson.encode produced too-short result") end
         end)
 
-        bench("qjson.decode + add field + encode", s.iters, function()
-            local t = qjson.decode(s.payload)
+        bench("leanjson.decode + add field + encode", s.iters, function()
+            local t = leanjson.decode(s.payload)
             modify_add(t)
-            local _enc = qjson.encode(t)
-            if #_enc < 2 then error("qjson.encode produced too-short result") end
+            local _enc = leanjson.encode(t)
+            if #_enc < 2 then error("leanjson.encode produced too-short result") end
         end)
 
-        bench("qjson.decode + modify nested + encode", s.iters, function()
-            local t = qjson.decode(s.payload)
+        bench("leanjson.decode + modify nested + encode", s.iters, function()
+            local t = leanjson.decode(s.payload)
             modify_nested(t)
-            local _enc = qjson.encode(t)
-            if #_enc < 2 then error("qjson.encode produced too-short result") end
+            local _enc = leanjson.encode(t)
+            if #_enc < 2 then error("leanjson.encode produced too-short result") end
         end)
         ::continue_scenario::
     end
@@ -898,61 +898,61 @@ local function run_benchmarks()
             end
 
             next_p = make_cycler(interleaved)
-            bench("qjson.parse + access fields", 400, function()
+            bench("leanjson.parse + access fields", 400, function()
                 local p = next_p()
-                local d = qjson.parse(p)
-                default_qjson_access(d)
+                local d = leanjson.parse(p)
+                default_leanjson_access(d)
             end)
 
             if has_pooled_api then
                 next_p = make_cycler(interleaved)
-                bench("qjson pooled :parse + access fields", 400, function()
+                bench("leanjson pooled :parse + access fields", 400, function()
                     local p = next_p()
                     local d = pooled_decoder:parse(p)
-                    default_qjson_access(d)
+                    default_leanjson_access(d)
                 end)
             end
 
             next_p = make_cycler(interleaved)
-            bench("qjson.decode + access content", 400, function()
+            bench("leanjson.decode + access content", 400, function()
                 local p = next_p()
-                local t = qjson.decode(p)
+                local t = leanjson.decode(p)
                 default_table_access(t)
             end)
 
             next_p = make_cycler(interleaved)
-            bench("qjson.decode + qjson.encode (unmodified)", 400, function()
+            bench("leanjson.decode + leanjson.encode (unmodified)", 400, function()
                 local p = next_p()
-                local t = qjson.decode(p)
-                local _enc = qjson.encode(t)
-                if #_enc < 2 then error("qjson.encode produced too-short result") end
+                local t = leanjson.decode(p)
+                local _enc = leanjson.encode(t)
+                if #_enc < 2 then error("leanjson.encode produced too-short result") end
             end)
 
             next_p = make_cycler(interleaved)
-            bench("qjson.decode + modify top + encode", 400, function()
+            bench("leanjson.decode + modify top + encode", 400, function()
                 local p = next_p()
-                local t = qjson.decode(p)
+                local t = leanjson.decode(p)
                 default_table_modify_top(t)
-                local _enc = qjson.encode(t)
-                if #_enc < 2 then error("qjson.encode produced too-short result") end
+                local _enc = leanjson.encode(t)
+                if #_enc < 2 then error("leanjson.encode produced too-short result") end
             end)
 
             next_p = make_cycler(interleaved)
-            bench("qjson.decode + add field + encode", 400, function()
+            bench("leanjson.decode + add field + encode", 400, function()
                 local p = next_p()
-                local t = qjson.decode(p)
+                local t = leanjson.decode(p)
                 default_table_modify_add(t)
-                local _enc = qjson.encode(t)
-                if #_enc < 2 then error("qjson.encode produced too-short result") end
+                local _enc = leanjson.encode(t)
+                if #_enc < 2 then error("leanjson.encode produced too-short result") end
             end)
 
             next_p = make_cycler(interleaved)
-            bench("qjson.decode + modify nested + encode", 400, function()
+            bench("leanjson.decode + modify nested + encode", 400, function()
                 local p = next_p()
-                local t = qjson.decode(p)
+                local t = leanjson.decode(p)
                 default_table_modify_nested(t)
-                local _enc = qjson.encode(t)
-                if #_enc < 2 then error("qjson.encode produced too-short result") end
+                local _enc = leanjson.encode(t)
+                if #_enc < 2 then error("leanjson.encode produced too-short result") end
             end)
         end
     end  -- filter == "interleaved"
@@ -971,18 +971,18 @@ local function run_benchmarks()
         for _, f in ipairs(manifest.fixtures) do
             if manifest_mod.has_ci(f, "bench") and f.format == "json" then
                 local payload = read_file(f.path)
-                local access = manifest_mod.qjson_access(f.checks)
+                local access = manifest_mod.leanjson_access(f.checks)
                 local iters = f.bench_iters or 500
                 print(string.format("--- %s [%s] (%d bytes) ---",
                     f.id, f.payload_type, #payload))
 
-                bench("qjson.parse + manifest access", iters, function()
-                    local d = qjson.parse(payload)
+                bench("leanjson.parse + manifest access", iters, function()
+                    local d = leanjson.parse(payload)
                     access(d)
                 end)
 
                 if has_pooled_api then
-                    bench("qjson pooled :parse + manifest access", iters, function()
+                    bench("leanjson pooled :parse + manifest access", iters, function()
                         local d = pooled_decoder:parse(payload)
                         access(d)
                     end)

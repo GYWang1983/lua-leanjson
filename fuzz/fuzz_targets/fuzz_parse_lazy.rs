@@ -2,8 +2,8 @@
 
 #[cfg(not(test))]
 use libfuzzer_sys::fuzz_target;
-use qjson::ffi::*;
-use qjson::options::{Options, QJSON_MODE_LAZY};
+use leanjson::ffi::*;
+use leanjson::options::{Options, LEANJSON_MODE_LAZY};
 use serde_json::{Map, Number, Value};
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -43,15 +43,15 @@ fn fuzz_one(data: &[u8]) {
         Err(_) => return,
     };
 
-    let opts = Options { mode: QJSON_MODE_LAZY, max_depth: FUZZ_MAX_DEPTH };
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(data.as_ptr(), data.len(), &opts, &mut err) };
-    assert!(!doc.is_null(), "qjson lazy rejected serde-accepted input with err={err:?}: {data:?}");
+    let opts = Options { mode: LEANJSON_MODE_LAZY, max_depth: FUZZ_MAX_DEPTH };
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(data.as_ptr(), data.len(), &opts, &mut err) };
+    assert!(!doc.is_null(), "leanjson lazy rejected serde-accepted input with err={err:?}: {data:?}");
 
     let actual = unsafe {
-        let mut root: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_open(doc, ptr::null(), 0, &mut root);
-        assert_eq!(rc, 0, "qjson_open root failed with rc={rc}: {data:?}");
+        let mut root: leanjson_cursor = std::mem::zeroed();
+        let rc = leanjson_open(doc, ptr::null(), 0, &mut root);
+        assert_eq!(rc, 0, "leanjson_open root failed with rc={rc}: {data:?}");
 
         let mut path = String::new();
         let mut path_checks = Vec::new();
@@ -61,7 +61,7 @@ fn fuzz_one(data: &[u8]) {
             "semantic replay must record at least the root path for input={data:?}",
         );
         verify_path_getter_consistency(doc, &root, &path_checks);
-        qjson_free(doc);
+        leanjson_free(doc);
         actual
     };
 
@@ -105,7 +105,7 @@ impl PathExpected {
             Value::Null => Self::Null,
             Value::Bool(value) => Self::Bool(*value),
             Value::Number(number) => {
-                Self::Number(number.as_f64().expect("normalized qjson number must fit f64"))
+                Self::Number(number.as_f64().expect("normalized leanjson number must fit f64"))
             }
             Value::String(value) => Self::String(value.clone()),
             Value::Array(items) => Self::ArrayLen(items.len()),
@@ -126,7 +126,7 @@ impl PathExpected {
     }
 }
 
-fn path_key_can_be_in_qjson_path(key: &str) -> bool {
+fn path_key_can_be_in_leanjson_path(key: &str) -> bool {
     !key.is_empty() && !key.as_bytes().iter().any(|&byte| matches!(byte, b'.' | b'[' | b']'))
 }
 
@@ -154,7 +154,7 @@ fn record_path_check(path_checks: &mut Vec<PathCheck>, path: &str, expected: Pat
 }
 
 unsafe fn cursor_to_value(
-    cur: &qjson_cursor,
+    cur: &leanjson_cursor,
     data: &[u8],
     depth: u32,
     path: &mut String,
@@ -170,7 +170,7 @@ unsafe fn cursor_to_value(
         T_STR => Value::String(cursor_string(cur)),
         T_ARR => Value::Array(cursor_array(cur, data, depth + 1, path, path_safe, path_checks)),
         T_OBJ => Value::Object(cursor_object(cur, data, depth + 1, path, path_safe, path_checks)),
-        other => panic!("unknown qjson type {other}"),
+        other => panic!("unknown leanjson type {other}"),
     };
 
     if path_safe {
@@ -185,50 +185,50 @@ unsafe fn cursor_to_value(
     value
 }
 
-unsafe fn cursor_type(cur: &qjson_cursor) -> c_int {
+unsafe fn cursor_type(cur: &leanjson_cursor) -> c_int {
     cursor_type_at(cur, &[])
 }
 
-unsafe fn cursor_type_at(cur: &qjson_cursor, path: &[u8]) -> c_int {
+unsafe fn cursor_type_at(cur: &leanjson_cursor, path: &[u8]) -> c_int {
     let mut ty: c_int = -1;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_cursor_typeof(cur, path_ptr, path_len, &mut ty);
-    assert_eq!(rc, 0, "qjson_cursor_typeof({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_cursor_typeof(cur, path_ptr, path_len, &mut ty);
+    assert_eq!(rc, 0, "leanjson_cursor_typeof({:?}) failed with rc={rc}", path_debug(path));
     ty
 }
 
-unsafe fn cursor_bool(cur: &qjson_cursor) -> bool {
+unsafe fn cursor_bool(cur: &leanjson_cursor) -> bool {
     let mut value: c_int = -1;
-    let rc = qjson_cursor_get_bool(cur, ptr::null(), 0, &mut value);
-    assert_eq!(rc, 0, "qjson_cursor_get_bool failed with rc={rc}");
+    let rc = leanjson_cursor_get_bool(cur, ptr::null(), 0, &mut value);
+    assert_eq!(rc, 0, "leanjson_cursor_get_bool failed with rc={rc}");
     value != 0
 }
 
-unsafe fn cursor_number(cur: &qjson_cursor) -> Number {
+unsafe fn cursor_number(cur: &leanjson_cursor) -> Number {
     let mut value = 0.0f64;
-    let rc = qjson_cursor_get_f64(cur, ptr::null(), 0, &mut value);
-    assert_eq!(rc, 0, "qjson_cursor_get_f64 failed with rc={rc}");
-    Number::from_f64(value).expect("qjson finite JSON number")
+    let rc = leanjson_cursor_get_f64(cur, ptr::null(), 0, &mut value);
+    assert_eq!(rc, 0, "leanjson_cursor_get_f64 failed with rc={rc}");
+    Number::from_f64(value).expect("leanjson finite JSON number")
 }
 
-unsafe fn cursor_string(cur: &qjson_cursor) -> String {
+unsafe fn cursor_string(cur: &leanjson_cursor) -> String {
     let mut ptr_out: *const u8 = ptr::null();
     let mut len_out: usize = 0;
-    let rc = qjson_cursor_get_str(cur, ptr::null(), 0, &mut ptr_out, &mut len_out);
-    assert_eq!(rc, 0, "qjson_cursor_get_str failed with rc={rc}");
+    let rc = leanjson_cursor_get_str(cur, ptr::null(), 0, &mut ptr_out, &mut len_out);
+    assert_eq!(rc, 0, "leanjson_cursor_get_str failed with rc={rc}");
     let bytes = std::slice::from_raw_parts(ptr_out, len_out).to_vec();
     String::from_utf8(bytes).expect("serde accepted string must decode as UTF-8")
 }
 
-unsafe fn cursor_len(cur: &qjson_cursor) -> usize {
+unsafe fn cursor_len(cur: &leanjson_cursor) -> usize {
     let mut len = 0usize;
-    let rc = qjson_cursor_len(cur, ptr::null(), 0, &mut len);
-    assert_eq!(rc, 0, "qjson_cursor_len failed with rc={rc}");
+    let rc = leanjson_cursor_len(cur, ptr::null(), 0, &mut len);
+    assert_eq!(rc, 0, "leanjson_cursor_len failed with rc={rc}");
     len
 }
 
 unsafe fn cursor_array(
-    cur: &qjson_cursor,
+    cur: &leanjson_cursor,
     data: &[u8],
     depth: u32,
     path: &mut String,
@@ -250,7 +250,7 @@ unsafe fn cursor_array(
 }
 
 unsafe fn cursor_index_value(
-    cur: &qjson_cursor,
+    cur: &leanjson_cursor,
     data: &[u8],
     index: usize,
     depth: u32,
@@ -258,9 +258,9 @@ unsafe fn cursor_index_value(
     path_safe: bool,
     path_checks: &mut Vec<PathCheck>,
 ) -> Value {
-    let mut child: qjson_cursor = std::mem::zeroed();
-    let rc = qjson_cursor_index(cur, index, &mut child);
-    assert_eq!(rc, 0, "qjson_cursor_index({index}) failed with rc={rc}");
+    let mut child: leanjson_cursor = std::mem::zeroed();
+    let rc = leanjson_cursor_index(cur, index, &mut child);
+    assert_eq!(rc, 0, "leanjson_cursor_index({index}) failed with rc={rc}");
 
     let old_len = if path_safe {
         append_index_segment(path, index)
@@ -273,7 +273,7 @@ unsafe fn cursor_index_value(
 }
 
 unsafe fn cursor_object(
-    cur: &qjson_cursor,
+    cur: &leanjson_cursor,
     data: &[u8],
     depth: u32,
     path: &mut String,
@@ -297,7 +297,7 @@ unsafe fn cursor_object(
         let key_is_unique = counts.get(&key).copied().unwrap_or(0) == 1;
         let field_lookup_key = field_lookup_key_for_replay(&key, &raw_key, key_is_unique);
         let child_path_safe =
-            path_safe && field_lookup_key.is_some() && path_key_can_be_in_qjson_path(&key);
+            path_safe && field_lookup_key.is_some() && path_key_can_be_in_leanjson_path(&key);
         let old_len = if child_path_safe {
             append_key_segment(path, &key)
         } else {
@@ -315,26 +315,26 @@ unsafe fn cursor_object(
         let (key, expected, field_lookup_key, expected_cur) = &entries[i];
         let Some(field_lookup_key) = field_lookup_key else { continue };
 
-        let mut child: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_cursor_field(
+        let mut child: leanjson_cursor = std::mem::zeroed();
+        let rc = leanjson_cursor_field(
             cur,
             field_lookup_key.as_ptr() as *const c_char,
             field_lookup_key.len(),
             &mut child,
         );
-        assert_eq!(rc, 0, "qjson_cursor_field({key:?}) failed with rc={rc}");
+        assert_eq!(rc, 0, "leanjson_cursor_field({key:?}) failed with rc={rc}");
         assert_eq!(
             child.idx_start, expected_cur.idx_start,
-            "qjson_cursor_field returned wrong idx_start for key {key:?}",
+            "leanjson_cursor_field returned wrong idx_start for key {key:?}",
         );
         assert_eq!(
             child.idx_end, expected_cur.idx_end,
-            "qjson_cursor_field returned wrong idx_end for key {key:?}",
+            "leanjson_cursor_field returned wrong idx_end for key {key:?}",
         );
 
         let mut scratch_path = String::new();
         let actual = cursor_to_value(&child, data, depth, &mut scratch_path, false, path_checks);
-        assert_eq!(actual, *expected, "qjson_cursor_field warm lookup mismatch for key {key:?}");
+        assert_eq!(actual, *expected, "leanjson_cursor_field warm lookup mismatch for key {key:?}");
     }
 
     map
@@ -348,14 +348,14 @@ fn field_lookup_key_for_replay(decoded_key: &str, raw_key: &[u8], unique_decoded
     }
 }
 
-unsafe fn cursor_raw_object_keys(cur: &qjson_cursor, data: &[u8], expected_len: usize) -> Vec<Vec<u8>> {
+unsafe fn cursor_raw_object_keys(cur: &leanjson_cursor, data: &[u8], expected_len: usize) -> Vec<Vec<u8>> {
     let mut byte_start = 0usize;
     let mut byte_end = 0usize;
-    let rc = qjson_cursor_bytes(cur, &mut byte_start, &mut byte_end);
-    assert_eq!(rc, 0, "qjson_cursor_bytes for object failed with rc={rc}");
+    let rc = leanjson_cursor_bytes(cur, &mut byte_start, &mut byte_end);
+    assert_eq!(rc, 0, "leanjson_cursor_bytes for object failed with rc={rc}");
     assert!(
         byte_start <= byte_end && byte_end <= data.len(),
-        "qjson_cursor_bytes returned invalid object range {byte_start}..{byte_end} for input len {}",
+        "leanjson_cursor_bytes returned invalid object range {byte_start}..{byte_end} for input len {}",
         data.len(),
     );
 
@@ -363,7 +363,7 @@ unsafe fn cursor_raw_object_keys(cur: &qjson_cursor, data: &[u8], expected_len: 
     assert_eq!(
         keys.len(),
         expected_len,
-        "raw object key scan disagreed with qjson_cursor_len for object range {byte_start}..{byte_end}",
+        "raw object key scan disagreed with leanjson_cursor_len for object range {byte_start}..{byte_end}",
     );
     keys
 }
@@ -463,12 +463,12 @@ fn skip_json_container(bytes: &[u8], mut pos: usize) -> Option<usize> {
     None
 }
 
-unsafe fn cursor_object_entry_at(cur: &qjson_cursor, index: usize) -> (String, qjson_cursor) {
+unsafe fn cursor_object_entry_at(cur: &leanjson_cursor, index: usize) -> (String, leanjson_cursor) {
     let mut key_ptr: *const u8 = ptr::null();
     let mut key_len = 0usize;
-    let mut value_cur: qjson_cursor = std::mem::zeroed();
-    let rc = qjson_cursor_object_entry_at(cur, index, &mut key_ptr, &mut key_len, &mut value_cur);
-    assert_eq!(rc, 0, "qjson_cursor_object_entry_at({index}) failed with rc={rc}");
+    let mut value_cur: leanjson_cursor = std::mem::zeroed();
+    let rc = leanjson_cursor_object_entry_at(cur, index, &mut key_ptr, &mut key_len, &mut value_cur);
+    assert_eq!(rc, 0, "leanjson_cursor_object_entry_at({index}) failed with rc={rc}");
 
     let key_bytes = std::slice::from_raw_parts(key_ptr, key_len).to_vec();
     let key = String::from_utf8(key_bytes).expect("serde accepted object key must decode as UTF-8");
@@ -476,8 +476,8 @@ unsafe fn cursor_object_entry_at(cur: &qjson_cursor, index: usize) -> (String, q
 }
 
 unsafe fn verify_path_getter_consistency(
-    doc: *mut qjson_doc,
-    root: &qjson_cursor,
+    doc: *mut leanjson_doc,
+    root: &leanjson_cursor,
     path_checks: &[PathCheck],
 ) {
     for check in path_checks {
@@ -578,79 +578,79 @@ fn path_debug(path: &[u8]) -> String {
     String::from_utf8_lossy(path).into_owned()
 }
 
-unsafe fn root_type(doc: *mut qjson_doc, path: &[u8]) -> c_int {
+unsafe fn root_type(doc: *mut leanjson_doc, path: &[u8]) -> c_int {
     let mut ty: c_int = -1;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_typeof(doc, path_ptr, path_len, &mut ty);
-    assert_eq!(rc, 0, "qjson_typeof({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_typeof(doc, path_ptr, path_len, &mut ty);
+    assert_eq!(rc, 0, "leanjson_typeof({:?}) failed with rc={rc}", path_debug(path));
     ty
 }
 
-unsafe fn root_bool(doc: *mut qjson_doc, path: &[u8]) -> bool {
+unsafe fn root_bool(doc: *mut leanjson_doc, path: &[u8]) -> bool {
     let mut value: c_int = -1;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_get_bool(doc, path_ptr, path_len, &mut value);
-    assert_eq!(rc, 0, "qjson_get_bool({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_get_bool(doc, path_ptr, path_len, &mut value);
+    assert_eq!(rc, 0, "leanjson_get_bool({:?}) failed with rc={rc}", path_debug(path));
     value != 0
 }
 
-unsafe fn cursor_bool_at(cur: &qjson_cursor, path: &[u8]) -> bool {
+unsafe fn cursor_bool_at(cur: &leanjson_cursor, path: &[u8]) -> bool {
     let mut value: c_int = -1;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_cursor_get_bool(cur, path_ptr, path_len, &mut value);
-    assert_eq!(rc, 0, "qjson_cursor_get_bool({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_cursor_get_bool(cur, path_ptr, path_len, &mut value);
+    assert_eq!(rc, 0, "leanjson_cursor_get_bool({:?}) failed with rc={rc}", path_debug(path));
     value != 0
 }
 
-unsafe fn root_number(doc: *mut qjson_doc, path: &[u8]) -> f64 {
+unsafe fn root_number(doc: *mut leanjson_doc, path: &[u8]) -> f64 {
     let mut value = 0.0f64;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_get_f64(doc, path_ptr, path_len, &mut value);
-    assert_eq!(rc, 0, "qjson_get_f64({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_get_f64(doc, path_ptr, path_len, &mut value);
+    assert_eq!(rc, 0, "leanjson_get_f64({:?}) failed with rc={rc}", path_debug(path));
     value
 }
 
-unsafe fn cursor_number_at(cur: &qjson_cursor, path: &[u8]) -> f64 {
+unsafe fn cursor_number_at(cur: &leanjson_cursor, path: &[u8]) -> f64 {
     let mut value = 0.0f64;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_cursor_get_f64(cur, path_ptr, path_len, &mut value);
-    assert_eq!(rc, 0, "qjson_cursor_get_f64({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_cursor_get_f64(cur, path_ptr, path_len, &mut value);
+    assert_eq!(rc, 0, "leanjson_cursor_get_f64({:?}) failed with rc={rc}", path_debug(path));
     value
 }
 
-unsafe fn root_string(doc: *mut qjson_doc, path: &[u8]) -> String {
+unsafe fn root_string(doc: *mut leanjson_doc, path: &[u8]) -> String {
     let mut ptr_out: *const u8 = ptr::null();
     let mut len_out: usize = 0;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_get_str(doc, path_ptr, path_len, &mut ptr_out, &mut len_out);
-    assert_eq!(rc, 0, "qjson_get_str({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_get_str(doc, path_ptr, path_len, &mut ptr_out, &mut len_out);
+    assert_eq!(rc, 0, "leanjson_get_str({:?}) failed with rc={rc}", path_debug(path));
     let bytes = std::slice::from_raw_parts(ptr_out, len_out).to_vec();
     String::from_utf8(bytes).expect("serde accepted string must decode as UTF-8")
 }
 
-unsafe fn cursor_string_at(cur: &qjson_cursor, path: &[u8]) -> String {
+unsafe fn cursor_string_at(cur: &leanjson_cursor, path: &[u8]) -> String {
     let mut ptr_out: *const u8 = ptr::null();
     let mut len_out: usize = 0;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_cursor_get_str(cur, path_ptr, path_len, &mut ptr_out, &mut len_out);
-    assert_eq!(rc, 0, "qjson_cursor_get_str({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_cursor_get_str(cur, path_ptr, path_len, &mut ptr_out, &mut len_out);
+    assert_eq!(rc, 0, "leanjson_cursor_get_str({:?}) failed with rc={rc}", path_debug(path));
     let bytes = std::slice::from_raw_parts(ptr_out, len_out).to_vec();
     String::from_utf8(bytes).expect("serde accepted string must decode as UTF-8")
 }
 
-unsafe fn root_len(doc: *mut qjson_doc, path: &[u8]) -> usize {
+unsafe fn root_len(doc: *mut leanjson_doc, path: &[u8]) -> usize {
     let mut len = 0usize;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_len(doc, path_ptr, path_len, &mut len);
-    assert_eq!(rc, 0, "qjson_len({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_len(doc, path_ptr, path_len, &mut len);
+    assert_eq!(rc, 0, "leanjson_len({:?}) failed with rc={rc}", path_debug(path));
     len
 }
 
-unsafe fn cursor_len_at(cur: &qjson_cursor, path: &[u8]) -> usize {
+unsafe fn cursor_len_at(cur: &leanjson_cursor, path: &[u8]) -> usize {
     let mut len = 0usize;
     let (path_ptr, path_len) = ffi_path(path);
-    let rc = qjson_cursor_len(cur, path_ptr, path_len, &mut len);
-    assert_eq!(rc, 0, "qjson_cursor_len({:?}) failed with rc={rc}", path_debug(path));
+    let rc = leanjson_cursor_len(cur, path_ptr, path_len, &mut len);
+    assert_eq!(rc, 0, "leanjson_cursor_len({:?}) failed with rc={rc}", path_debug(path));
     len
 }
 
@@ -707,17 +707,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn path_key_safety_rejects_qjson_path_delimiters() {
-        assert!(path_key_can_be_in_qjson_path("plain"));
-        assert!(path_key_can_be_in_qjson_path("emoji"));
-        assert!(!path_key_can_be_in_qjson_path(""));
-        assert!(!path_key_can_be_in_qjson_path("a.b"));
-        assert!(!path_key_can_be_in_qjson_path("arr[0]"));
-        assert!(!path_key_can_be_in_qjson_path("bad]key"));
+    fn path_key_safety_rejects_leanjson_path_delimiters() {
+        assert!(path_key_can_be_in_leanjson_path("plain"));
+        assert!(path_key_can_be_in_leanjson_path("emoji"));
+        assert!(!path_key_can_be_in_leanjson_path(""));
+        assert!(!path_key_can_be_in_leanjson_path("a.b"));
+        assert!(!path_key_can_be_in_leanjson_path("arr[0]"));
+        assert!(!path_key_can_be_in_leanjson_path("bad]key"));
     }
 
     #[test]
-    fn path_segment_builders_match_qjson_path_syntax() {
+    fn path_segment_builders_match_leanjson_path_syntax() {
         let mut path = String::new();
 
         let root_len = path.len();

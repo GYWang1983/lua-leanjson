@@ -1,10 +1,10 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 local cjson = require("cjson")
 local prop = require("tests.lua.property_json")
 local lfs = require("lfs")
 
 local function drain(value, normalized)
-    local reader = qjson.reader(value, { chunk_size = 7, normalize_duplicates = normalized })
+    local reader = leanjson.reader(value, { chunk_size = 7, normalize_duplicates = normalized })
     local length, err = reader:length()
     assert.is_nil(err)
     local parts = {}
@@ -33,7 +33,7 @@ describe("file and feed source differential coverage", function()
             local file = assert(io.open(filename, "wb"))
             file:write(raw)
             file:close()
-            local decoder = qjson.new_decoder({ chunk_size = i % 11 + 1 })
+            local decoder = leanjson.new_decoder({ chunk_size = i % 11 + 1 })
             local position = 1
             while position <= #raw do
                 local last = math.min(#raw, position + rng:int(17))
@@ -42,18 +42,18 @@ describe("file and feed source differential coverage", function()
             end
             local feed, err = decoder:finish()
             assert.is_nil(err)
-            local disk = qjson.decode_file(filename, { chunk_size = i % 13 + 1 })
-            local frozen = qjson.fork(disk)
+            local disk = leanjson.decode_file(filename, { chunk_size = i % 13 + 1 })
+            local frozen = leanjson.fork(disk)
             disk.tag = "new"
             feed.tag = "new"
             local expected = cjson.decode('{"value":' .. nested .. ',"tag":"new","array":[false,null,{"x":1}]}')
             assert.are.same(expected, cjson.decode(drain(disk, true)))
-            assert.are.same(expected, qjson.materialize(feed))
+            assert.are.same(expected, leanjson.materialize(feed))
             assert.are.same(cjson.decode(raw), cjson.decode(drain(frozen, false)))
             decoder:close()
-            qjson.close(disk)
-            qjson.close(feed)
-            qjson.close(frozen)
+            leanjson.close(disk)
+            leanjson.close(feed)
+            leanjson.close(frozen)
         end
     end)
 
@@ -63,10 +63,10 @@ describe("file and feed source differential coverage", function()
         for name in lfs.dir(base) do
             local requirement = name:sub(1, 2)
             if requirement == "y_" or requirement == "n_" then
-                local ok, value = pcall(qjson.decode_file, base .. name, { chunk_size = 3 })
+                local ok, value = pcall(leanjson.decode_file, base .. name, { chunk_size = 3 })
                 if requirement == "y_" then
                     assert.is_true(ok, name .. ": " .. (ok and "" or tostring(value)))
-                    qjson.close(value)
+                    leanjson.close(value)
                     valid = valid + 1
                 else
                     assert.is_false(ok, name)

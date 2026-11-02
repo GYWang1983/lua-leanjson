@@ -1,4 +1,4 @@
-# Narrow LuaJIT false-positive suppressions for Memcheck. Keep qjson/Rust frames
+# Narrow LuaJIT false-positive suppressions for Memcheck. Keep leanjson/Rust frames
 # unsuppressed so the valgrind step remains useful as an FFI integration canary.
 
 {
@@ -52,7 +52,7 @@
 # The upstream LuaJIT binary installed by leafo/gh-actions-lua is stripped in
 # CI, so the same lj_str_new/str_fastcmp reports can surface as `???` in the
 # LuaJIT executable followed by exported Lua C API frames. Keep these patterns
-# scoped to LuaJIT/lua-cjson frames; qjson/Rust frames remain unsuppressed.
+# scoped to LuaJIT/lua-cjson frames; leanjson/Rust frames remain unsuppressed.
 
 {
    Stripped LuaJIT string intern Cond via luaL_gsub

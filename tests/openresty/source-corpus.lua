@@ -1,4 +1,4 @@
-local qjson = require "qjson"
+local leanjson = require "leanjson"
 local root = "tests/vendor/JSONTestSuite/test_parsing"
 local listing = assert(io.popen("ls -1 " .. root, "r"))
 local names = {}
@@ -10,10 +10,10 @@ local counts = { y = 0, n = 0, i = 0, i_accept = 0, i_reject = 0 }
 for _, name in ipairs(names) do
     local path = root .. "/" .. name
     local classification = name:sub(1, 1)
-    local file_ok, file_value = pcall(qjson.decode_file, path, { chunk_size = 17 })
-    if file_ok then qjson.close(file_value) end
+    local file_ok, file_value = pcall(leanjson.decode_file, path, { chunk_size = 17 })
+    if file_ok then leanjson.close(file_value) end
     for _, size in ipairs { 17, 65536 } do
-        local decoder = qjson.new_decoder { chunk_size = size }
+        local decoder = leanjson.new_decoder { chunk_size = size }
         local file = assert(io.open(path, "rb"))
         local stream_error
         while true do
@@ -26,7 +26,7 @@ for _, name in ipairs(names) do
         local value
         if not stream_error then value, stream_error = decoder:finish() end
         decoder:close()
-        if not stream_error then qjson.close(value) end
+        if not stream_error then leanjson.close(value) end
         local stream_ok = stream_error == nil
         assert(stream_ok == file_ok, name .. " file/stream verdict differs at chunk " .. size)
         if classification == "y" then assert(stream_ok, name .. ": " .. tostring(stream_error)) end

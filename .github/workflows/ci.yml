@@ -32,8 +32,8 @@ jobs:
         run: make openresty-docker-test
       - name: Build and verify exact-commit runtime image
         run: |
-          scripts/build-openresty-image.sh "$GITHUB_SHA" lua-qjson-openresty:ci
-          scripts/verify-openresty-image.sh lua-qjson-openresty:ci
+          scripts/build-openresty-image.sh "$GITHUB_SHA" lua-leanjson-openresty:ci
+          scripts/verify-openresty-image.sh lua-leanjson-openresty:ci
 
   changes:
     name: Detect CI scope
@@ -196,8 +196,8 @@ jobs:
       - name: Upload release cdylib
         uses: actions/upload-artifact@v4
         with:
-          name: qjson-linux-release
-          path: target/release/libqjson.so
+          name: leanjson-linux-release
+          path: target/release/libleanjson.so
           if-no-files-found: error
           retention-days: 1
 
@@ -260,13 +260,19 @@ jobs:
         env:
           LUAJIT_BIN: ${{ steps.mac_luajit.outputs.path }}
         run: |
-          rm -rf /tmp/lua-qjson-rock
+          rm -rf /tmp/lua-leanjson-rock
           ROCKSPEC="$(.github/scripts/latest-rockspec.py)"
-          luarocks make "$ROCKSPEC" --tree /tmp/lua-qjson-rock
-          eval "$(luarocks path --tree /tmp/lua-qjson-rock)"
+          luarocks make "$ROCKSPEC" --tree /tmp/lua-leanjson-rock
+          eval "$(luarocks path --tree /tmp/lua-leanjson-rock)"
           unset LD_LIBRARY_PATH
           unset DYLD_LIBRARY_PATH
-          "$LUAJIT_BIN" -e 'local qjson = require("qjson"); local doc = qjson.parse("{\"a\":42}"); assert(doc:get_i64("a") == 42)'
+          SMOKE="$PWD/.github/scripts/installed-package-smoke.lua"
+          (
+            cd "${RUNNER_TEMP:-/tmp}"
+            LUA_PATH='/tmp/lua-leanjson-rock/share/lua/5.1/?.lua;/tmp/lua-leanjson-rock/share/lua/5.1/?/init.lua' \
+              LUA_CPATH='/tmp/lua-leanjson-rock/lib/lua/5.1/?.so' \
+              "$LUAJIT_BIN" "$SMOKE"
+          )
 
   lua-lint:
     name: Lua lint
@@ -326,9 +332,9 @@ jobs:
           cargo +nightly fuzz run fuzz_depth -- -runs=0
           cargo +nightly fuzz run fuzz_ffi_ops -- -runs=0
           cargo +nightly fuzz run fuzz_parse_lazy -- -runs=0
-          mkdir -p /tmp/qjson-source-corpus
-          cp -R fuzz/corpus/fuzz_parse_eager/. /tmp/qjson-source-corpus/
-          cargo +nightly fuzz run fuzz_source_windows /tmp/qjson-source-corpus -- -runs=0 -max_len=16384
+          mkdir -p /tmp/leanjson-source-corpus
+          cp -R fuzz/corpus/fuzz_parse_eager/. /tmp/leanjson-source-corpus/
+          cargo +nightly fuzz run fuzz_source_windows /tmp/leanjson-source-corpus -- -runs=0 -max_len=16384
 
   sanitizers:
     name: Sanitizers (Rust nightly)
@@ -406,7 +412,7 @@ jobs:
       - name: Download release cdylib
         uses: actions/download-artifact@v4
         with:
-          name: qjson-linux-release
+          name: leanjson-linux-release
           path: target/release
 
       - name: Install LuaJIT (${{ matrix.runtime.name }})
@@ -432,7 +438,7 @@ jobs:
         env:
           LUAJIT_BIN: ${{ steps.luajit.outputs.path }}
         run: |
-          # ffi.load("qjson") uses dlopen which respects LD_LIBRARY_PATH,
+          # ffi.load("leanjson") uses dlopen which respects LD_LIBRARY_PATH,
           # not LuaJIT's package.cpath. Point dlopen at the release build dir.
           LD_LIBRARY_PATH="$PWD/target/release" \
             busted --lua="$LUAJIT_BIN" tests/lua \
@@ -443,12 +449,19 @@ jobs:
         env:
           LUAJIT_BIN: ${{ steps.luajit.outputs.path }}
         run: |
-          rm -rf /tmp/lua-qjson-rock
+          rm -rf /tmp/lua-leanjson-rock
           ROCKSPEC="$(.github/scripts/latest-rockspec.py)"
-          luarocks make "$ROCKSPEC" --tree /tmp/lua-qjson-rock
-          eval "$(luarocks path --tree /tmp/lua-qjson-rock)"
+          luarocks make "$ROCKSPEC" --tree /tmp/lua-leanjson-rock
+          eval "$(luarocks path --tree /tmp/lua-leanjson-rock)"
           unset LD_LIBRARY_PATH
-          "$LUAJIT_BIN" -e 'local qjson = require("qjson"); local doc = qjson.parse("{\"a\":42}"); assert(doc:get_i64("a") == 42)'
+          unset DYLD_LIBRARY_PATH
+          SMOKE="$PWD/.github/scripts/installed-package-smoke.lua"
+          (
+            cd "${RUNNER_TEMP:-/tmp}"
+            LUA_PATH='/tmp/lua-leanjson-rock/share/lua/5.1/?.lua;/tmp/lua-leanjson-rock/share/lua/5.1/?/init.lua' \
+              LUA_CPATH='/tmp/lua-leanjson-rock/lib/lua/5.1/?.so' \
+              "$LUAJIT_BIN" "$SMOKE"
+          )
           busted --lua="$LUAJIT_BIN" tests/lua
 
   lua-valgrind:
@@ -464,7 +477,7 @@ jobs:
       - name: Download release cdylib
         uses: actions/download-artifact@v4
         with:
-          name: qjson-linux-release
+          name: leanjson-linux-release
           path: target/release
 
       - name: Install LuaJIT
@@ -541,7 +554,7 @@ jobs:
       - name: Download release cdylib
         uses: actions/download-artifact@v4
         with:
-          name: qjson-linux-release
+          name: leanjson-linux-release
           path: target/release
 
       - name: Run OpenResty runtime checks

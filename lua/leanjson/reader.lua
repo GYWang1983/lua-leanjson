@@ -1,14 +1,14 @@
 -- Streaming encoder over immutable logical nodes. The stack stores traversal
 -- state, never encoded subtrees; every string operation is bounded by room.
-local proxy = require("qjson.proxy")
-local leases = require("qjson.leases")
+local proxy = require("leanjson.proxy")
+local leases = require("leanjson.leases")
 local M = {}
 local Reader = {}; Reader.__index = Reader
 local ESCAPES = {
     [0x22] = '\\"', [0x5c] = '\\\\', [0x0a] = '\\n', [0x0d] = '\\r',
     [0x09] = '\\t', [0x08] = '\\b', [0x0c] = '\\f',
 }
-local CLOSED = "qjson.reader: closed"
+local CLOSED = "leanjson.reader: closed"
 
 local function escape(byte)
     return ESCAPES[byte] or (byte < 0x20 and string.format('\\u%04x', byte) or nil)
@@ -46,7 +46,7 @@ local function token(node, codec)
     if kind == "boolean" then return node.value and "true" or "false" end
     if kind == "number" then return codec.number(node.value) end
     if kind == "cdata" then return codec.cdata(node.value) end
-    error("qjson.encode: unsupported value type: " .. kind, 0)
+    error("leanjson.encode: unsupported value type: " .. kind, 0)
 end
 
 local function count_length(root, normalize, codec, scope)
@@ -71,7 +71,7 @@ local function count_length(root, normalize, codec, scope)
                 length = length + last - first
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
-                if frame.depth > 1000 then error("qjson.encode: max depth exceeded", 0) end
+                if frame.depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
                 frame.keys, frame.values, frame.n = container(node, scope)
                 leases.check(scope)
                 frame.index = 0
@@ -119,9 +119,9 @@ local function next_chunk(self)
             else
                 local chunk, err = frame.backend:read(frame.pos, wanted, self.scope)
                 if self.closed then return nil end
-                if type(chunk) ~= "string" then error(err or "qjson.reader: source read failed", 0) end
-                if #chunk == 0 then error("qjson.reader: unexpected source EOF", 0) end
-                if #chunk > wanted then error("qjson.reader: source exceeded read bound", 0) end
+                if type(chunk) ~= "string" then error(err or "leanjson.reader: source read failed", 0) end
+                if #chunk == 0 then error("leanjson.reader: unexpected source EOF", 0) end
+                if #chunk > wanted then error("leanjson.reader: source exceeded read bound", 0) end
                 frame.pos = frame.pos + #chunk
                 fragment = chunk
             end
@@ -224,14 +224,14 @@ end
 
 function M.new(value, options, codec)
     if options == nil then options = {} end
-    if type(options) ~= "table" then error("qjson.reader: opts must be a table", 0) end
+    if type(options) ~= "table" then error("leanjson.reader: opts must be a table", 0) end
     local size = options.chunk_size
     if size == nil then size = 65536 end
     if type(size) ~= "number" or size < 1 or size ~= math.floor(size) or size == math.huge then
-        error("qjson.reader: chunk_size must be a positive integer", 0)
+        error("leanjson.reader: chunk_size must be a positive integer", 0)
     end
     if options.normalize_duplicates ~= nil and type(options.normalize_duplicates) ~= "boolean" then
-        error("qjson.reader: normalize_duplicates must be a boolean", 0)
+        error("leanjson.reader: normalize_duplicates must be a boolean", 0)
     end
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local ok, result = pcall(function()

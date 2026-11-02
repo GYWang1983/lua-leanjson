@@ -1,17 +1,17 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 local lfs = require("lfs")
 
 describe("consistent source decode policy", function()
     local directory, filename
     local function decode(mode, raw, opts)
-        if mode == "memory" then return qjson.decode(raw, opts) end
+        if mode == "memory" then return leanjson.decode(raw, opts) end
         if mode == "file" then
             local output = assert(io.open(filename, "wb"))
             output:write(raw)
             output:close()
-            return qjson.decode_file(filename, opts)
+            return leanjson.decode_file(filename, opts)
         end
-        local input = qjson.new_decoder(opts)
+        local input = leanjson.new_decoder(opts)
         local ok, value = pcall(function()
             local fed, err = input:feed(raw)
             assert(fed, err)
@@ -25,7 +25,7 @@ describe("consistent source decode policy", function()
     end
     local function verdict(mode, raw, opts)
         local ok, value = pcall(decode, mode, raw, opts)
-        if ok then qjson.close(value) end
+        if ok then leanjson.close(value) end
         return ok
     end
     local function nested(n) return string.rep("[", n) .. "0" .. string.rep("]", n) end
@@ -71,13 +71,13 @@ describe("consistent source decode policy", function()
 
     it("keeps memory-only decode free of file callbacks and spool creation", function()
         local calls = 0
-        local root = qjson.decode('{"a":1}', { max_depth = 1, temp_dir = directory .. "/unused",
+        local root = leanjson.decode('{"a":1}', { max_depth = 1, temp_dir = directory .. "/unused",
             on_chunk = function() calls = calls + 1 end })
         assert.are.equal(1, root.a)
-        qjson.close(root)
+        leanjson.close(root)
         assert.are.equal(0, calls)
         assert.is_nil(lfs.attributes(directory .. "/unused"))
-        assert.is_not_nil(qjson.parse('{}trailing', { lazy = true }))
-        assert.has_error(function() qjson.decode('{}trailing') end)
+        assert.is_not_nil(leanjson.parse('{}trailing', { lazy = true }))
+        assert.has_error(function() leanjson.decode('{}trailing') end)
     end)
 end)

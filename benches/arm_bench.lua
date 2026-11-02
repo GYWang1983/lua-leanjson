@@ -1,14 +1,14 @@
--- ARM64 NEON benchmark: qjson vs lua-cjson (parse + access only)
+-- ARM64 NEON benchmark: leanjson vs lua-cjson (parse + access only)
 -- Run from worktree root:
 --   LUA_PATH='./lua/?.lua;;' DYLD_LIBRARY_PATH=./target/release \
 --     luajit benches/arm_bench.lua
 --
--- qjson loads its native lib via `ffi.load` (honors DYLD_LIBRARY_PATH /
+-- leanjson loads its native lib via `ffi.load` (honors DYLD_LIBRARY_PATH /
 -- LD_LIBRARY_PATH), so only cjson needs a package.cpath entry below.
 
 package.cpath = "./vendor/lua-cjson/?.so;" .. package.cpath
 
-local qjson  = require("qjson")
+local leanjson  = require("leanjson")
 local cjson  = require("cjson")
 local function make_b64_block()
     local b64_chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
@@ -111,7 +111,7 @@ print(" done.")
 print("")
 
 local header_fmt = "%-10s %-10s %-12s %-12s %-10s"
-print(string.format(header_fmt, "Scenario", "Size", "cjson", "qjson.parse", "speedup"))
+print(string.format(header_fmt, "Scenario", "Size", "cjson", "leanjson.parse", "speedup"))
 print(string.rep("-", 58))
 
 for _, s in ipairs(scenarios) do
@@ -135,8 +135,8 @@ for _, s in ipairs(scenarios) do
         end
     end)
 
-    local qjson_ops = bench("qjson " .. s.name, s.iters, function()
-        local doc = qjson.parse(payload)
+    local leanjson_ops = bench("leanjson " .. s.name, s.iters, function()
+        local doc = leanjson.parse(payload)
         local _ = doc:get_str("model")
         local _ = doc:get_f64("temperature")
         local n = doc:len("messages") or 0
@@ -146,7 +146,7 @@ for _, s in ipairs(scenarios) do
         end
     end)
 
-    local speedup = qjson_ops / cjson_ops
+    local speedup = leanjson_ops / cjson_ops
     print(string.format("%-10s %-10s %-12.0f %-12.0f %-10.1fx",
-        s.name, size_label, cjson_ops, qjson_ops, speedup))
+        s.name, size_label, cjson_ops, leanjson_ops, speedup))
 end

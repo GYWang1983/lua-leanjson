@@ -1,25 +1,25 @@
 use std::ptr;
 
-use qjson::ffi::{
-    qjson_cursor, qjson_cursor_object_entry_at, qjson_doc, qjson_error, qjson_free, qjson_open,
-    qjson_parse,
+use leanjson::ffi::{
+    leanjson_cursor, leanjson_cursor_object_entry_at, leanjson_doc, leanjson_error, leanjson_free, leanjson_open,
+    leanjson_parse,
 };
 
-unsafe fn open_root(json: &[u8]) -> (*mut qjson_doc, qjson_cursor) {
-    let mut err = qjson_error::default();
-    let doc = qjson_parse(json.as_ptr(), json.len(), &mut err);
+unsafe fn open_root(json: &[u8]) -> (*mut leanjson_doc, leanjson_cursor) {
+    let mut err = leanjson_error::default();
+    let doc = leanjson_parse(json.as_ptr(), json.len(), &mut err);
     assert!(!doc.is_null());
-    let mut cur: qjson_cursor = std::mem::zeroed();
-    let rc = qjson_open(doc, ptr::null(), 0, &mut cur);
+    let mut cur: leanjson_cursor = std::mem::zeroed();
+    let rc = leanjson_open(doc, ptr::null(), 0, &mut cur);
     assert_eq!(rc, 0);
     (doc, cur)
 }
 
-unsafe fn entry_at(root: &qjson_cursor, i: usize) -> (String, qjson_cursor) {
+unsafe fn entry_at(root: &leanjson_cursor, i: usize) -> (String, leanjson_cursor) {
     let mut kp: *const u8 = ptr::null();
     let mut kn: usize = 0;
-    let mut vc: qjson_cursor = std::mem::zeroed();
-    let rc = qjson_cursor_object_entry_at(root, i, &mut kp, &mut kn, &mut vc);
+    let mut vc: leanjson_cursor = std::mem::zeroed();
+    let rc = leanjson_cursor_object_entry_at(root, i, &mut kp, &mut kn, &mut vc);
     assert_eq!(rc, 0, "entry_at({}) failed with rc={}", i, rc);
     let key = std::slice::from_raw_parts(kp, kn);
     (String::from_utf8(key.to_vec()).unwrap(), vc)
@@ -36,7 +36,7 @@ fn three_keys_in_order() {
         assert_eq!(k0, "a");
         assert_eq!(k1, "b");
         assert_eq!(k2, "c");
-        qjson_free(doc);
+        leanjson_free(doc);
     }
 }
 
@@ -49,7 +49,7 @@ fn key_with_escape_decodes() {
         let (doc, root) = open_root(json);
         let (k0, _) = entry_at(&root, 0);
         assert_eq!(k0, "a\nb");
-        qjson_free(doc);
+        leanjson_free(doc);
     }
 }
 
@@ -60,10 +60,10 @@ fn out_of_range_returns_not_found() {
         let (doc, root) = open_root(json);
         let mut kp: *const u8 = ptr::null();
         let mut kn: usize = 0;
-        let mut vc: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_cursor_object_entry_at(&root, 5, &mut kp, &mut kn, &mut vc);
-        assert_eq!(rc, 2); // QJSON_NOT_FOUND
-        qjson_free(doc);
+        let mut vc: leanjson_cursor = std::mem::zeroed();
+        let rc = leanjson_cursor_object_entry_at(&root, 5, &mut kp, &mut kn, &mut vc);
+        assert_eq!(rc, 2); // LEANJSON_NOT_FOUND
+        leanjson_free(doc);
     }
 }
 
@@ -74,9 +74,9 @@ fn array_cursor_returns_type_mismatch() {
         let (doc, root) = open_root(json);
         let mut kp: *const u8 = ptr::null();
         let mut kn: usize = 0;
-        let mut vc: qjson_cursor = std::mem::zeroed();
-        let rc = qjson_cursor_object_entry_at(&root, 0, &mut kp, &mut kn, &mut vc);
-        assert_eq!(rc, 3); // QJSON_TYPE_MISMATCH
-        qjson_free(doc);
+        let mut vc: leanjson_cursor = std::mem::zeroed();
+        let rc = leanjson_cursor_object_entry_at(&root, 0, &mut kp, &mut kn, &mut vc);
+        assert_eq!(rc, 3); // LEANJSON_TYPE_MISMATCH
+        leanjson_free(doc);
     }
 }

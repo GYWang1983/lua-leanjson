@@ -9,12 +9,12 @@ LUA_CPATH ?= ./vendor/lua-cjson/?.so;./target/release/lib?.dylib;./target/releas
 
 LUAJIT_PREFIX ?= $(shell dirname $$(dirname $$(command -v $(LUAJIT) 2>/dev/null || echo $(OPENRESTY_LUAJIT))))
 LUAJIT_INC    ?= $(LUAJIT_PREFIX)/include/luajit-2.1
-QJSON_PROP_CASES ?= 200
-QJSON_PROP_SEED  ?= 760076
-QJSON_MUT_PROP_CASES ?= 200
-QJSON_MUT_PROP_SEED  ?= 104104
-QJSON_MUT_PROP_STEPS ?= 24
-OPENRESTY_DEV_IMAGE ?= lua-qjson-dev:openresty-1.29.2.4-rust-1.90.0
+LEANJSON_PROP_CASES ?= 200
+LEANJSON_PROP_SEED  ?= 760076
+LEANJSON_MUT_PROP_CASES ?= 200
+LEANJSON_MUT_PROP_SEED  ?= 104104
+LEANJSON_MUT_PROP_STEPS ?= 24
+OPENRESTY_DEV_IMAGE ?= lua-leanjson-dev:openresty-1.29.2.4-rust-1.90.0
 
 LIB_DIR := $(CURDIR)/target/release
 ifeq ($(shell uname),Darwin)
@@ -30,7 +30,7 @@ help: ## Show this help
 	@# Consequence: targets whose prerequisite list contains `#` won't render — none today.
 	@awk 'BEGIN {FS = ":[^#]*## "} /^[a-zA-Z_-]+:[^#]*## / {printf "  \033[36m%-10s\033[0m — %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build the release cdylib (target/release/libqjson.so)
+build: ## Build the release cdylib (target/release/libleanjson.so)
 	cargo build --release
 
 test: build ## Run cargo tests + busted Lua tests
@@ -38,12 +38,12 @@ test: build ## Run cargo tests + busted Lua tests
 	$(LUA_ENV) busted --lua=$(LUAJIT) tests/lua --lpath='./lua/?.lua'
 
 lua-property-test: build ## Run deterministic Lua encode/materialize property tests
-	QJSON_PROP_CASES=$(QJSON_PROP_CASES) QJSON_PROP_SEED=$(QJSON_PROP_SEED) \
+	LEANJSON_PROP_CASES=$(LEANJSON_PROP_CASES) LEANJSON_PROP_SEED=$(LEANJSON_PROP_SEED) \
 		$(LUA_ENV) busted --lua=$(LUAJIT) tests/lua/encode_property_spec.lua --lpath='./lua/?.lua'
 
 lua-mutation-property-test: build ## Run deterministic Lua lazy-mutation property tests
-	QJSON_MUT_PROP_CASES=$(QJSON_MUT_PROP_CASES) QJSON_MUT_PROP_SEED=$(QJSON_MUT_PROP_SEED) \
-	QJSON_MUT_PROP_STEPS=$(QJSON_MUT_PROP_STEPS) \
+	LEANJSON_MUT_PROP_CASES=$(LEANJSON_MUT_PROP_CASES) LEANJSON_MUT_PROP_SEED=$(LEANJSON_MUT_PROP_SEED) \
+	LEANJSON_MUT_PROP_STEPS=$(LEANJSON_MUT_PROP_STEPS) \
 		$(LUA_ENV) busted --lua=$(LUAJIT) tests/lua/lazy_mutation_property_spec.lua --lpath='./lua/?.lua'
 
 lint: ## Run clippy with -D warnings
@@ -59,7 +59,7 @@ lua-lint: ## Run luacheck over Lua sources and tests
 openresty-test: build ## Run real native OpenResty HTTP acceptance tests
 	RESTY='$(RESTY)' scripts/verify-openresty.sh
 
-openresty-bench: build ## Compare cjson/qjson in fresh native OpenResty workers
+openresty-bench: build ## Compare cjson/leanjson in fresh native OpenResty workers
 	RESTY='$(RESTY)' scripts/benchmark-openresty.sh
 
 openresty-source-stress: build ## Run seeded source/contiguous mutation stress under native LuaJIT
@@ -75,7 +75,7 @@ openresty-dev-image: ## Build the pinned Rust/native OpenResty verification imag
 	docker build --target dev -f examples/openresty/Dockerfile -t '$(OPENRESTY_DEV_IMAGE)' .
 
 openresty-docker-test: ## Run the complete native verification gate in the pinned image
-	docker run --rm -v '$(CURDIR):/workspace' -v qjson-cargo-registry:/usr/local/cargo/registry \
+	docker run --rm -v '$(CURDIR):/workspace' -v leanjson-cargo-registry:/usr/local/cargo/registry \
 		-w /workspace '$(OPENRESTY_DEV_IMAGE)' make openresty-verify
 
 bounded-fuzz: ## Run bounded nightly libFuzzer sessions (cargo-fuzz required)

@@ -1,10 +1,10 @@
 use std::os::raw::{c_char, c_int};
 use std::ptr;
 
-use qjson::ffi::{
-    qjson_cursor, qjson_cursor_field, qjson_cursor_get_i64, qjson_cursor_get_str,
-    qjson_cursor_index, qjson_cursor_object_entry_at, qjson_doc, qjson_free, qjson_get_bool,
-    qjson_error, qjson_get_str, qjson_open, qjson_parse,
+use leanjson::ffi::{
+    leanjson_cursor, leanjson_cursor_field, leanjson_cursor_get_i64, leanjson_cursor_get_str,
+    leanjson_cursor_index, leanjson_cursor_object_entry_at, leanjson_doc, leanjson_free, leanjson_get_bool,
+    leanjson_error, leanjson_get_str, leanjson_open, leanjson_parse,
 };
 
 const OK: c_int = 0;
@@ -58,15 +58,15 @@ struct StrCapture {
 
 struct State {
     json: &'static [u8],
-    doc: *mut qjson_doc,
-    cursors: [qjson_cursor; 8],
+    doc: *mut leanjson_doc,
+    cursors: [leanjson_cursor; 8],
 }
 
 impl State {
     fn parse(json: &'static [u8]) -> Self {
-        let mut err = qjson_error::default();
-        let doc = unsafe { qjson_parse(json.as_ptr(), json.len(), &mut err) };
-        assert!(!doc.is_null(), "qjson_parse failed with err={err:?}");
+        let mut err = leanjson_error::default();
+        let doc = unsafe { leanjson_parse(json.as_ptr(), json.len(), &mut err) };
+        assert!(!doc.is_null(), "leanjson_parse failed with err={err:?}");
         assert_eq!(err.code, OK);
         Self {
             json,
@@ -79,7 +79,7 @@ impl State {
         match op {
             Op::OpenRoot { out } => {
                 let mut cursor = zero_cursor();
-                let rc = unsafe { qjson_open(self.doc, ptr::null(), 0, &mut cursor) };
+                let rc = unsafe { leanjson_open(self.doc, ptr::null(), 0, &mut cursor) };
                 assert_eq!(rc, OK);
                 self.cursors[out] = cursor;
                 None
@@ -88,7 +88,7 @@ impl State {
                 let (key_ptr, key_len) = ffi_bytes(key);
                 let mut cursor = zero_cursor();
                 let rc = unsafe {
-                    qjson_cursor_field(&self.cursors[from], key_ptr, key_len, &mut cursor)
+                    leanjson_cursor_field(&self.cursors[from], key_ptr, key_len, &mut cursor)
                 };
                 assert_eq!(rc, OK);
                 self.cursors[out] = cursor;
@@ -96,7 +96,7 @@ impl State {
             }
             Op::CursorIndex { from, index, out } => {
                 let mut cursor = zero_cursor();
-                let rc = unsafe { qjson_cursor_index(&self.cursors[from], index, &mut cursor) };
+                let rc = unsafe { leanjson_cursor_index(&self.cursors[from], index, &mut cursor) };
                 assert_eq!(rc, OK);
                 self.cursors[out] = cursor;
                 None
@@ -127,7 +127,7 @@ impl State {
                 let mut key_len = 0usize;
                 let mut value = zero_cursor();
                 let rc = unsafe {
-                    qjson_cursor_object_entry_at(
+                    leanjson_cursor_object_entry_at(
                         &self.cursors[cursor],
                         index,
                         &mut key_ptr,
@@ -152,7 +152,7 @@ impl State {
                 let (path_ptr, path_len) = ffi_bytes(path);
                 let mut out = 0i64;
                 let rc = unsafe {
-                    qjson_cursor_get_i64(&self.cursors[cursor], path_ptr, path_len, &mut out)
+                    leanjson_cursor_get_i64(&self.cursors[cursor], path_ptr, path_len, &mut out)
                 };
                 assert_eq!(rc, OK);
                 assert_eq!(out, expect);
@@ -161,7 +161,7 @@ impl State {
             Op::GetBool { path, expect } => {
                 let (path_ptr, path_len) = ffi_bytes(path);
                 let mut out = -1;
-                let rc = unsafe { qjson_get_bool(self.doc, path_ptr, path_len, &mut out) };
+                let rc = unsafe { leanjson_get_bool(self.doc, path_ptr, path_len, &mut out) };
                 assert_eq!(rc, OK);
                 assert_eq!(out, expect);
                 None
@@ -179,7 +179,7 @@ impl State {
 
 impl Drop for State {
     fn drop(&mut self) {
-        unsafe { qjson_free(self.doc) };
+        unsafe { leanjson_free(self.doc) };
         self.doc = ptr::null_mut();
     }
 }
@@ -313,40 +313,40 @@ fn ffi_bytes(bytes: &[u8]) -> (*const c_char, usize) {
 }
 
 unsafe fn capture_root_str(
-    doc: *mut qjson_doc,
+    doc: *mut leanjson_doc,
     path_ptr: *const c_char,
     path_len: usize,
     expect: &[u8],
 ) -> StrCapture {
     let mut out_ptr: *const u8 = ptr::null();
     let mut out_len = 0usize;
-    let rc = qjson_get_str(doc, path_ptr, path_len, &mut out_ptr, &mut out_len);
+    let rc = leanjson_get_str(doc, path_ptr, path_len, &mut out_ptr, &mut out_len);
     assert_eq!(rc, OK);
     copy_and_assert(out_ptr, out_len, expect)
 }
 
 unsafe fn capture_cursor_str(
-    cursor: *const qjson_cursor,
+    cursor: *const leanjson_cursor,
     path_ptr: *const c_char,
     path_len: usize,
     expect: &[u8],
 ) -> StrCapture {
     let mut out_ptr: *const u8 = ptr::null();
     let mut out_len = 0usize;
-    let rc = qjson_cursor_get_str(cursor, path_ptr, path_len, &mut out_ptr, &mut out_len);
+    let rc = leanjson_cursor_get_str(cursor, path_ptr, path_len, &mut out_ptr, &mut out_len);
     assert_eq!(rc, OK);
     copy_and_assert(out_ptr, out_len, expect)
 }
 
 unsafe fn copy_and_assert(ptr: *const u8, len: usize, expect: &[u8]) -> StrCapture {
-    assert!(!ptr.is_null(), "qjson returned NULL for a string result");
+    assert!(!ptr.is_null(), "leanjson returned NULL for a string result");
     let bytes = std::slice::from_raw_parts(ptr, len).to_vec();
     assert_eq!(bytes, expect);
     StrCapture { ptr, len }
 }
 
-fn zero_cursor() -> qjson_cursor {
-    qjson_cursor {
+fn zero_cursor() -> leanjson_cursor {
+    leanjson_cursor {
         doc: ptr::null(),
         idx_start: 0,
         idx_end: 0,

@@ -1,7 +1,7 @@
 local cjson = require "cjson"
 local http = require "resty.http"
-local port = assert(tonumber(os.getenv("QJSON_TEST_PORT")))
-local sink_port = assert(tonumber(os.getenv("QJSON_SINK_PORT")))
+local port = assert(tonumber(os.getenv("LEANJSON_TEST_PORT")))
+local sink_port = assert(tonumber(os.getenv("LEANJSON_SINK_PORT")))
 local function request(path, body, id, headers)
     local client = http.new()
     client:set_timeout(15000)
@@ -28,7 +28,7 @@ end
 local function sink_count() return get("/stats", sink_port).requests end
 local initial_health = get("/health")
 local function empty_directory(name)
-    local directory = os.getenv("QJSON_TEST_PREFIX") .. "/" .. name
+    local directory = os.getenv("LEANJSON_TEST_PREFIX") .. "/" .. name
     local quoted = "'" .. directory:gsub("'", "'\\''") .. "'"
     local listing = assert(io.popen("ls -A " .. quoted, "r"))
     local entries = listing:read("*a")
@@ -313,7 +313,7 @@ for _, endpoint in ipairs { "/example", "/completed" } do
         get("/gc?action=stop")
         local ok, err = xpcall(function()
             local case = name .. "-first-write-abort"
-            local marker = os.getenv("QJSON_TEST_PREFIX") .. "/mutation-" .. case
+            local marker = os.getenv("LEANJSON_TEST_PREFIX") .. "/mutation-" .. case
             local sock = assert(ngx.socket.tcp())
             assert(sock:connect("127.0.0.1", port))
             local raw = '{"model":"old","prompt":"' .. ("p"):rep(200000) .. '"}'
@@ -506,7 +506,7 @@ check("client abort during yielding completed-file scanning closes its fd withou
     local upstream_before = sink_count()
     get("/gc?action=stop")
     local ok, err = xpcall(function()
-        local marker = os.getenv("QJSON_TEST_PREFIX") .. "/file-parse-started"
+        local marker = os.getenv("LEANJSON_TEST_PREFIX") .. "/file-parse-started"
         local sock = assert(ngx.socket.tcp())
         assert(sock:connect("127.0.0.1", port))
         local raw = '{"model":"original","prompt":"' .. ("p"):rep(200000) .. '"}'
@@ -552,7 +552,7 @@ check("client abort during normalized output length closes the reader before sen
     local upstream_before = sink_count()
     get("/gc?action=stop")
     local ok, err = xpcall(function()
-        local marker = os.getenv("QJSON_TEST_PREFIX") .. "/output-length-started"
+        local marker = os.getenv("LEANJSON_TEST_PREFIX") .. "/output-length-started"
         local sock = assert(ngx.socket.tcp())
         assert(sock:connect("127.0.0.1", port))
         local raw = '{"model":"original","nested":{"small":"value","prompt":"' .. ("p"):rep(200000) .. '"}}'
@@ -582,7 +582,7 @@ check("an output source hook failure stays a reader failure and closes the trans
     assert(result.transfer.attempts == 1 and result.transfer.headers_may_have_been_sent)
 end)
 check("one failing abort callback cannot suppress other cleanup callbacks", function()
-    local marker = os.getenv("QJSON_TEST_PREFIX") .. "/abort-cleanup-ran"
+    local marker = os.getenv("LEANJSON_TEST_PREFIX") .. "/abort-cleanup-ran"
     local sock = assert(ngx.socket.tcp())
     assert(sock:connect("127.0.0.1", port))
     local raw = '{"model":"original"}'

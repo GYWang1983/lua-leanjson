@@ -1,9 +1,9 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 
-local doc = qjson.parse([[
+local doc = leanjson.parse([[
 {
   "body": {
-    "model": "qjson-ci",
+    "model": "leanjson-ci",
     "ok": true
   },
   "items": [10, 20, 30],
@@ -11,12 +11,12 @@ local doc = qjson.parse([[
 }
 ]])
 
-assert(doc:get_str("body.model") == "qjson-ci")
+assert(doc:get_str("body.model") == "leanjson-ci")
 assert(doc:get_bool("body.ok") == true)
 assert(tonumber(doc:get_i64("items[1]")) == 20)
 assert(doc:is_null("none") == true)
 
-local decoded = qjson.decode([[{"field":"value","nested":{"n":42},"list":[true]}]])
+local decoded = leanjson.decode([[{"field":"value","nested":{"n":42},"list":[true]}]])
 assert(decoded.field == "value")
 assert(decoded.nested.n == 42)
 assert(decoded.list[1] == true)
@@ -42,12 +42,12 @@ end
 assert(#plain_ipairs_values == 1)
 assert(plain_ipairs_values[1] == true)
 
-local encoded = qjson.encode({
+local encoded = leanjson.encode({
     field = "value",
     nested = { n = 42 },
     list = { true },
 })
-local roundtrip = qjson.decode(encoded)
+local roundtrip = leanjson.decode(encoded)
 assert(roundtrip.field == "value")
 assert(roundtrip.nested.n == 42)
 assert(roundtrip.list[1] == true)

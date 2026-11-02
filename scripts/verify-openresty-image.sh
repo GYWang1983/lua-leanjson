@@ -2,7 +2,7 @@
 set -euo pipefail
 image=${1:?Usage: verify-openresty-image.sh IMAGE}
 repo=$(cd "$(dirname "$0")/.." && pwd)
-container=$(docker run --rm --detach --mount type=volume,target=/tmp/qjson-body \
+container=$(docker run --rm --detach --mount type=volume,target=/tmp/leanjson-body \
     --mount "type=bind,source=$repo/tests/openresty/image-smoke.lua,target=/verify.lua,readonly" "$image")
 cleanup() { docker rm --force "$container" > /dev/null 2>&1 || true; }
 trap cleanup EXIT
@@ -11,7 +11,7 @@ for attempt in {1..100}; do
     sleep 0.05
 done
 docker exec "$container" sh -c '! command -v cargo && ! command -v rustc'
-docker exec "$container" /usr/local/openresty/bin/resty -I /opt/qjson/lua /verify.lua
+docker exec "$container" /usr/local/openresty/bin/resty -I /opt/leanjson/lua /verify.lua
 logs=$(docker logs "$container" 2>&1)
 if [[ "$logs" =~ \[(alert|emerg)\] ]]; then
     printf '%s\n' "$logs" >&2

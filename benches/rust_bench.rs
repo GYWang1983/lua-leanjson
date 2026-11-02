@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId};
-use qjson::__bench_api::{Document, Options, QJSON_MODE_LAZY};
+use leanjson::__bench_api::{Document, Options, LEANJSON_MODE_LAZY};
 use std::fs;
 
 fn read_fixture(path: &str) -> Vec<u8> {
@@ -48,7 +48,7 @@ fn bench_parse_eager(c: &mut Criterion) {
 
 fn bench_parse_lazy(c: &mut Criterion) {
     let fixtures = load_fixtures();
-    let opts = Options { mode: QJSON_MODE_LAZY, max_depth: 0 };
+    let opts = Options { mode: LEANJSON_MODE_LAZY, max_depth: 0 };
     let mut group = c.benchmark_group("parse_lazy");
 
     for f in &fixtures {
@@ -74,7 +74,7 @@ fn bench_field_access(c: &mut Criterion) {
             // SAFETY: doc ptr is valid (borrowed from stack), path ptr+len are valid
             // (static byte string), out-pointers are non-null and writable.
             unsafe {
-                qjson::ffi::qjson_get_str(
+                leanjson::ffi::leanjson_get_str(
                     &doc as *const _ as *mut _,
                     b"model".as_ptr() as *const _,
                     5,
@@ -90,7 +90,7 @@ fn bench_field_access(c: &mut Criterion) {
             let mut out = 0f64;
             // SAFETY: same as above - doc, path, and out-pointer are all valid.
             unsafe {
-                qjson::ffi::qjson_get_f64(
+                leanjson::ffi::leanjson_get_f64(
                     &doc as *const _ as *mut _,
                     b"max_tokens".as_ptr() as *const _,
                     10,
@@ -106,7 +106,7 @@ fn bench_field_access(c: &mut Criterion) {
             let mut out_len = 0usize;
             // SAFETY: same as above - doc, path, and out-pointers are all valid.
             unsafe {
-                qjson::ffi::qjson_get_str(
+                leanjson::ffi::leanjson_get_str(
                     &doc as *const _ as *mut _,
                     b"messages[0].role".as_ptr() as *const _,
                     16,

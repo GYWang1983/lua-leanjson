@@ -1,6 +1,6 @@
 # Real-world fixture manifest
 
-`manifest.json` is the single source of truth for qjson's real-world test
+`manifest.json` is the single source of truth for leanjson's real-world test
 corpus. Both the Rust correctness gate (`tests/manifest_fixtures.rs`) and the
 Lua benchmark harness (`benches/lua_bench.lua` via `benches/manifest.lua`) read
 it, so fixture paths, access paths and expected values are declared in exactly
@@ -13,7 +13,7 @@ Originating issue: [#139](https://github.com/api7/lua-qjson/issues/139).
 `manifest.json` is plain JSON so both consumers can parse it with tools they
 already have — `serde_json` (a Rust dev-dependency) on the Rust side and
 `lua-cjson` on the Lua side. The manifest is deliberately **not** parsed with
-qjson itself, to avoid a bug in qjson breaking the harness that is supposed to
+leanjson itself, to avoid a bug in leanjson breaking the harness that is supposed to
 catch it.
 
 All `path` values are **repo-root relative**. Both consumers run from the
@@ -29,7 +29,7 @@ for Lua).
     {
       "id": "rest_api_small",          // unique identifier
       "path": "benches/fixtures/small_api.json",
-      "source": "qjson bench fixture", // human-readable origin
+      "source": "qjson bench fixture", // historical human-readable origin
       "payload_type": "rest_api",      // rest_api | unicode_heavy | wide_object
                                        // | deep_nesting | ndjson
       "format": "json",                // json | ndjson
@@ -56,12 +56,12 @@ Each check declares one access path and its expected result as a
 { "record": 2, "path": "[1]", "type": "string", "value": "Motorola" }
 ```
 
-- `path` — qjson path syntax: dotted keys plus `[i]` indices
+- `path` — leanjson path syntax: dotted keys plus `[i]` indices
   (e.g. `choices[0].finish_reason`). The empty string `""` addresses the
   document root (useful for scalar roots and for `len` on the top-level
   container).
 - `type` — one of `string | number | bool | null | object | array`. Always
-  checked via `qjson_typeof`.
+  checked via `leanjson_typeof`.
 - `value` — optional expected value for scalars (`string` / `number` / `bool`).
   Omitted for `null` and containers. See the number note below.
 - `len` — optional. For `string` it is the decoded **byte** length; for
@@ -80,7 +80,7 @@ neighbouring exact field instead.
 ### NDJSON
 
 A fixture with `"format": "ndjson"` is split on `\n` (a trailing `\r` is
-trimmed) and each non-empty line is parsed as an independent qjson document.
+trimmed) and each non-empty line is parsed as an independent leanjson document.
 Checks select a line with `record` (default `0`) and resolve `path` within that
 record. NDJSON fixtures are correctness-only; the Lua latency benchmark skips
 them.

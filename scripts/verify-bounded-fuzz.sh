@@ -3,13 +3,13 @@ set -euo pipefail
 repo=$(cd "$(dirname "$0")/.." && pwd)
 cd "$repo"
 # A separate nightly gate. Never silently replace libFuzzer with a smoke test.
-seconds=${QJSON_FUZZ_SECONDS:-30}
-output_dir=${QJSON_FUZZ_OUTPUT_DIR:-${TMPDIR:-/tmp}}
+seconds=${LEANJSON_FUZZ_SECONDS:-30}
+output_dir=${LEANJSON_FUZZ_OUTPUT_DIR:-${TMPDIR:-/tmp}}
 mkdir -p "$output_dir"
-scratch=$(mktemp -d "$output_dir/qjson-fuzz.XXXXXX")
+scratch=$(mktemp -d "$output_dir/leanjson-fuzz.XXXXXX")
 cleanup() {
     local result=$?
-    if [[ "$result" != 0 || ${QJSON_KEEP_FUZZ_OUTPUT:-0} == 1 ]]; then echo "Fuzz artifacts: $scratch";
+    if [[ "$result" != 0 || ${LEANJSON_KEEP_FUZZ_OUTPUT:-0} == 1 ]]; then echo "Fuzz artifacts: $scratch";
     else rm -rf "$scratch"; fi
 }
 trap cleanup EXIT

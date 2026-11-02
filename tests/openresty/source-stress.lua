@@ -1,16 +1,16 @@
 -- Bounded deterministic differential mutation stress. This complements, and
 -- does not substitute for, the separately named nightly libFuzzer gate.
-local qjson = require "qjson"
+local leanjson = require "leanjson"
 local cjson = require "cjson"
-local cases = tonumber(os.getenv("QJSON_SOURCE_STRESS_CASES")) or 500
-local seed = tonumber(os.getenv("QJSON_SOURCE_STRESS_SEED")) or 760076
+local cases = tonumber(os.getenv("LEANJSON_SOURCE_STRESS_CASES")) or 500
+local seed = tonumber(os.getenv("LEANJSON_SOURCE_STRESS_SEED")) or 760076
 local initial_seed = seed
 local function random(maximum)
     seed = (seed * 48271) % 2147483647
     return seed % maximum + 1
 end
 local function streamed(raw, size)
-    local decoder = qjson.new_decoder { chunk_size = size }
+    local decoder = leanjson.new_decoder { chunk_size = size }
     for offset = 1, #raw, size do
         local ok, err = decoder:feed(raw:sub(offset, offset + size - 1))
         if not ok then decoder:close(); return nil, err end
@@ -20,7 +20,7 @@ local function streamed(raw, size)
     return value, err
 end
 local function encode(value, size)
-    local reader = qjson.reader(value, { chunk_size = size, normalize_duplicates = true })
+    local reader = leanjson.reader(value, { chunk_size = size, normalize_duplicates = true })
     local length = assert(reader:length())
     local output, total = {}, 0
     while true do
@@ -49,24 +49,24 @@ for i = 1, cases do
     local size = random(257)
     local value, err = streamed(raw, size)
     assert(value ~= nil, err)
-    local branch = qjson.fork(value)
-    qjson.close(value)
+    local branch = leanjson.fork(value)
+    leanjson.close(value)
     branch.model = "new"
     expected.model = "new"
     local result = cjson.decode(encode(branch, random(257)))
-    qjson.close(branch)
+    leanjson.close(branch)
     assert(same(result, expected), "streamed value mismatch at case " .. i)
 
     local position = random(#raw)
     local mutated = raw:sub(1, position - 1) .. string.char(random(256) - 1) .. raw:sub(position + 1)
-    local accepted, contiguous = pcall(qjson.decode, mutated)
+    local accepted, contiguous = pcall(leanjson.decode, mutated)
     local streamed_value, streamed_err = streamed(mutated, random(257))
     assert(accepted == (streamed_err == nil), "contiguous/source verdict mismatch at case " .. i)
     if accepted then
         assert(same(cjson.decode(encode(contiguous, size)), cjson.decode(encode(streamed_value, size))),
             "mutation output mismatch at case " .. i)
-        qjson.close(contiguous)
-        qjson.close(streamed_value)
+        leanjson.close(contiguous)
+        leanjson.close(streamed_value)
     end
 end
 print("source stress: " .. cases .. " valid + " .. cases .. " mutated cases; seed " .. initial_seed)

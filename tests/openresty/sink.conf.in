@@ -2,7 +2,7 @@ worker_processes 1;
 daemon off;
 pid @PREFIX@/sink.pid;
 error_log @PREFIX@/sink-error.log info;
-env QJSON_TEST_PREFIX;
+env LEANJSON_TEST_PREFIX;
 events { worker_connections 1024; }
 http {
     access_log off;

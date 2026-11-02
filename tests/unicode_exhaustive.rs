@@ -1,19 +1,19 @@
 use std::os::raw::c_int;
 use std::ptr;
 
-use qjson::error::qjson_err;
-use qjson::ffi::{qjson_doc, qjson_error, qjson_free, qjson_get_str, qjson_parse_ex};
-use qjson::options::{Options, QJSON_MODE_EAGER, QJSON_MODE_LAZY};
+use leanjson::error::leanjson_err;
+use leanjson::ffi::{leanjson_doc, leanjson_error, leanjson_free, leanjson_get_str, leanjson_parse_ex};
+use leanjson::options::{Options, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY};
 
-const OK: c_int = qjson_err::QJSON_OK as c_int;
-const PARSE_ERROR: c_int = qjson_err::QJSON_PARSE_ERROR as c_int;
-const INVALID_STRING: c_int = qjson_err::QJSON_INVALID_STRING as c_int;
-const INVALID_UTF8: c_int = qjson_err::QJSON_INVALID_UTF8 as c_int;
+const OK: c_int = leanjson_err::LEANJSON_OK as c_int;
+const PARSE_ERROR: c_int = leanjson_err::LEANJSON_PARSE_ERROR as c_int;
+const INVALID_STRING: c_int = leanjson_err::LEANJSON_INVALID_STRING as c_int;
+const INVALID_UTF8: c_int = leanjson_err::LEANJSON_INVALID_UTF8 as c_int;
 
-fn parse_with_mode(json: &[u8], mode: u32) -> Result<*mut qjson_doc, c_int> {
+fn parse_with_mode(json: &[u8], mode: u32) -> Result<*mut leanjson_doc, c_int> {
     let opts = Options { mode, max_depth: 0 };
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(json.as_ptr(), json.len(), &opts, &mut err) };
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(json.as_ptr(), json.len(), &opts, &mut err) };
     if doc.is_null() {
         Err(err.code)
     } else {
@@ -22,10 +22,10 @@ fn parse_with_mode(json: &[u8], mode: u32) -> Result<*mut qjson_doc, c_int> {
     }
 }
 
-fn decode_root_string(doc: *mut qjson_doc) -> Result<Vec<u8>, c_int> {
+fn decode_root_string(doc: *mut leanjson_doc) -> Result<Vec<u8>, c_int> {
     let mut ptr: *const u8 = ptr::null();
     let mut len: usize = 0;
-    let rc = unsafe { qjson_get_str(doc, ptr::null(), 0, &mut ptr, &mut len) };
+    let rc = unsafe { leanjson_get_str(doc, ptr::null(), 0, &mut ptr, &mut len) };
     if rc != OK {
         return Err(rc);
     }
@@ -85,11 +85,11 @@ fn unicode_escape_exhaustively_decodes_every_scalar_value() {
         expected.clear();
         push_utf8_for_scalar(cp, &mut expected);
 
-        let doc = parse_with_mode(&json, QJSON_MODE_EAGER)
+        let doc = parse_with_mode(&json, LEANJSON_MODE_EAGER)
             .unwrap_or_else(|err| panic!("eager parse rejected U+{cp:04X}: err={err}"));
         let got = decode_root_string(doc)
             .unwrap_or_else(|err| panic!("decode rejected U+{cp:04X}: err={err}"));
-        unsafe { qjson_free(doc) };
+        unsafe { leanjson_free(doc) };
 
         assert_eq!(got, expected, "decoded escape for U+{cp:04X}");
     }
@@ -112,20 +112,20 @@ fn illegal_surrogate_escapes_reject_eager_and_defer_in_lazy() {
     for &(name, escaped) in cases {
         root_string_json(escaped.as_bytes(), &mut json);
 
-        let eager_err = parse_with_mode(&json, QJSON_MODE_EAGER)
+        let eager_err = parse_with_mode(&json, LEANJSON_MODE_EAGER)
             .map(|doc| unsafe {
-                qjson_free(doc);
+                leanjson_free(doc);
                 OK
             })
             .unwrap_err();
         assert_eq!(eager_err, INVALID_STRING, "{name} should fail during eager parse");
 
-        let lazy_doc = parse_with_mode(&json, QJSON_MODE_LAZY)
+        let lazy_doc = parse_with_mode(&json, LEANJSON_MODE_LAZY)
             .unwrap_or_else(|err| panic!("{name} should parse in lazy mode, err={err}"));
         let lazy_err = decode_root_string(lazy_doc)
             .map(|_| OK)
             .unwrap_err();
-        unsafe { qjson_free(lazy_doc) };
+        unsafe { leanjson_free(lazy_doc) };
         assert_ne!(lazy_err, OK, "{name} should fail during lazy access");
     }
 }
@@ -149,12 +149,12 @@ fn raw_string_byte_exhaustively_covers_validation_outcomes() {
         match byte {
             b'"' => {
                 assert_eq!(
-                    parse_with_mode(&json, QJSON_MODE_EAGER).unwrap_err(),
+                    parse_with_mode(&json, LEANJSON_MODE_EAGER).unwrap_err(),
                     PARSE_ERROR,
                     "raw byte 0x{byte:02X} must break string structure in eager mode",
                 );
                 assert_eq!(
-                    parse_with_mode(&json, QJSON_MODE_LAZY).unwrap_err(),
+                    parse_with_mode(&json, LEANJSON_MODE_LAZY).unwrap_err(),
                     PARSE_ERROR,
                     "raw byte 0x{byte:02X} must break string structure in lazy mode",
                 );
@@ -162,35 +162,35 @@ fn raw_string_byte_exhaustively_covers_validation_outcomes() {
             b'\\' | 0x00..=0x1F | 0x80..=0xFF => {
                 let want = if byte >= 0x80 { INVALID_UTF8 } else { INVALID_STRING };
                 assert_eq!(
-                    parse_with_mode(&json, QJSON_MODE_EAGER).unwrap_err(),
+                    parse_with_mode(&json, LEANJSON_MODE_EAGER).unwrap_err(),
                     want,
                     "raw byte 0x{byte:02X} should fail eager validation",
                 );
 
-                let lazy_doc = parse_with_mode(&json, QJSON_MODE_LAZY)
+                let lazy_doc = parse_with_mode(&json, LEANJSON_MODE_LAZY)
                     .unwrap_or_else(|err| panic!("raw byte 0x{byte:02X} lazy parse err={err}"));
                 let lazy_err = decode_root_string(lazy_doc)
                     .map(|_| OK)
                     .unwrap_err();
-                unsafe { qjson_free(lazy_doc) };
+                unsafe { leanjson_free(lazy_doc) };
                 assert_eq!(
                     lazy_err, want,
                     "raw byte 0x{byte:02X} should fail on lazy access",
                 );
             }
             _ => {
-                let eager_doc = parse_with_mode(&json, QJSON_MODE_EAGER)
+                let eager_doc = parse_with_mode(&json, LEANJSON_MODE_EAGER)
                     .unwrap_or_else(|err| panic!("raw byte 0x{byte:02X} eager err={err}"));
                 let eager_got = decode_root_string(eager_doc)
                     .unwrap_or_else(|err| panic!("raw byte 0x{byte:02X} eager decode err={err}"));
-                unsafe { qjson_free(eager_doc) };
+                unsafe { leanjson_free(eager_doc) };
                 assert_eq!(eager_got, expected, "raw byte 0x{byte:02X} eager decode");
 
-                let lazy_doc = parse_with_mode(&json, QJSON_MODE_LAZY)
+                let lazy_doc = parse_with_mode(&json, LEANJSON_MODE_LAZY)
                     .unwrap_or_else(|err| panic!("raw byte 0x{byte:02X} lazy err={err}"));
                 let lazy_got = decode_root_string(lazy_doc)
                     .unwrap_or_else(|err| panic!("raw byte 0x{byte:02X} lazy decode err={err}"));
-                unsafe { qjson_free(lazy_doc) };
+                unsafe { leanjson_free(lazy_doc) };
                 assert_eq!(lazy_got, expected, "raw byte 0x{byte:02X} lazy decode");
             }
         }

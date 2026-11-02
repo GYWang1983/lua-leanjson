@@ -11,7 +11,7 @@ local function probe(record)
         path_exists = require("lfs").attributes(record.filename) ~= nil, state = record }
 end
 if ngx.var.uri == "/lifecycle/wait" then
-    local records = require("qjson.test_state")
+    local records = require("leanjson.test_state")
     local deadline = ngx.now() + 5
     local record, ready
     repeat
@@ -30,28 +30,28 @@ if ngx.var.uri == "/lifecycle/probe" then
     if ngx.var.arg_gc == "1" then
         for _ = 1, 3 do collectgarbage("collect") end
     end
-    ngx.say(cjson.encode(probe(require("qjson.test_state")[ngx.var.arg_case])))
+    ngx.say(cjson.encode(probe(require("leanjson.test_state")[ngx.var.arg_case])))
     return
 end
 
-local qjson = require "qjson"
-local adapter = require "qjson.openresty"
+local leanjson = require "leanjson"
+local adapter = require "leanjson.openresty"
 if ngx.var.uri == "/lifecycle/retained" then
     local session, child, unregister
     local function cleanup()
-        qjson.close(child)
+        leanjson.close(child)
         if session then session:close() end
     end
     local ok, result = pcall(function()
-        session = assert(adapter.start_body { temp_dir = os.getenv("QJSON_TEST_PREFIX") .. "/decoder" })
+        session = assert(adapter.start_body { temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder" })
         unregister = assert(adapter.on_abort(cleanup))
         local status, err
         child, status, err = session:get("model")
         assert(status == "READY", err)
         session:close()
-        local record = assert(require("qjson.test_state")[ngx.var.arg_case])
+        local record = assert(require("leanjson.test_state")[ngx.var.arg_case])
         local alive = ffi.C.fcntl(record.fd, 1) ~= -1 and require("lfs").attributes(record.filename) ~= nil
-        return { alive_after_close = alive, value = qjson.materialize(child) }
+        return { alive_after_close = alive, value = leanjson.materialize(child) }
     end)
     cleanup()
     if unregister then unregister() end
@@ -62,7 +62,7 @@ end
 local value, err, info
 if ngx.var.uri == "/lifecycle/core" then
     ngx.req.read_body()
-    value = qjson.decode_file(assert(ngx.req.get_body_file()))
+    value = leanjson.decode_file(assert(ngx.req.get_body_file()))
     info = { mode = "completed-file" }
 elseif ngx.var.uri == "/lifecycle/adapter" then
     value, err, info = adapter.read_body()
@@ -72,6 +72,6 @@ else
     if session then value, err = session:finish() end
 end
 assert(not err, err)
-assert(qjson.type(value) == "object")
+assert(leanjson.type(value) == "object")
 ngx.say(cjson.encode { decoded = true, input = info })
 -- Deliberately omit close: test the promised GC fallback after request end.

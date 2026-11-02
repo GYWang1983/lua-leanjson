@@ -1,5 +1,7 @@
 # 基于 lua-qjson fork 的大请求体处理设计
 
+> Historical design written before the rename. Original `qjson` paths, repository names, and upstream references are preserved. Current namespace and distribution details are in [LeanJSON rename](2026-11-01-leanjson-rename.md) and the [current source API](../file-source-api.md).
+
 > 日期：2026-10-31。状态：独立库与原生 OpenResty 接口已实现；验证范围、实测结果和限制见[验收记录](../verification/openresty-json-source.md)。
 > 已确定方向：fork `api7/lua-qjson`，在现有 Rust 内核和 LuaJIT 接口上扩展。
 > 集成范围：独立 JSON 组件与原生 OpenResty；本次不对接 Kong，不修改 Gateway、Controller 或业务插件。

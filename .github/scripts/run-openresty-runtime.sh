@@ -4,11 +4,11 @@ set -euo pipefail
 : "${OPENRESTY_IMAGE:?OPENRESTY_IMAGE is required}"
 
 workspace="${GITHUB_WORKSPACE:-$(pwd)}"
-libqjson="$workspace/target/release/libqjson.so"
+libleanjson="$workspace/target/release/libleanjson.so"
 full_busted="${OPENRESTY_FULL_BUSTED:-false}"
 
-if [[ ! -f "$libqjson" ]]; then
-    echo "missing release cdylib: $libqjson" >&2
+if [[ ! -f "$libleanjson" ]]; then
+    echo "missing release cdylib: $libleanjson" >&2
     exit 1
 fi
 

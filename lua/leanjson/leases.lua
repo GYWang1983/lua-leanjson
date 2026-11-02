@@ -23,7 +23,7 @@ local function acquire_entries(node, owner)
                 local token = backend:retain()
                 if owner and owner.closed then
                     backend:release(token)
-                    error("qjson: holder closed", 0)
+                    error("leanjson: holder closed", 0)
                 end
                 entries[#entries + 1] = { backend, token }
             end
@@ -46,13 +46,13 @@ function M.managed(node)
 end
 
 function M.check(scope)
-    if scope and scope.closed then error("qjson: holder closed", 0) end
+    if scope and scope.closed then error("leanjson: holder closed", 0) end
     if scope then
         for _, entry in ipairs(scope.entries) do
             local backend = entry[1]
             if backend.check_open then backend:check_open() end
         end
-        if scope.closed then error("qjson: holder closed", 0) end
+        if scope.closed then error("leanjson: holder closed", 0) end
     end
 end
 
@@ -66,7 +66,7 @@ end
 
 function M.track(scope, cleanup)
     local record = { cleanup = cleanup }
-    if scope and scope.closed then cleanup(); error("qjson: holder closed", 0) end
+    if scope and scope.closed then cleanup(); error("leanjson: holder closed", 0) end
     if scope then scope.active[record] = true end
     return record
 end

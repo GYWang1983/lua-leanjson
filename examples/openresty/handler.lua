@@ -1,5 +1,5 @@
-local qjson = require "qjson"
-local adapter = require "qjson.openresty"
+local leanjson = require "leanjson"
+local adapter = require "leanjson.openresty"
 local http = require "resty.http"
 local cjson = require "cjson"
 local body, session, branch, httpc, unregister
@@ -9,9 +9,9 @@ local function close(fn, value)
     if not ok then ngx.log(ngx.ERR, "example cleanup failed: ", tostring(err)) end
 end
 local function close_json()
-    if branch ~= nil then close(qjson.close, branch); branch = nil end
+    if branch ~= nil then close(leanjson.close, branch); branch = nil end
     if session then close(session.close, session); session = nil; body = nil
-    elseif body ~= nil then close(qjson.close, body); body = nil end
+    elseif body ~= nil then close(leanjson.close, body); body = nil end
 end
 local function cleanup()
     if unregister then unregister(); unregister = nil end
@@ -37,16 +37,16 @@ local function run()
     -- The protected run also unwinds ordinary source/connect/response failures.
     unregister = assert(adapter.on_abort(cleanup))
     local ok
-    ok, branch = pcall(qjson.fork, body)
-    if not ok or qjson.type(branch) ~= "object" then
+    ok, branch = pcall(leanjson.fork, body)
+    if not ok or leanjson.type(branch) ~= "object" then
         if not ok then branch = nil end
         return bad(400, "example expects an object with a model field")
     end
     branch.model = ngx.var.arg_model or "example-model"
     httpc = http.new()
     httpc:set_timeouts(1000, 30000, 30000)
-    ok, err = httpc:connect { scheme = "http", host = os.getenv("QJSON_UPSTREAM_HOST") or "127.0.0.1",
-        port = tonumber(os.getenv("QJSON_UPSTREAM_PORT")) or 8081 }
+    ok, err = httpc:connect { scheme = "http", host = os.getenv("LEANJSON_UPSTREAM_HOST") or "127.0.0.1",
+        port = tonumber(os.getenv("LEANJSON_UPSTREAM_PORT")) or 8081 }
     local response
     if ok then
         -- All input has passed finish/full validation before connection/send.
@@ -57,7 +57,7 @@ local function run()
     if not response then return bad(502, err) end
     ngx.status = response.status
     ngx.header.content_type = response.headers["Content-Type"]
-    ngx.header["X-QJSON-Input-Mode"] = info.mode
+    ngx.header["X-LEANJSON-Input-Mode"] = info.mode
     while true do
         local chunk, read_err = response.body_reader(65536)
         if read_err then error("upstream response failed: " .. tostring(read_err)) end

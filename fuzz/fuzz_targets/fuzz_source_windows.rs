@@ -2,8 +2,8 @@
 
 #[cfg(not(test))]
 use libfuzzer_sys::fuzz_target;
-use qjson::error::qjson_type;
-use qjson::source::{Node, ReadStep, Source, SourceError, SourceReader};
+use leanjson::error::leanjson_type;
+use leanjson::source::{Node, ReadStep, Source, SourceError, SourceReader};
 
 // Raw JSON inputs keep the existing corpus directly reusable. These independent
 // caps also bound replay when a caller omits libFuzzer's -max_len option.
@@ -56,12 +56,12 @@ fn fuzz_one(data: &[u8]) {
         if raw.len() <= replay_budget {
             replay_budget -= raw.len();
             assert_eq!(stream(node, false, data, window, seed), raw);
-            if !matches!(node.kind, qjson_type::QJSON_T_ARR | qjson_type::QJSON_T_OBJ)
+            if !matches!(node.kind, leanjson_type::LEANJSON_T_ARR | leanjson_type::LEANJSON_T_OBJ)
                 && raw.len() <= replay_budget
             {
                 replay_budget -= raw.len();
                 let scalar = stream(node, true, data, window, seed.rotate_left(7));
-                if node.kind == qjson_type::QJSON_T_STR {
+                if node.kind == leanjson_type::LEANJSON_T_STR {
                     let expected: String = serde_json::from_slice(raw).unwrap();
                     assert_eq!(scalar, expected.as_bytes());
                 } else {
@@ -73,7 +73,7 @@ fn fuzz_one(data: &[u8]) {
         for ((member, other), byte_member) in node.members.iter().zip(&other.members).zip(&byte_node.members).rev() {
             assert_eq!((member.key_start, member.key_end), (other.key_start, other.key_end));
             assert_eq!((member.key_start, member.key_end), (byte_member.key_start, byte_member.key_end));
-            if node.kind == qjson_type::QJSON_T_OBJ {
+            if node.kind == leanjson_type::LEANJSON_T_OBJ {
                 let key = &data[member.key_start as usize..member.key_end as usize];
                 let _: String = serde_json::from_slice(key).unwrap();
             } else {
@@ -130,8 +130,8 @@ fn assert_metadata(expected: &Node, actual: &Node) {
 fn stream(node: &Node, scalar: bool, data: &[u8], window: usize, mut state: u32) -> Vec<u8> {
     let mut reader = SourceReader::new(node, scalar, window).unwrap();
     let mut output = Vec::new();
-    let mut next_read = node.raw_start + u64::from(scalar && node.kind == qjson_type::QJSON_T_STR);
-    let read_end = node.raw_end - u64::from(scalar && node.kind == qjson_type::QJSON_T_STR);
+    let mut next_read = node.raw_start + u64::from(scalar && node.kind == leanjson_type::LEANJSON_T_STR);
+    let read_end = node.raw_end - u64::from(scalar && node.kind == leanjson_type::LEANJSON_T_STR);
     // Every nonterminal step must consume input or emit output. Each input
     // string byte produces at most one output byte, so this also detects stalls.
     for _ in 0..(4 * (node.raw_end - node.raw_start) as usize + 16) {

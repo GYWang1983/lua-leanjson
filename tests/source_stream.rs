@@ -1,6 +1,6 @@
 use proptest::prelude::*;
-use qjson::error::{qjson_err as E, qjson_type as T};
-use qjson::source::{Source, SourceError, DETAIL_ABORTED, DETAIL_BAD_OFFSET};
+use leanjson::error::{leanjson_err as E, leanjson_type as T};
+use leanjson::source::{Source, SourceError, DETAIL_ABORTED, DETAIL_BAD_OFFSET};
 
 fn parse(bytes: &[u8], chunk: usize) -> Result<Source, SourceError> {
     let mut source = Source::new(0, chunk);
@@ -17,14 +17,14 @@ fn every_byte_feed_preserves_absolute_spans_and_lexical_duplicates() {
     let bytes = br#" {"a":1,"a\u0062":[true,null,"\uD834\uDD1E"],"a":-2.5e+4} "#;
     let source = parse(bytes, 1).unwrap();
     let root = source.node(source.root().unwrap().unwrap()).unwrap().unwrap();
-    assert_eq!(root.kind, T::QJSON_T_OBJ);
+    assert_eq!(root.kind, T::LEANJSON_T_OBJ);
     assert_eq!((root.raw_start, root.raw_end), (1, 57));
     assert_eq!(root.members.len(), 3);
     assert_eq!((root.members[0].key_start, root.members[0].key_end), (2, 5));
     assert_eq!((root.members[1].key_start, root.members[1].key_end), (8, 17));
     assert_eq!((root.members[2].key_start, root.members[2].key_end), (45, 48));
     let array = source.node(root.members[1].value).unwrap().unwrap();
-    assert_eq!(array.kind, T::QJSON_T_ARR);
+    assert_eq!(array.kind, T::LEANJSON_T_ARR);
     assert_eq!(array.members.len(), 3);
     assert!(array.members.iter().all(|m| m.key_start == 0 && m.key_end == 0));
     let number = source.node(root.members[2].value).unwrap().unwrap();
@@ -46,20 +46,20 @@ fn all_split_positions_accept_utf8_escapes_literals_and_exponents() {
 #[test]
 fn malformed_tokens_report_absolute_token_starts() {
     let cases: &[(&[u8], E, u64)] = &[
-        (b"[01]", E::QJSON_INVALID_NUMBER, 1),
-        (b"[1.]", E::QJSON_INVALID_NUMBER, 1),
-        (b"[1e+]", E::QJSON_INVALID_NUMBER, 1),
-        (b"[\"\\q\"]", E::QJSON_INVALID_STRING, 1),
-        (b"[\"\\uD800x\"]", E::QJSON_INVALID_STRING, 1),
-        (b"[\"\\uDC00\"]", E::QJSON_INVALID_STRING, 1),
-        (b"[\"\xED\xA0\x80\"]", E::QJSON_INVALID_UTF8, 1),
-        (b"[\"\xF4\x90\x80\x80\"]", E::QJSON_INVALID_UTF8, 1),
-        (b"[\"\xC0\xAF\"]", E::QJSON_INVALID_UTF8, 1),
-        (b"[\"\x01\"]", E::QJSON_INVALID_STRING, 1),
-        (b"[1,]", E::QJSON_PARSE_ERROR, 3),
-        (b"{\"x\":1,}", E::QJSON_PARSE_ERROR, 7),
-        (b"{} x", E::QJSON_TRAILING_CONTENT, 3),
-        (b"[}", E::QJSON_PARSE_ERROR, 1),
+        (b"[01]", E::LEANJSON_INVALID_NUMBER, 1),
+        (b"[1.]", E::LEANJSON_INVALID_NUMBER, 1),
+        (b"[1e+]", E::LEANJSON_INVALID_NUMBER, 1),
+        (b"[\"\\q\"]", E::LEANJSON_INVALID_STRING, 1),
+        (b"[\"\\uD800x\"]", E::LEANJSON_INVALID_STRING, 1),
+        (b"[\"\\uDC00\"]", E::LEANJSON_INVALID_STRING, 1),
+        (b"[\"\xED\xA0\x80\"]", E::LEANJSON_INVALID_UTF8, 1),
+        (b"[\"\xF4\x90\x80\x80\"]", E::LEANJSON_INVALID_UTF8, 1),
+        (b"[\"\xC0\xAF\"]", E::LEANJSON_INVALID_UTF8, 1),
+        (b"[\"\x01\"]", E::LEANJSON_INVALID_STRING, 1),
+        (b"[1,]", E::LEANJSON_PARSE_ERROR, 3),
+        (b"{\"x\":1,}", E::LEANJSON_PARSE_ERROR, 7),
+        (b"{} x", E::LEANJSON_TRAILING_CONTENT, 3),
+        (b"[}", E::LEANJSON_PARSE_ERROR, 1),
     ];
     for &(bytes, code, offset) in cases {
         for chunk in [1, 2, 7, 1024] {
@@ -72,15 +72,15 @@ fn malformed_tokens_report_absolute_token_starts() {
 #[test]
 fn finish_rejects_truncated_tokens_and_containers() {
     let cases: &[(&[u8], E, u64)] = &[
-        (b"", E::QJSON_PARSE_ERROR, 0),
-        (b"[1,", E::QJSON_PARSE_ERROR, 3),
-        (b"{\"x\":", E::QJSON_PARSE_ERROR, 5),
-        (b"\"abc", E::QJSON_PARSE_ERROR, 4),
-        (b"\"\\", E::QJSON_INVALID_STRING, 0),
-        (b"\"\\u12", E::QJSON_INVALID_STRING, 0),
-        (b"\"\xE2\x82", E::QJSON_INVALID_UTF8, 0),
-        (b"1e+", E::QJSON_INVALID_NUMBER, 0),
-        (b"tru", E::QJSON_PARSE_ERROR, 3),
+        (b"", E::LEANJSON_PARSE_ERROR, 0),
+        (b"[1,", E::LEANJSON_PARSE_ERROR, 3),
+        (b"{\"x\":", E::LEANJSON_PARSE_ERROR, 5),
+        (b"\"abc", E::LEANJSON_PARSE_ERROR, 4),
+        (b"\"\\", E::LEANJSON_INVALID_STRING, 0),
+        (b"\"\\u12", E::LEANJSON_INVALID_STRING, 0),
+        (b"\"\xE2\x82", E::LEANJSON_INVALID_UTF8, 0),
+        (b"1e+", E::LEANJSON_INVALID_NUMBER, 0),
+        (b"tru", E::LEANJSON_PARSE_ERROR, 3),
     ];
     for &(bytes, code, offset) in cases {
         let error = parse(bytes, 1).err().unwrap_or_else(|| panic!("accepted {bytes:?}"));
@@ -93,7 +93,7 @@ fn depth_is_checked_at_the_rejected_opener() {
     let mut source = Source::new(2, 1);
     source.feed(0, b"[[").unwrap();
     let error = source.feed(2, b"[0]]]").unwrap_err();
-    assert_eq!((error.code, error.offset), (E::QJSON_NESTING_TOO_DEEP, 2));
+    assert_eq!((error.code, error.offset), (E::LEANJSON_NESTING_TOO_DEEP, 2));
     assert_eq!(source.finish(7).unwrap_err(), error);
 }
 
@@ -131,7 +131,7 @@ fn scanning_huge_numbers_never_requires_f64_range_or_token_storage() {
     source.feed(8192, b"e9999999999999999999999999999").unwrap();
     source.finish(8221).unwrap();
     let root = source.node(source.root().unwrap().unwrap()).unwrap().unwrap();
-    assert_eq!(root.kind, T::QJSON_T_NUM);
+    assert_eq!(root.kind, T::LEANJSON_T_NUM);
     assert_eq!((root.raw_start, root.raw_end), (0, 8221));
 }
 
@@ -171,8 +171,8 @@ fn json_value() -> BoxedStrategy<serde_json::Value> {
 fn value_from_spans(source: &Source, id: usize, bytes: &[u8]) -> serde_json::Value {
     let node = source.node(id).unwrap().unwrap();
     match node.kind {
-        T::QJSON_T_ARR => serde_json::Value::Array(node.members.iter().map(|member| value_from_spans(source, member.value, bytes)).collect()),
-        T::QJSON_T_OBJ => {
+        T::LEANJSON_T_ARR => serde_json::Value::Array(node.members.iter().map(|member| value_from_spans(source, member.value, bytes)).collect()),
+        T::LEANJSON_T_OBJ => {
             let mut object = serde_json::Map::new();
             for member in &node.members {
                 let key = serde_json::from_slice::<String>(&bytes[member.key_start as usize..member.key_end as usize]).unwrap();
@@ -191,7 +191,7 @@ proptest! {
         let bytes = serde_json::to_vec(&value).unwrap();
         let source = parse(&bytes, chunk).unwrap();
         let root = source.node(source.root().unwrap().unwrap()).unwrap().unwrap();
-        prop_assert_eq!(root.kind, T::QJSON_T_STR);
+        prop_assert_eq!(root.kind, T::LEANJSON_T_STR);
         prop_assert_eq!((root.raw_start, root.raw_end), (0, bytes.len() as u64));
     }
 

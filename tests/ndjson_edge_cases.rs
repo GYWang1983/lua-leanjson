@@ -1,37 +1,37 @@
 //! NDJSON edge case coverage (issue #154).
 //!
-//! qjson is a single-document parser — it does not provide a native NDJSON API.
-//! Callers split lines themselves and call `qjson_parse()` per record.
+//! leanjson is a single-document parser — it does not provide a native NDJSON API.
+//! Callers split lines themselves and call `leanjson_parse()` per record.
 //!
-//! These tests cover edge cases that ARE qjson's responsibility:
+//! These tests cover edge cases that ARE leanjson's responsibility:
 //! - UTF-8 BOM handling (RFC 8259 §8.1 prohibits BOM)
 //! - Large single record (1MB+) without stack overflow
 //! - Batch parse/free cycles (10K+) without memory leaks
 
-use qjson::error::qjson_err;
-use qjson::ffi::{qjson_doc, qjson_error, qjson_free, qjson_get_str, qjson_parse_ex};
-use qjson::options::{Options, QJSON_MODE_EAGER, QJSON_MODE_LAZY};
+use leanjson::error::leanjson_err;
+use leanjson::ffi::{leanjson_doc, leanjson_error, leanjson_free, leanjson_get_str, leanjson_parse_ex};
+use leanjson::options::{Options, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY};
 use std::os::raw::{c_char, c_int};
 
-const MODES: [u32; 2] = [QJSON_MODE_EAGER, QJSON_MODE_LAZY];
+const MODES: [u32; 2] = [LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY];
 
 fn opts(mode: u32) -> Options {
     Options { mode, max_depth: 0 }
 }
 
-struct DocGuard(*mut qjson_doc);
+struct DocGuard(*mut leanjson_doc);
 
 impl Drop for DocGuard {
     fn drop(&mut self) {
         if !self.0.is_null() {
-            unsafe { qjson_free(self.0) }
+            unsafe { leanjson_free(self.0) }
         }
     }
 }
 
 fn parse_ok(buf: &[u8], o: &Options) -> DocGuard {
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
     assert!(
         !doc.is_null(),
         "parse_ex unexpectedly failed (mode={}): code={}, offset={}",
@@ -39,23 +39,23 @@ fn parse_ok(buf: &[u8], o: &Options) -> DocGuard {
         err.code,
         err.offset,
     );
-    assert_eq!(err.code, qjson_err::QJSON_OK as c_int);
+    assert_eq!(err.code, leanjson_err::LEANJSON_OK as c_int);
     DocGuard(doc)
 }
 
-fn parse_err(buf: &[u8], o: &Options) -> qjson_error {
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
+fn parse_err(buf: &[u8], o: &Options) -> leanjson_error {
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
     if !doc.is_null() {
-        unsafe { qjson_free(doc) };
+        unsafe { leanjson_free(doc) };
         panic!("parse_ex unexpectedly succeeded (mode={})", o.mode);
     }
     err
 }
 
-fn try_parse(buf: &[u8], o: &Options) -> Result<DocGuard, qjson_error> {
-    let mut err = qjson_error::default();
-    let doc = unsafe { qjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
+fn try_parse(buf: &[u8], o: &Options) -> Result<DocGuard, leanjson_error> {
+    let mut err = leanjson_error::default();
+    let doc = unsafe { leanjson_parse_ex(buf.as_ptr(), buf.len(), o, &mut err) };
     if doc.is_null() {
         Err(err)
     } else {
@@ -72,10 +72,10 @@ fn bom_at_start_rejected_eager() {
     let input = b"\xef\xbb\xbf{}";
 
     // EAGER mode must reject at parse time.
-    let err = parse_err(input, &opts(QJSON_MODE_EAGER));
+    let err = parse_err(input, &opts(LEANJSON_MODE_EAGER));
     assert_ne!(
         err.code,
-        qjson_err::QJSON_OK as c_int,
+        leanjson_err::LEANJSON_OK as c_int,
         "EAGER should reject BOM-prefixed input"
     );
     assert_eq!(err.offset, 0, "error should point at BOM start");
@@ -86,10 +86,10 @@ fn bom_at_start_behavior_lazy() {
     // LAZY mode may accept parse but must fail on access, or reject at parse.
     let input = b"\xef\xbb\xbf{}";
 
-    match try_parse(input, &opts(QJSON_MODE_LAZY)) {
+    match try_parse(input, &opts(LEANJSON_MODE_LAZY)) {
         Err(err) => {
             // Rejected at parse — acceptable.
-            assert_ne!(err.code, qjson_err::QJSON_OK as c_int);
+            assert_ne!(err.code, leanjson_err::LEANJSON_OK as c_int);
         }
         Ok(_doc) => {
             // Accepted at parse — LAZY defers validation, but accessing root
@@ -112,10 +112,10 @@ fn bom_variants_all_rejected_eager() {
     ];
 
     for input in cases {
-        let err = parse_err(input, &opts(QJSON_MODE_EAGER));
+        let err = parse_err(input, &opts(LEANJSON_MODE_EAGER));
         assert_ne!(
             err.code,
-            qjson_err::QJSON_OK as c_int,
+            leanjson_err::LEANJSON_OK as c_int,
             "EAGER should reject BOM-prefixed: {:?}",
             String::from_utf8_lossy(input)
         );
@@ -149,7 +149,7 @@ fn large_record_1mb_parses_both_modes() {
         let mut len = 0usize;
         let path = b"data";
         let rc = unsafe {
-            qjson_get_str(
+            leanjson_get_str(
                 doc.0,
                 path.as_ptr() as *const c_char,
                 path.len(),
@@ -159,7 +159,7 @@ fn large_record_1mb_parses_both_modes() {
         };
         assert_eq!(
             rc,
-            qjson_err::QJSON_OK as c_int,
+            leanjson_err::LEANJSON_OK as c_int,
             "mode={}: get_str failed",
             mode
         );
@@ -179,7 +179,7 @@ fn large_record_2mb_parses_both_modes() {
         let mut len = 0usize;
         let path = b"data";
         let rc = unsafe {
-            qjson_get_str(
+            leanjson_get_str(
                 doc.0,
                 path.as_ptr() as *const c_char,
                 path.len(),
@@ -187,7 +187,7 @@ fn large_record_2mb_parses_both_modes() {
                 &mut len,
             )
         };
-        assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+        assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
         assert!(len > 2_000_000);
     }
 }
@@ -209,7 +209,7 @@ fn batch_10k_small_records_both_modes() {
             let mut len = 0usize;
             let path = b"name";
             let rc = unsafe {
-                qjson_get_str(
+                leanjson_get_str(
                     doc.0,
                     path.as_ptr() as *const c_char,
                     path.len(),
@@ -219,13 +219,13 @@ fn batch_10k_small_records_both_modes() {
             };
             assert_eq!(
                 rc,
-                qjson_err::QJSON_OK as c_int,
+                leanjson_err::LEANJSON_OK as c_int,
                 "mode={} iter={}: get_str failed",
                 mode,
                 i
             );
 
-            // DocGuard drops here, calling qjson_free
+            // DocGuard drops here, calling leanjson_free
         }
     }
 }

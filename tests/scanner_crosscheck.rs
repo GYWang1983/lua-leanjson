@@ -2,7 +2,7 @@
 use proptest::prelude::*;
 
 #[cfg(all(target_arch = "x86_64", feature = "avx2"))]
-use qjson::__test_api::{Scanner, ScalarScanner, Avx2Scanner};
+use leanjson::__test_api::{Scanner, ScalarScanner, Avx2Scanner};
 
 #[cfg(all(target_arch = "x86_64", feature = "avx2"))]
 proptest! {
@@ -76,7 +76,7 @@ fn scalar_avx2_handles_continued_backslash_run_before_quote() {
 use proptest::prelude::*;
 
 #[cfg(target_arch = "aarch64")]
-use qjson::__test_api::{Scanner, ScalarScanner, NeonScanner};
+use leanjson::__test_api::{Scanner, ScalarScanner, NeonScanner};
 
 #[cfg(target_arch = "aarch64")]
 proptest! {

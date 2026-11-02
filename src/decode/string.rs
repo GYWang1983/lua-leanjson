@@ -1,4 +1,4 @@
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 
 /// Decode the JSON string between `start` and `end` (exclusive of the
 /// surrounding quotes) into `scratch` if escapes are present. Returns
@@ -6,7 +6,7 @@ use crate::error::qjson_err;
 pub(crate) fn decode_string(
     buf: &[u8], start: usize, end: usize, scratch: &mut Vec<u8>,
     skip_validation: bool,
-) -> Result<(*const u8, usize), qjson_err> {
+) -> Result<(*const u8, usize), leanjson_err> {
     let slice = &buf[start..end];
     if !skip_validation {
         crate::validate::validate_string_span(slice)?;
@@ -27,7 +27,7 @@ pub(crate) fn decode_string(
             continue;
         }
         // Escape.
-        if i + 1 >= slice.len() { return Err(qjson_err::QJSON_DECODE_FAILED); }
+        if i + 1 >= slice.len() { return Err(leanjson_err::LEANJSON_DECODE_FAILED); }
         match slice[i + 1] {
             b'"'  => { scratch.push(b'"');  i += 2; }
             b'\\' => { scratch.push(b'\\'); i += 2; }
@@ -38,35 +38,35 @@ pub(crate) fn decode_string(
             b'r'  => { scratch.push(b'\r'); i += 2; }
             b't'  => { scratch.push(b'\t'); i += 2; }
             b'u'  => {
-                if i + 6 > slice.len() { return Err(qjson_err::QJSON_DECODE_FAILED); }
+                if i + 6 > slice.len() { return Err(leanjson_err::LEANJSON_DECODE_FAILED); }
                 let h = parse_hex4(&slice[i + 2 .. i + 6])?;
                 i += 6;
                 let cp = if (0xD800..=0xDBFF).contains(&h) {
                     // High surrogate; expect low surrogate next.
                     if i + 6 > slice.len() || &slice[i..i + 2] != b"\\u" {
-                        return Err(qjson_err::QJSON_DECODE_FAILED);
+                        return Err(leanjson_err::LEANJSON_DECODE_FAILED);
                     }
                     let l = parse_hex4(&slice[i + 2 .. i + 6])?;
                     if !(0xDC00..=0xDFFF).contains(&l) {
-                        return Err(qjson_err::QJSON_DECODE_FAILED);
+                        return Err(leanjson_err::LEANJSON_DECODE_FAILED);
                     }
                     i += 6;
                     0x10000 + ((h - 0xD800) << 10) + (l - 0xDC00)
                 } else if (0xDC00..=0xDFFF).contains(&h) {
-                    return Err(qjson_err::QJSON_DECODE_FAILED);
+                    return Err(leanjson_err::LEANJSON_DECODE_FAILED);
                 } else {
                     h
                 };
                 encode_utf8(cp, scratch);
             }
-            _ => return Err(qjson_err::QJSON_DECODE_FAILED),
+            _ => return Err(leanjson_err::LEANJSON_DECODE_FAILED),
         }
     }
 
     Ok((scratch.as_ptr(), scratch.len()))
 }
 
-fn parse_hex4(bytes: &[u8]) -> Result<u32, qjson_err> {
+fn parse_hex4(bytes: &[u8]) -> Result<u32, leanjson_err> {
     let mut v: u32 = 0;
     for &b in bytes {
         v <<= 4;
@@ -74,7 +74,7 @@ fn parse_hex4(bytes: &[u8]) -> Result<u32, qjson_err> {
             b'0'..=b'9' => (b - b'0') as u32,
             b'a'..=b'f' => (b - b'a' + 10) as u32,
             b'A'..=b'F' => (b - b'A' + 10) as u32,
-            _ => return Err(qjson_err::QJSON_DECODE_FAILED),
+            _ => return Err(leanjson_err::LEANJSON_DECODE_FAILED),
         };
     }
     Ok(v)
@@ -102,13 +102,13 @@ fn encode_utf8(cp: u32, out: &mut Vec<u8>) {
 mod tests {
     use super::*;
 
-    fn d(s: &[u8]) -> Result<Vec<u8>, qjson_err> {
+    fn d(s: &[u8]) -> Result<Vec<u8>, leanjson_err> {
         let mut scratch = Vec::new();
         let (p, n) = decode_string(s, 0, s.len(), &mut scratch, false)?;
         Ok(unsafe { std::slice::from_raw_parts(p, n) }.to_vec())
     }
 
-    fn d_skip_validation(s: &[u8]) -> Result<Vec<u8>, qjson_err> {
+    fn d_skip_validation(s: &[u8]) -> Result<Vec<u8>, leanjson_err> {
         let mut scratch = Vec::new();
         let (p, n) = decode_string(s, 0, s.len(), &mut scratch, true)?;
         Ok(unsafe { std::slice::from_raw_parts(p, n) }.to_vec())
@@ -170,27 +170,27 @@ mod tests {
     fn lone_high_surrogate_fails() {
         assert_eq!(
             d_skip_validation(b"\\uD83D").unwrap_err(),
-            qjson_err::QJSON_DECODE_FAILED,
+            leanjson_err::LEANJSON_DECODE_FAILED,
         );
     }
 
     #[test]
     fn invalid_hex_in_unicode_fails() {
         // validate_string_span (called first) catches non-hex digits as
-        // QJSON_INVALID_STRING; the decode loop would also catch it as
-        // QJSON_DECODE_FAILED, but we never reach it.
-        assert_eq!(d(b"\\uZZZZ").unwrap_err(), qjson_err::QJSON_INVALID_STRING);
+        // LEANJSON_INVALID_STRING; the decode loop would also catch it as
+        // LEANJSON_DECODE_FAILED, but we never reach it.
+        assert_eq!(d(b"\\uZZZZ").unwrap_err(), leanjson_err::LEANJSON_INVALID_STRING);
     }
 
     #[test]
     fn unknown_escape_fails() {
         // validate_string_span catches unknown escape introducers first.
-        assert_eq!(d(b"\\q").unwrap_err(), qjson_err::QJSON_INVALID_STRING);
+        assert_eq!(d(b"\\q").unwrap_err(), leanjson_err::LEANJSON_INVALID_STRING);
     }
 
     #[test]
     fn dangling_backslash_fails() {
         // validate_string_span catches a trailing lone backslash first.
-        assert_eq!(d(b"a\\").unwrap_err(), qjson_err::QJSON_INVALID_STRING);
+        assert_eq!(d(b"a\\").unwrap_err(), leanjson_err::LEANJSON_INVALID_STRING);
     }
 }

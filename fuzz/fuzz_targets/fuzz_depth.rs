@@ -5,14 +5,14 @@ use std::ptr;
 use std::sync::Once;
 
 use libfuzzer_sys::fuzz_target;
-use qjson::doc::Document;
-use qjson::error::qjson_err;
-use qjson::ffi::{
-    qjson_cursor, qjson_cursor_bytes, qjson_cursor_field, qjson_cursor_index, qjson_cursor_len,
-    qjson_error, qjson_free, qjson_open, qjson_parse_ex,
+use leanjson::doc::Document;
+use leanjson::error::leanjson_err;
+use leanjson::ffi::{
+    leanjson_cursor, leanjson_cursor_bytes, leanjson_cursor_field, leanjson_cursor_index, leanjson_cursor_len,
+    leanjson_error, leanjson_free, leanjson_open, leanjson_parse_ex,
 };
-use qjson::options::{
-    Options, QJSON_DEFAULT_MAX_DEPTH, QJSON_MAX_MAX_DEPTH, QJSON_MODE_EAGER, QJSON_MODE_LAZY,
+use leanjson::options::{
+    Options, LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY,
 };
 
 static BOUNDARY_ASSERTIONS: Once = Once::new();
@@ -23,15 +23,15 @@ fuzz_target!(|data: &[u8]| {
 });
 
 fn run_boundary_assertions() {
-    for mode in [QJSON_MODE_EAGER, QJSON_MODE_LAZY] {
-        assert_boundary(mode, 0, QJSON_DEFAULT_MAX_DEPTH, ShapeMode::Array);
+    for mode in [LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY] {
+        assert_boundary(mode, 0, LEANJSON_DEFAULT_MAX_DEPTH, ShapeMode::Array);
         assert_boundary(
             mode,
-            QJSON_MAX_MAX_DEPTH,
-            QJSON_MAX_MAX_DEPTH,
+            LEANJSON_MAX_MAX_DEPTH,
+            LEANJSON_MAX_MAX_DEPTH,
             ShapeMode::Object,
         );
-        assert_boundary(mode, u32::MAX, QJSON_MAX_MAX_DEPTH, ShapeMode::Mixed);
+        assert_boundary(mode, u32::MAX, LEANJSON_MAX_MAX_DEPTH, ShapeMode::Mixed);
     }
 }
 
@@ -57,9 +57,9 @@ fn assert_boundary(
 fn run_generated_case(data: &[u8]) {
     let opts = Options {
         mode: if byte(data, 0) & 1 == 0 {
-            QJSON_MODE_EAGER
+            LEANJSON_MODE_EAGER
         } else {
-            QJSON_MODE_LAZY
+            LEANJSON_MODE_LAZY
         },
         max_depth: requested_max_depth(data),
     };
@@ -73,20 +73,20 @@ fn run_generated_case(data: &[u8]) {
     let ffi_err = ffi_parse_error(&json, &opts);
     assert_ne!(
         ffi_err,
-        qjson_err::QJSON_OOM as c_int,
+        leanjson_err::LEANJSON_OOM as c_int,
         "panic barrier tripped for {json:?}"
     );
 
     if !mutated {
         if depth > effective {
-            assert_eq!(result.err(), Some(qjson_err::QJSON_NESTING_TOO_DEEP));
-            assert_eq!(ffi_err, qjson_err::QJSON_NESTING_TOO_DEEP as c_int);
+            assert_eq!(result.err(), Some(leanjson_err::LEANJSON_NESTING_TOO_DEEP));
+            assert_eq!(ffi_err, leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int);
         } else {
             assert!(
                 result.is_ok(),
                 "valid depth {depth} <= {effective} was rejected"
             );
-            assert_eq!(ffi_err, qjson_err::QJSON_OK as c_int);
+            assert_eq!(ffi_err, leanjson_err::LEANJSON_OK as c_int);
             if depth <= 256 {
                 walk_accepted_doc(
                     &json,
@@ -105,30 +105,30 @@ fn assert_parse_ok(json: &[u8], opts: &Options) {
         opts.mode,
         opts.max_depth,
     );
-    assert_eq!(ffi_parse_error(json, opts), qjson_err::QJSON_OK as c_int);
+    assert_eq!(ffi_parse_error(json, opts), leanjson_err::LEANJSON_OK as c_int);
 }
 
 fn assert_nesting_error(json: &[u8], opts: &Options) {
     assert_eq!(
         Document::parse_with_options(json, opts).err(),
-        Some(qjson_err::QJSON_NESTING_TOO_DEEP),
-        "one past depth limit should return QJSON_NESTING_TOO_DEEP: mode={} max_depth={}",
+        Some(leanjson_err::LEANJSON_NESTING_TOO_DEEP),
+        "one past depth limit should return LEANJSON_NESTING_TOO_DEEP: mode={} max_depth={}",
         opts.mode,
         opts.max_depth,
     );
     assert_eq!(
         ffi_parse_error(json, opts),
-        qjson_err::QJSON_NESTING_TOO_DEEP as c_int,
+        leanjson_err::LEANJSON_NESTING_TOO_DEEP as c_int,
         "FFI one-past-limit parse should surface the same clean error",
     );
 }
 
 fn ffi_parse_error(json: &[u8], opts: &Options) -> c_int {
     unsafe {
-        let mut err = qjson_error::default();
-        let doc = qjson_parse_ex(json.as_ptr(), json.len(), opts as *const Options, &mut err);
+        let mut err = leanjson_error::default();
+        let doc = leanjson_parse_ex(json.as_ptr(), json.len(), opts as *const Options, &mut err);
         if !doc.is_null() {
-            qjson_free(doc);
+            leanjson_free(doc);
         }
         err.code
     }
@@ -136,68 +136,68 @@ fn ffi_parse_error(json: &[u8], opts: &Options) -> c_int {
 
 fn walk_accepted_doc(json: &[u8], opts: &Options, steps: impl Iterator<Item = Step>) {
     unsafe {
-        let mut err = qjson_error::default();
-        let doc = qjson_parse_ex(json.as_ptr(), json.len(), opts as *const Options, &mut err);
+        let mut err = leanjson_error::default();
+        let doc = leanjson_parse_ex(json.as_ptr(), json.len(), opts as *const Options, &mut err);
         assert!(
             !doc.is_null(),
             "accepted Phase 2 sample failed to parse: err={err:?}"
         );
-        assert_eq!(err.code, qjson_err::QJSON_OK as c_int);
+        assert_eq!(err.code, leanjson_err::LEANJSON_OK as c_int);
 
-        let mut cur: qjson_cursor = std::mem::zeroed();
+        let mut cur: leanjson_cursor = std::mem::zeroed();
         assert_eq!(
-            qjson_open(doc, ptr::null(), 0, &mut cur),
-            qjson_err::QJSON_OK as c_int
+            leanjson_open(doc, ptr::null(), 0, &mut cur),
+            leanjson_err::LEANJSON_OK as c_int
         );
 
         let key = b"k";
         for step in steps {
             let mut len = usize::MAX;
             assert_eq!(
-                qjson_cursor_len(&cur, ptr::null(), 0, &mut len),
-                qjson_err::QJSON_OK as c_int,
+                leanjson_cursor_len(&cur, ptr::null(), 0, &mut len),
+                leanjson_err::LEANJSON_OK as c_int,
             );
             assert_eq!(len, 1);
 
-            let mut next: qjson_cursor = std::mem::zeroed();
+            let mut next: leanjson_cursor = std::mem::zeroed();
             let rc = match step {
-                Step::Index0 => qjson_cursor_index(&cur, 0, &mut next),
+                Step::Index0 => leanjson_cursor_index(&cur, 0, &mut next),
                 Step::KeyK => {
-                    qjson_cursor_field(&cur, key.as_ptr() as *const c_char, key.len(), &mut next)
+                    leanjson_cursor_field(&cur, key.as_ptr() as *const c_char, key.len(), &mut next)
                 }
             };
-            assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+            assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
             cur = next;
         }
 
         let mut byte_start = usize::MAX;
         let mut byte_end = usize::MAX;
         assert_eq!(
-            qjson_cursor_bytes(&cur, &mut byte_start, &mut byte_end),
-            qjson_err::QJSON_OK as c_int,
+            leanjson_cursor_bytes(&cur, &mut byte_start, &mut byte_end),
+            leanjson_err::LEANJSON_OK as c_int,
         );
         assert!(byte_start < byte_end && byte_end <= json.len());
-        qjson_free(doc);
+        leanjson_free(doc);
     }
 }
 
 fn requested_max_depth(data: &[u8]) -> u32 {
     match byte(data, 1) % 5 {
         0 => 0,
-        1 => QJSON_DEFAULT_MAX_DEPTH,
-        2 => QJSON_MAX_MAX_DEPTH,
+        1 => LEANJSON_DEFAULT_MAX_DEPTH,
+        2 => LEANJSON_MAX_MAX_DEPTH,
         3 => u32::MAX,
-        _ => 1 + u32::from(u16_at(data, 2)) % QJSON_MAX_MAX_DEPTH,
+        _ => 1 + u32::from(u16_at(data, 2)) % LEANJSON_MAX_MAX_DEPTH,
     }
 }
 
 fn effective_max_depth(requested: u32) -> u32 {
     let depth = if requested == 0 {
-        QJSON_DEFAULT_MAX_DEPTH
+        LEANJSON_DEFAULT_MAX_DEPTH
     } else {
         requested
     };
-    depth.min(QJSON_MAX_MAX_DEPTH)
+    depth.min(LEANJSON_MAX_MAX_DEPTH)
 }
 
 fn generated_depth(data: &[u8], effective: u32) -> u32 {
@@ -206,7 +206,7 @@ fn generated_depth(data: &[u8], effective: u32) -> u32 {
         1 => effective,
         2 => effective + 1,
         3 => effective + 2,
-        _ => 1 + u32::from(u16_at(data, 6)) % (QJSON_MAX_MAX_DEPTH + 2),
+        _ => 1 + u32::from(u16_at(data, 6)) % (LEANJSON_MAX_MAX_DEPTH + 2),
     }
 }
 

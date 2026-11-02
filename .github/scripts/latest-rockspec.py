@@ -17,11 +17,14 @@ def prerelease_key(value):
 
 
 def latest_any():
+    development = Path("rockspec/lua-leanjson-scm-1.rockspec")
+    if development.is_file():
+        return str(development)
     pattern = re.compile(
-        r"^lua-qjson-(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?-(\d+)\.rockspec$"
+        r"^lua-leanjson-(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?-(\d+)\.rockspec$"
     )
     matches = []
-    for path in Path("rockspec").glob("lua-qjson-*.rockspec"):
+    for path in Path("rockspec").glob("lua-leanjson-*.rockspec"):
         match = pattern.match(path.name)
         if match:
             major, minor, patch, prerelease, revision = match.groups()
@@ -37,15 +40,15 @@ def latest_any():
                 )
             )
     if not matches:
-        raise SystemExit("no lua-qjson rockspec found")
+        raise SystemExit("no lua-leanjson rockspec found")
     return max(matches)[-1]
 
 
 def latest_for_version(version):
     version = version.removeprefix("v")
-    pattern = re.compile(r"^lua-qjson-" + re.escape(version) + r"-(\d+)\.rockspec$")
+    pattern = re.compile(r"^lua-leanjson-" + re.escape(version) + r"-(\d+)\.rockspec$")
     matches = []
-    for path in Path("rockspec").glob("lua-qjson-" + version + "-*.rockspec"):
+    for path in Path("rockspec").glob("lua-leanjson-" + version + "-*.rockspec"):
         match = pattern.match(path.name)
         if match:
             matches.append((int(match.group(1)), str(path)))
@@ -55,7 +58,7 @@ def latest_for_version(version):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Print the newest lua-qjson rockspec path.")
+    parser = argparse.ArgumentParser(description="Print the development or newest release lua-leanjson rockspec path.")
     parser.add_argument("--version", help="Select the newest revision for a release version.")
     args = parser.parse_args()
 

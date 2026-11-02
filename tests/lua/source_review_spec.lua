@@ -1,7 +1,7 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 local ffi = require("ffi")
 local lfs = require("lfs")
-local source_io = require("qjson.source_io")
+local source_io = require("leanjson.source_io")
 ffi.cdef[[int fcntl(int, int, ...);]]
 
 describe("source review ownership regressions", function()
@@ -11,16 +11,16 @@ describe("source review ownership regressions", function()
     local function root(mode, raw, opts)
         opts = opts or {}
         opts.temp_dir = directory
-        if mode == "memory" then return hold(qjson.decode(raw)) end
+        if mode == "memory" then return hold(leanjson.decode(raw)) end
         if mode == "file" then
             local filename = directory .. "/input-" .. (#originals + 1) .. ".json"
             originals[#originals + 1] = filename
             local output = assert(io.open(filename, "wb"))
             output:write(raw)
             output:close()
-            return hold(qjson.decode_file(filename, opts))
+            return hold(leanjson.decode_file(filename, opts))
         end
-        local input = qjson.new_decoder(opts)
+        local input = leanjson.new_decoder(opts)
         inputs[#inputs + 1] = input
         assert.is_true(input:feed(raw))
         local value, err = input:finish()
@@ -56,7 +56,7 @@ describe("source review ownership regressions", function()
     after_each(function()
         collectgarbage("restart")
         for _, input in ipairs(inputs) do input:close() end
-        for _, value in ipairs(held) do qjson.close(value) end
+        for _, value in ipairs(held) do leanjson.close(value) end
         source_io.open, source_io.spool = original_open, original_spool
         collectgarbage("collect")
         collectgarbage("collect")
@@ -72,8 +72,8 @@ describe("source review ownership regressions", function()
                 local value = root(mode, '{"a":{"b":{"x":1},"sibling":2}}')
                 local container = wrapped and { value = value } or value
                 local path = wrapped and "value.a.b" or "a.b"
-                local first = hold(qjson.get(container, path))
-                local second = hold(qjson.get(container, path))
+                local first = hold(leanjson.get(container, path))
+                local second = hold(leanjson.get(container, path))
                 assert.is_true(rawequal(first, second))
                 local ancestor = hold(value.a)
                 ancestor.sibling = 3
@@ -81,7 +81,7 @@ describe("source review ownership regressions", function()
                 assert.are.equal(7, value.a.b.x)
                 assert.are.equal(7, second.x)
                 second.x = 8
-                assert.are.equal('{"a":{"b":{"x":8},"sibling":3}}', qjson.encode(value))
+                assert.are.equal('{"a":{"b":{"x":8},"sibling":3}}', leanjson.encode(value))
                 value.a = { b = { x = 20 } }
                 first.x = 9
                 assert.are.equal(20, value.a.b.x)
@@ -90,16 +90,16 @@ describe("source review ownership regressions", function()
 
         it("moves canonical cold array paths through insert and remove in " .. mode, function()
             local value = root(mode, '{"items":[{"b":{"x":1},"sibling":2},{"b":{"x":10}}]}')
-            local child = hold(qjson.get(value, "items[0].b"))
+            local child = hold(leanjson.get(value, "items[0].b"))
             local array = hold(value.items)
             local ancestor = hold(array[1])
             ancestor.sibling = 3
             child.x = 7
             assert.are.equal(7, array[1].b.x)
-            qjson.array_insert(array, 1, { b = { x = 99 } })
+            leanjson.array_insert(array, 1, { b = { x = 99 } })
             child.x = 8
             assert.are.equal(8, array[2].b.x)
-            local removed = hold(qjson.array_remove(array, 2))
+            local removed = hold(leanjson.array_remove(array, 2))
             child.x = 9
             assert.are.equal(9, removed.b.x)
             assert.are.equal(99, array[1].b.x)
@@ -113,9 +113,9 @@ describe("source review ownership regressions", function()
             collectgarbage("collect")
             child.x = 7
             assert.are.equal(7, value.a.b.x)
-            assert.are.equal('{"a":{"b":{"x":7}}}', qjson.encode(value))
+            assert.are.equal('{"a":{"b":{"x":7}}}', leanjson.encode(value))
             local ancestor = hold(value.a)
-            qjson.close(ancestor)
+            leanjson.close(ancestor)
             child.x = 8
             assert.are.equal(7, value.a.b.x)
             assert.are.equal(8, child.x)
@@ -130,13 +130,13 @@ describe("source review ownership regressions", function()
                     on_chunk = function() if pause then pause = false; coroutine.yield("scalar paused") end end })
                 local ancestor
                 if warm then ancestor = hold(value.a) end
-                assert.is_nil(qjson.get(value, "a.missing"))
+                assert.is_nil(leanjson.get(value, "a.missing"))
                 pause = true
-                local worker = coroutine.create(function() return pcall(qjson.get, value, "a.x") end)
+                local worker = coroutine.create(function() return pcall(leanjson.get, value, "a.x") end)
                 assert.are.same({ true, "scalar paused" }, { coroutine.resume(worker) })
                 collectgarbage("stop")
-                qjson.close(value)
-                if ancestor then qjson.close(ancestor) end
+                leanjson.close(value)
+                if ancestor then leanjson.close(ancestor) end
                 local ok, err = pcall(descriptors_closed)
                 collectgarbage("restart")
                 assert.is_true(ok, err)
@@ -150,7 +150,7 @@ describe("source review ownership regressions", function()
 
     it("rejects finish and concurrent feed while an accepted chunk is suspended", function()
         local pause = true
-        local input = qjson.new_decoder({ temp_dir = directory, chunk_size = 2,
+        local input = leanjson.new_decoder({ temp_dir = directory, chunk_size = 2,
             on_chunk = function() if pause then pause = false; coroutine.yield("feed paused") end end })
         inputs[#inputs + 1] = input
         local worker = coroutine.create(function() return input:feed('{}  ') end)
@@ -168,15 +168,15 @@ describe("source review ownership regressions", function()
         local completed, failure = input:finish()
         assert.is_nil(failure)
         hold(completed)
-        assert.are.equal("{}", qjson.encode(completed))
+        assert.are.equal("{}", leanjson.encode(completed))
         assert.is_nil(input:feed(" "))
-        assert.are.equal("{}", qjson.encode(completed))
+        assert.are.equal("{}", leanjson.encode(completed))
         hold(assert(input:finish()))
     end)
 
     it("rejects overlapping completion while a scalar finish is suspended", function()
         local pause = false
-        local input = qjson.new_decoder({ temp_dir = directory, chunk_size = 2,
+        local input = leanjson.new_decoder({ temp_dir = directory, chunk_size = 2,
             on_chunk = function() if pause then pause = false; coroutine.yield("finish paused") end end })
         inputs[#inputs + 1] = input
         assert.is_true(input:feed('"abcdef"'))
@@ -199,7 +199,7 @@ describe("source review ownership regressions", function()
     it("cancels a first scalar completion through abort or close without GC", function()
         for _, operation in ipairs({ "abort", "close" }) do
             local pause = false
-            local input = qjson.new_decoder({ temp_dir = directory, chunk_size = 2,
+            local input = leanjson.new_decoder({ temp_dir = directory, chunk_size = 2,
                 on_chunk = function() if pause then pause = false; coroutine.yield("finish paused") end end })
             inputs[#inputs + 1] = input
             assert.is_true(input:feed('"abcdef"'))

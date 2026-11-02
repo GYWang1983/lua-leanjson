@@ -1,5 +1,5 @@
 [package]
-name = "qjson-fuzz"
+name = "leanjson-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
@@ -12,7 +12,7 @@ arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 serde_json = { version = "1", features = ["float_roundtrip"] }
 
-[dependencies.qjson]
+[dependencies.leanjson]
 path = ".."
 
 [[bin]]

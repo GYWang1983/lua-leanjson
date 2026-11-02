@@ -12,7 +12,7 @@ char *strerror(int);
 local M = {}
 
 local function failure(operation)
-    return "qjson: " .. operation .. ": " .. ffi.string(ffi.C.strerror(ffi.errno()))
+    return "leanjson: " .. operation .. ": " .. ffi.string(ffi.C.strerror(ffi.errno()))
 end
 
 function M.open(path)
@@ -22,7 +22,7 @@ function M.open(path)
 end
 
 function M.spool(directory)
-    local template = directory .. "/qjson-source-XXXXXX"
+    local template = directory .. "/leanjson-source-XXXXXX"
     local buffer = ffi.new("char[?]", #template + 1, template)
     local fd = ffi.C.mkstemp(buffer)
     if fd < 0 then return nil, failure("create spool") end
@@ -48,7 +48,7 @@ function M.write(fd, offset, value, first, length)
         local n = tonumber(ffi.C.pwrite(fd, ffi.cast("const uint8_t *", value) + first + written,
             length - written, offset + written))
         if n < 0 and ffi.errno() ~= 4 then return nil, failure("write") end
-        if n == 0 then return nil, "qjson: spool write made no progress" end
+        if n == 0 then return nil, "leanjson: spool write made no progress" end
         if n > 0 then written = written + n end
     end
     return true

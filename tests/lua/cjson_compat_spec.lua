@@ -1,4 +1,4 @@
-local qjson    = require("qjson")
+local leanjson    = require("leanjson")
 local cjson = require("cjson")
 
 local function read_file(path)
@@ -32,11 +32,11 @@ local function deep_equal(a, b)
 end
 
 local function assert_materializes_like_lua_cjson(src)
-    assert.is_true(deep_equal(qjson.materialize(qjson.decode(src)), cjson.decode(src)))
+    assert.is_true(deep_equal(leanjson.materialize(leanjson.decode(src)), cjson.decode(src)))
 end
 
 local function assert_encodes_like_lua_cjson(src)
-    local out = qjson.encode(qjson.decode(src))
+    local out = leanjson.encode(leanjson.decode(src))
     assert.is_true(deep_equal(cjson.decode(out), cjson.decode(src)))
 end
 
@@ -59,34 +59,34 @@ local function assert_fixture_paths(paths)
     end
 end
 
-describe("qjson lua-cjson compatibility smoke", function()
+describe("leanjson lua-cjson compatibility smoke", function()
     it("agrees on simple string field", function()
         local s = '{"a":"x"}'
-        assert.are.equal(cjson.decode(s).a, qjson.parse(s):get_str("a"))
+        assert.are.equal(cjson.decode(s).a, leanjson.parse(s):get_str("a"))
     end)
 
     it("agrees on integer field", function()
         local s = '{"a":42}'
-        assert.are.equal(cjson.decode(s).a, tonumber(qjson.parse(s):get_i64("a")))
+        assert.are.equal(cjson.decode(s).a, tonumber(leanjson.parse(s):get_i64("a")))
     end)
 
     it("agrees on float field", function()
         local s = '{"a":1.5}'
-        assert.are.equal(cjson.decode(s).a, qjson.parse(s):get_f64("a"))
+        assert.are.equal(cjson.decode(s).a, leanjson.parse(s):get_f64("a"))
     end)
 
     it("agrees on bool field", function()
         local s = '{"a":true}'
-        assert.are.equal(cjson.decode(s).a, qjson.parse(s):get_bool("a"))
+        assert.are.equal(cjson.decode(s).a, leanjson.parse(s):get_bool("a"))
     end)
 
     it("agrees on nested path", function()
         local s = '{"body":{"model":"gpt"}}'
-        assert.are.equal(cjson.decode(s).body.model, qjson.parse(s):get_str("body.model"))
+        assert.are.equal(cjson.decode(s).body.model, leanjson.parse(s):get_str("body.model"))
     end)
 end)
 
-describe("qjson cJSON upstream fixtures", function()
+describe("leanjson cJSON upstream fixtures", function()
     assert_fixture_paths({
         "tests/vendor/cJSON/tests/inputs/test1",
         "tests/vendor/cJSON/tests/inputs/test2",
@@ -105,7 +105,7 @@ describe("qjson cJSON upstream fixtures", function()
     })
 end)
 
-describe("qjson simdjson upstream fixtures", function()
+describe("leanjson simdjson upstream fixtures", function()
     assert_fixture_paths({
         "tests/vendor/simdjson/jsonexamples/citm_catalog.json",
         "tests/vendor/simdjson/jsonexamples/example_config.json",

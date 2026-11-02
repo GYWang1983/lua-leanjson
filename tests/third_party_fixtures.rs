@@ -3,19 +3,19 @@ use std::os::raw::{c_char, c_int};
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use qjson::doc::Document;
-use qjson::error::qjson_err;
-use qjson::ffi::*;
-use qjson::options::{Options, QJSON_MODE_EAGER, QJSON_MODE_LAZY};
+use leanjson::doc::Document;
+use leanjson::error::leanjson_err;
+use leanjson::ffi::*;
+use leanjson::options::{Options, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY};
 
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
-fn parse(s: &[u8]) -> *mut qjson_doc {
-    let mut err = qjson_error::default();
-    let d = unsafe { qjson_parse(s.as_ptr(), s.len(), &mut err) };
-    assert_eq!(err.code, qjson_err::QJSON_OK as c_int);
+fn parse(s: &[u8]) -> *mut leanjson_doc {
+    let mut err = leanjson_error::default();
+    let d = unsafe { leanjson_parse(s.as_ptr(), s.len(), &mut err) };
+    assert_eq!(err.code, leanjson_err::LEANJSON_OK as c_int);
     assert!(!d.is_null());
     d
 }
@@ -26,11 +26,11 @@ fn parse_file(path: &Path) -> Vec<u8> {
 
 fn assert_parses_in_both_modes(name: &str, data: &[u8]) {
     let eager = Options {
-        mode: QJSON_MODE_EAGER,
+        mode: LEANJSON_MODE_EAGER,
         max_depth: 0,
     };
     let lazy = Options {
-        mode: QJSON_MODE_LAZY,
+        mode: LEANJSON_MODE_LAZY,
         max_depth: 0,
     };
 
@@ -95,69 +95,69 @@ fn simdjson_ndjson_cases() -> Vec<PathBuf> {
     paths
 }
 
-fn get_str(doc: *mut qjson_doc, path: &[u8]) -> String {
+fn get_str(doc: *mut leanjson_doc, path: &[u8]) -> String {
     let mut p: *const u8 = ptr::null();
     let mut n: usize = 0;
-    let rc = unsafe { qjson_get_str(doc, path.as_ptr() as *const c_char, path.len(), &mut p, &mut n) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_get_str(doc, path.as_ptr() as *const c_char, path.len(), &mut p, &mut n) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     String::from_utf8(unsafe { std::slice::from_raw_parts(p, n) }.to_vec()).unwrap()
 }
 
-fn get_i64(doc: *mut qjson_doc, path: &[u8]) -> i64 {
+fn get_i64(doc: *mut leanjson_doc, path: &[u8]) -> i64 {
     let mut v: i64 = 0;
-    let rc = unsafe { qjson_get_i64(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_get_i64(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     v
 }
 
-fn get_bool(doc: *mut qjson_doc, path: &[u8]) -> bool {
+fn get_bool(doc: *mut leanjson_doc, path: &[u8]) -> bool {
     let mut v: c_int = -1;
-    let rc = unsafe { qjson_get_bool(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_get_bool(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     v != 0
 }
 
-fn is_null(doc: *mut qjson_doc, path: &[u8]) -> bool {
+fn is_null(doc: *mut leanjson_doc, path: &[u8]) -> bool {
     let mut v: c_int = -1;
-    let rc = unsafe { qjson_is_null(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_is_null(doc, path.as_ptr() as *const c_char, path.len(), &mut v) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     v != 0
 }
 
-fn len(doc: *mut qjson_doc, path: &[u8]) -> usize {
+fn len(doc: *mut leanjson_doc, path: &[u8]) -> usize {
     let mut n: usize = 0;
-    let rc = unsafe { qjson_len(doc, path.as_ptr() as *const c_char, path.len(), &mut n) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_len(doc, path.as_ptr() as *const c_char, path.len(), &mut n) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     n
 }
 
-fn open(doc: *mut qjson_doc, path: &[u8]) -> qjson_cursor {
-    let mut cur = std::mem::MaybeUninit::<qjson_cursor>::uninit();
+fn open(doc: *mut leanjson_doc, path: &[u8]) -> leanjson_cursor {
+    let mut cur = std::mem::MaybeUninit::<leanjson_cursor>::uninit();
     let rc = unsafe {
-        qjson_open(
+        leanjson_open(
             doc,
             path.as_ptr() as *const c_char,
             path.len(),
             cur.as_mut_ptr(),
         )
     };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     unsafe { cur.assume_init() }
 }
 
-fn cursor_index(cur: &qjson_cursor, index: usize) -> qjson_cursor {
-    let mut sub = std::mem::MaybeUninit::<qjson_cursor>::uninit();
-    let rc = unsafe { qjson_cursor_index(cur, index, sub.as_mut_ptr()) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+fn cursor_index(cur: &leanjson_cursor, index: usize) -> leanjson_cursor {
+    let mut sub = std::mem::MaybeUninit::<leanjson_cursor>::uninit();
+    let rc = unsafe { leanjson_cursor_index(cur, index, sub.as_mut_ptr()) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     unsafe { sub.assume_init() }
 }
 
-fn cursor_get_str(cur: &qjson_cursor) -> String {
+fn cursor_get_str(cur: &leanjson_cursor) -> String {
     let empty = b"";
     let mut p: *const u8 = ptr::null();
     let mut n: usize = 0;
-    let rc = unsafe { qjson_cursor_get_str(cur, empty.as_ptr() as *const c_char, 0, &mut p, &mut n) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_cursor_get_str(cur, empty.as_ptr() as *const c_char, 0, &mut p, &mut n) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     String::from_utf8(unsafe { std::slice::from_raw_parts(p, n) }.to_vec()).unwrap()
 }
 
@@ -288,7 +288,7 @@ fn cjson_nested_object_fixture_paths_are_accessible() {
     assert_eq!(cursor_get_str(&cursor_index(&cur, 0)), "GML");
     assert_eq!(cursor_get_str(&cursor_index(&cur, 1)), "XML");
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }
 
 #[test]
@@ -300,21 +300,21 @@ fn cjson_menu_and_matrix_fixtures_keep_array_shape() {
     let items = open(menu_doc, b"menu.popup.menuitem");
     assert_eq!(len(menu_doc, b"menu.popup.menuitem"), 3);
     let second = cursor_index(&items, 1);
-    let mut onclick = std::mem::MaybeUninit::<qjson_cursor>::uninit();
+    let mut onclick = std::mem::MaybeUninit::<leanjson_cursor>::uninit();
     let rc = unsafe {
-        qjson_cursor_field(
+        leanjson_cursor_field(
             &second,
             b"onclick".as_ptr() as *const c_char,
             b"onclick".len(),
             onclick.as_mut_ptr(),
         )
     };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     assert_eq!(
         cursor_get_str(&unsafe { onclick.assume_init() }),
         "OpenDoc()"
     );
-    unsafe { qjson_free(menu_doc) };
+    unsafe { leanjson_free(menu_doc) };
 
     let matrix_data = parse_file(&repo_root().join("tests/vendor/cJSON/tests/inputs/test9"));
     let matrix_doc = parse(&matrix_data);
@@ -324,10 +324,10 @@ fn cjson_menu_and_matrix_fixtures_keep_array_shape() {
     let first = cursor_index(&middle_row, 0);
     let mut v: i64 = 0;
     let empty = b"";
-    let rc = unsafe { qjson_cursor_get_i64(&first, empty.as_ptr() as *const c_char, 0, &mut v) };
-    assert_eq!(rc, qjson_err::QJSON_OK as c_int);
+    let rc = unsafe { leanjson_cursor_get_i64(&first, empty.as_ptr() as *const c_char, 0, &mut v) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OK as c_int);
     assert_eq!(v, 1);
-    unsafe { qjson_free(matrix_doc) };
+    unsafe { leanjson_free(matrix_doc) };
 }
 
 #[test]
@@ -342,7 +342,7 @@ fn cjson_escaped_string_and_spaced_key_fixture_paths_are_accessible() {
     assert!(!get_bool(doc, b"format.interlace"));
     assert_eq!(get_i64(doc, b"format.frame rate"), 24);
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }
 
 #[test]
@@ -359,7 +359,7 @@ fn simdjson_example_config_fixture_paths_are_accessible() {
     assert_eq!(get_str(doc, b"database.host"), "localhost");
     assert_eq!(get_i64(doc, b"database.port"), 5432);
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }
 
 #[test]
@@ -370,11 +370,11 @@ fn simdjson_twitter_fixture_paths_are_accessible() {
     assert_eq!(get_i64(doc, b"search_metadata.count"), 100);
     assert_eq!(len(doc, b"statuses"), 100);
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }
 
 #[test]
-fn cjson_parser_literals_parse_with_qjson() {
+fn cjson_parser_literals_parse_with_leanjson() {
     let valid_values = [
         "null",
         "true",
@@ -397,19 +397,19 @@ fn cjson_parser_literals_parse_with_qjson() {
 fn cjson_empty_and_null_literals_keep_shape() {
     let empty_array = parse(b"[]");
     assert_eq!(len(empty_array, b""), 0);
-    unsafe { qjson_free(empty_array) };
+    unsafe { leanjson_free(empty_array) };
 
     let empty_object = parse(b"{}");
     assert_eq!(len(empty_object, b""), 0);
-    unsafe { qjson_free(empty_object) };
+    unsafe { leanjson_free(empty_object) };
 
     let array_with_null = parse(b"[null]");
     assert!(is_null(array_with_null, b"[0]"));
-    unsafe { qjson_free(array_with_null) };
+    unsafe { leanjson_free(array_with_null) };
 
     let object_with_null = parse(br#"{"null":null}"#);
     assert!(is_null(object_with_null, b"null"));
-    unsafe { qjson_free(object_with_null) };
+    unsafe { leanjson_free(object_with_null) };
 }
 
 #[test]
@@ -442,7 +442,7 @@ fn cjson_fixture_invalid_paths_and_type_mismatches_fail() {
     let mut wrong_type_p: *const u8 = ptr::null();
     let mut wrong_type_n: usize = 0;
     let rc = unsafe {
-        qjson_get_str(
+        leanjson_get_str(
             doc,
             b"format.width".as_ptr() as *const c_char,
             b"format.width".len(),
@@ -450,12 +450,12 @@ fn cjson_fixture_invalid_paths_and_type_mismatches_fail() {
             &mut wrong_type_n,
         )
     };
-    assert_eq!(rc, qjson_err::QJSON_TYPE_MISMATCH as c_int);
+    assert_eq!(rc, leanjson_err::LEANJSON_TYPE_MISMATCH as c_int);
 
     let mut p: *const u8 = ptr::null();
     let mut n: usize = 0;
     let rc = unsafe {
-        qjson_get_str(
+        leanjson_get_str(
             doc,
             b"format.missing".as_ptr() as *const c_char,
             b"format.missing".len(),
@@ -463,25 +463,25 @@ fn cjson_fixture_invalid_paths_and_type_mismatches_fail() {
             &mut n,
         )
     };
-    assert_eq!(rc, qjson_err::QJSON_NOT_FOUND as c_int);
+    assert_eq!(rc, leanjson_err::LEANJSON_NOT_FOUND as c_int);
 
-    let mut nested = std::mem::MaybeUninit::<qjson_cursor>::uninit();
+    let mut nested = std::mem::MaybeUninit::<leanjson_cursor>::uninit();
     let format_type = open(doc, b"format.type");
     let rc = unsafe {
-        qjson_cursor_field(
+        leanjson_cursor_field(
             &format_type,
             b"child".as_ptr() as *const c_char,
             b"child".len(),
             nested.as_mut_ptr(),
         )
     };
-    assert_eq!(rc, qjson_err::QJSON_TYPE_MISMATCH as c_int);
+    assert_eq!(rc, leanjson_err::LEANJSON_TYPE_MISMATCH as c_int);
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }
 
 #[test]
-fn cjson_number_literals_parse_with_qjson() {
+fn cjson_number_literals_parse_with_leanjson() {
     let numbers = [
         "0",
         "0.0",
@@ -516,7 +516,7 @@ fn cjson_number_literals_parse_with_qjson() {
 }
 
 #[test]
-fn cjson_string_literals_decode_with_qjson() {
+fn cjson_string_literals_decode_with_leanjson() {
     let cases: &[(&[u8], &[u8])] = &[
         (br#""""#, b""),
         (
@@ -540,7 +540,7 @@ fn cjson_string_literals_decode_with_qjson() {
         json.extend_from_slice(b"}");
         let doc = parse(&json);
         assert_eq!(get_str(doc, b"s").as_bytes(), *expected);
-        unsafe { qjson_free(doc) };
+        unsafe { leanjson_free(doc) };
     }
 }
 
@@ -559,9 +559,9 @@ fn simdjson_big_integer_literals_parse_but_do_not_fit_i64() {
     for data in &cases[..2] {
         let doc = parse(data);
         let mut v: i64 = 0;
-        let rc = unsafe { qjson_get_i64(doc, b"val".as_ptr() as *const c_char, b"val".len(), &mut v) };
-        assert_eq!(rc, qjson_err::QJSON_OUT_OF_RANGE as c_int);
-        unsafe { qjson_free(doc) };
+        let rc = unsafe { leanjson_get_i64(doc, b"val".as_ptr() as *const c_char, b"val".len(), &mut v) };
+        assert_eq!(rc, leanjson_err::LEANJSON_OUT_OF_RANGE as c_int);
+        unsafe { leanjson_free(doc) };
     }
 
     let doc = parse(cases[2]);
@@ -569,7 +569,7 @@ fn simdjson_big_integer_literals_parse_but_do_not_fit_i64() {
     let big_integer = cursor_index(&root, 1);
     let empty = b"";
     let mut v: i64 = 0;
-    let rc = unsafe { qjson_cursor_get_i64(&big_integer, empty.as_ptr() as *const c_char, 0, &mut v) };
-    assert_eq!(rc, qjson_err::QJSON_OUT_OF_RANGE as c_int);
-    unsafe { qjson_free(doc) };
+    let rc = unsafe { leanjson_cursor_get_i64(&big_integer, empty.as_ptr() as *const c_char, 0, &mut v) };
+    assert_eq!(rc, leanjson_err::LEANJSON_OUT_OF_RANGE as c_int);
+    unsafe { leanjson_free(doc) };
 }

@@ -75,6 +75,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "leanjson"
+version = "0.1.0"
+dependencies = [
+ "memchr",
+ "once_cell",
+ "rustc-hash",
+]
+
+[[package]]
+name = "leanjson-fuzz"
+version = "0.0.0"
+dependencies = [
+ "arbitrary",
+ "libfuzzer-sys",
+ "leanjson",
+ "serde_json",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -109,25 +128,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
-]
-
-[[package]]
-name = "qjson"
-version = "0.1.0"
-dependencies = [
- "memchr",
- "once_cell",
- "rustc-hash",
-]
-
-[[package]]
-name = "qjson-fuzz"
-version = "0.0.0"
-dependencies = [
- "arbitrary",
- "libfuzzer-sys",
- "qjson",
- "serde_json",
 ]
 
 [[package]]

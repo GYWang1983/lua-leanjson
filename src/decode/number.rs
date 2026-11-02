@@ -1,6 +1,6 @@
-use crate::error::qjson_err;
+use crate::error::leanjson_err;
 
-pub(crate) fn parse_i64(bytes: &[u8], skip_validation: bool) -> Result<i64, qjson_err> {
+pub(crate) fn parse_i64(bytes: &[u8], skip_validation: bool) -> Result<i64, leanjson_err> {
     if !skip_validation {
         crate::validate::validate_number(bytes)?;
     }
@@ -9,18 +9,18 @@ pub(crate) fn parse_i64(bytes: &[u8], skip_validation: bool) -> Result<i64, qjso
     // well-formed JSON number, but we still protect against empty input
     // so a misuse of the skip-flag cannot panic on bytes[0].
     if bytes.is_empty() {
-        return Err(qjson_err::QJSON_INVALID_NUMBER);
+        return Err(leanjson_err::LEANJSON_INVALID_NUMBER);
     }
 
     // Fast guard: first byte must plausibly start a number, otherwise
     // the caller passed skip_validation=true on non-number input.
     if skip_validation && !matches!(bytes[0], b'-' | b'0'..=b'9') {
-        return Err(qjson_err::QJSON_INVALID_NUMBER);
+        return Err(leanjson_err::LEANJSON_INVALID_NUMBER);
     }
 
     // After ABNF validation, integer-only inputs have no `.`/`e`/`E`.
     if memchr::memchr3(b'.', b'e', b'E', bytes).is_some() {
-        return Err(qjson_err::QJSON_TYPE_MISMATCH);
+        return Err(leanjson_err::LEANJSON_TYPE_MISMATCH);
     }
     let (neg, rest) = match bytes[0] {
         b'-' => (true, &bytes[1..]),
@@ -34,30 +34,30 @@ pub(crate) fn parse_i64(bytes: &[u8], skip_validation: bool) -> Result<i64, qjso
             if neg { x.checked_sub(d) } else { x.checked_add(d) }
         }) {
             Some(n) => n,
-            None    => return Err(qjson_err::QJSON_OUT_OF_RANGE),
+            None    => return Err(leanjson_err::LEANJSON_OUT_OF_RANGE),
         };
     }
     Ok(v)
 }
 
-pub(crate) fn parse_u64(bytes: &[u8], skip_validation: bool) -> Result<u64, qjson_err> {
+pub(crate) fn parse_u64(bytes: &[u8], skip_validation: bool) -> Result<u64, leanjson_err> {
     if !skip_validation {
         crate::validate::validate_number(bytes)?;
     }
 
     if bytes.is_empty() {
-        return Err(qjson_err::QJSON_INVALID_NUMBER);
+        return Err(leanjson_err::LEANJSON_INVALID_NUMBER);
     }
 
     if skip_validation && !matches!(bytes[0], b'-' | b'0'..=b'9') {
-        return Err(qjson_err::QJSON_INVALID_NUMBER);
+        return Err(leanjson_err::LEANJSON_INVALID_NUMBER);
     }
 
     if memchr::memchr3(b'.', b'e', b'E', bytes).is_some() {
-        return Err(qjson_err::QJSON_TYPE_MISMATCH);
+        return Err(leanjson_err::LEANJSON_TYPE_MISMATCH);
     }
     if bytes[0] == b'-' {
-        return Err(qjson_err::QJSON_OUT_OF_RANGE);
+        return Err(leanjson_err::LEANJSON_OUT_OF_RANGE);
     }
 
     let mut v: u64 = 0;
@@ -65,13 +65,13 @@ pub(crate) fn parse_u64(bytes: &[u8], skip_validation: bool) -> Result<u64, qjso
         let d = (c - b'0') as u64;
         v = match v.checked_mul(10).and_then(|x| x.checked_add(d)) {
             Some(n) => n,
-            None    => return Err(qjson_err::QJSON_OUT_OF_RANGE),
+            None    => return Err(leanjson_err::LEANJSON_OUT_OF_RANGE),
         };
     }
     Ok(v)
 }
 
-pub(crate) fn parse_f64(bytes: &[u8], skip_validation: bool) -> Result<f64, qjson_err> {
+pub(crate) fn parse_f64(bytes: &[u8], skip_validation: bool) -> Result<f64, leanjson_err> {
     if !skip_validation {
         crate::validate::validate_number(bytes)?;
     }
@@ -82,14 +82,14 @@ pub(crate) fn parse_f64(bytes: &[u8], skip_validation: bool) -> Result<f64, qjso
     if skip_validation
         && (bytes.is_empty() || !matches!(bytes[0], b'-' | b'.' | b'0'..=b'9'))
     {
-        return Err(qjson_err::QJSON_INVALID_NUMBER);
+        return Err(leanjson_err::LEANJSON_INVALID_NUMBER);
     }
 
-    let s = std::str::from_utf8(bytes).map_err(|_| qjson_err::QJSON_DECODE_FAILED)?;
+    let s = std::str::from_utf8(bytes).map_err(|_| leanjson_err::LEANJSON_DECODE_FAILED)?;
     match s.parse::<f64>() {
         Ok(v) if v.is_finite() => Ok(v),
-        Ok(_)                  => Err(qjson_err::QJSON_NUMBER_OUT_OF_RANGE),
-        Err(_)                 => Err(qjson_err::QJSON_DECODE_FAILED),
+        Ok(_)                  => Err(leanjson_err::LEANJSON_NUMBER_OUT_OF_RANGE),
+        Err(_)                 => Err(leanjson_err::LEANJSON_DECODE_FAILED),
     }
 }
 
@@ -107,42 +107,42 @@ mod tests {
 
     #[test]
     fn i64_overflow() {
-        assert_eq!(parse_i64(b"9223372036854775808", false), Err(qjson_err::QJSON_OUT_OF_RANGE));
+        assert_eq!(parse_i64(b"9223372036854775808", false), Err(leanjson_err::LEANJSON_OUT_OF_RANGE));
     }
 
     #[test]
     fn u64_overflow() {
-        assert_eq!(parse_u64(b"18446744073709551616", false), Err(qjson_err::QJSON_OUT_OF_RANGE));
+        assert_eq!(parse_u64(b"18446744073709551616", false), Err(leanjson_err::LEANJSON_OUT_OF_RANGE));
     }
 
     #[test]
     fn u64_rejects_negative() {
-        assert_eq!(parse_u64(b"-1", false), Err(qjson_err::QJSON_OUT_OF_RANGE));
+        assert_eq!(parse_u64(b"-1", false), Err(leanjson_err::LEANJSON_OUT_OF_RANGE));
     }
 
     #[test]
     fn u64_rejects_decimal() {
-        assert_eq!(parse_u64(b"1.5", false), Err(qjson_err::QJSON_TYPE_MISMATCH));
+        assert_eq!(parse_u64(b"1.5", false), Err(leanjson_err::LEANJSON_TYPE_MISMATCH));
     }
 
     #[test]
     fn u64_rejects_exponent() {
-        assert_eq!(parse_u64(b"1e5", false), Err(qjson_err::QJSON_TYPE_MISMATCH));
+        assert_eq!(parse_u64(b"1e5", false), Err(leanjson_err::LEANJSON_TYPE_MISMATCH));
     }
 
     #[test]
     fn i64_rejects_decimal() {
-        assert_eq!(parse_i64(b"1.5", false), Err(qjson_err::QJSON_TYPE_MISMATCH));
+        assert_eq!(parse_i64(b"1.5", false), Err(leanjson_err::LEANJSON_TYPE_MISMATCH));
     }
 
     #[test]
     fn i64_rejects_exponent() {
-        assert_eq!(parse_i64(b"1e5", false), Err(qjson_err::QJSON_TYPE_MISMATCH));
+        assert_eq!(parse_i64(b"1e5", false), Err(leanjson_err::LEANJSON_TYPE_MISMATCH));
     }
 
     #[test]
     fn i64_rejects_empty() {
-        assert_eq!(parse_i64(b"", false), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_i64(b"", false), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     #[test] fn f64_zero()    { assert_eq!(parse_f64(b"0.0", false).unwrap(),  0.0); }
@@ -152,7 +152,7 @@ mod tests {
 
     #[test]
     fn f64_rejects_garbage() {
-        assert_eq!(parse_f64(b"hello", false), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_f64(b"hello", false), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     // ── skip_validation=true branch ────────────────────────────────
@@ -164,12 +164,12 @@ mod tests {
 
     #[test]
     fn i64_skip_validation_empty_fails_gracefully() {
-        assert_eq!(parse_i64(b"", true), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_i64(b"", true), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     #[test]
     fn i64_skip_validation_non_digit_returns_invalid_number() {
-        assert_eq!(parse_i64(b"true", true), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_i64(b"true", true), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     #[test]
@@ -180,16 +180,16 @@ mod tests {
 
     #[test]
     fn f64_skip_validation_garbage_fails_at_parse() {
-        assert_eq!(parse_f64(b"hello", true), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_f64(b"hello", true), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     #[test]
     fn f64_skip_validation_empty_returns_invalid_number() {
-        assert_eq!(parse_f64(b"", true), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_f64(b"", true), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 
     #[test]
     fn f64_skip_validation_non_number_returns_invalid_number() {
-        assert_eq!(parse_f64(b"null", true), Err(qjson_err::QJSON_INVALID_NUMBER));
+        assert_eq!(parse_f64(b"null", true), Err(leanjson_err::LEANJSON_INVALID_NUMBER));
     }
 }

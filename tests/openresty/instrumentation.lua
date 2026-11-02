@@ -1,13 +1,13 @@
 -- Native lifecycle probes retain only fd numbers, paths and timing flags.
 -- They never retain a JSON holder/backend or replace a source read result.
-local qjson = require "qjson"
-local source_io = require "qjson.source_io"
+local leanjson = require "leanjson"
+local source_io = require "leanjson.source_io"
 local ffi = require "ffi"
 local lfs = require "lfs"
 ffi.cdef[[int fcntl(int, int, ...);]]
 local state = {}
 local descriptors = {}
-package.loaded["qjson.test_state"] = state
+package.loaded["leanjson.test_state"] = state
 
 local original_open = source_io.open
 source_io.open = function(filename)
@@ -39,8 +39,8 @@ source_io.write = function(fd, offset, value, first, length)
     return ok, err
 end
 
-local original_decoder = qjson.new_decoder
-qjson.new_decoder = function(...)
+local original_decoder = leanjson.new_decoder
+leanjson.new_decoder = function(...)
     local decoder = original_decoder(...)
     local record = state[ngx.var.arg_case]
     if record then
@@ -85,8 +85,8 @@ http.new = function(...)
     return client
 end
 
-local original_fork = qjson.fork
-qjson.fork = function(value)
+local original_fork = leanjson.fork
+leanjson.fork = function(value)
     local branch = original_fork(value)
     local record = state[ngx.var.arg_case]
     if record then
@@ -112,7 +112,7 @@ source_io.read = function(...)
         record.pause_phase = record.phase
         if fault == "await-abort" then
             local gate = assert(require("ngx.semaphore").new())
-            local unregister = assert(require("qjson.openresty").on_abort(function()
+            local unregister = assert(require("leanjson.openresty").on_abort(function()
                 record.aborted = true
                 record.aborted_at = ngx.now()
                 gate:post()
@@ -126,7 +126,7 @@ source_io.read = function(...)
                 error("test source-read abort watchdog: " .. tostring(err))
             end
         else
-            local marker = assert(io.open(os.getenv("QJSON_TEST_PREFIX") .. "/mutation-" .. case, "w"))
+            local marker = assert(io.open(os.getenv("LEANJSON_TEST_PREFIX") .. "/mutation-" .. case, "w"))
             marker:write("ready")
             marker:close()
             ngx.sleep(0.15)

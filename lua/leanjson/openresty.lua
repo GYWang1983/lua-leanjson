@@ -1,17 +1,17 @@
 -- Native OpenResty I/O only. The JSON core never waits for a socket or yields
 -- through an FFI call. Completed file reads remain synchronous, bounded reads.
-local qjson = require "qjson"
+local leanjson = require "leanjson"
 local ngx = ngx
 local _M = {}
 local Session = {}
 Session.__index = Session
-local OWNER = "qjson.openresty.input"
-local ABORT = "qjson.openresty.abort"
+local OWNER = "leanjson.openresty.input"
+local ABORT = "leanjson.openresty.abort"
 
 local function options(opts)
     if opts == nil then opts = {} end
     assert(type(opts) == "table", "OpenResty opts must be a table")
-    local normalize = require("qjson.options").normalize
+    local normalize = require("leanjson.options").normalize
     -- Validate decode options before applying HTTP I/O overrides. An invalid
     -- option must not disappear merely because this body fits in memory.
     normalize(opts.decode)
@@ -25,7 +25,7 @@ local function options(opts)
 end
 
 local function release(value)
-    if value ~= nil then qjson.close(value) end
+    if value ~= nil then leanjson.close(value) end
 end
 
 -- ngx.on_abort accepts one callback per request. All resources owned by this
@@ -39,11 +39,11 @@ local function on_abort(callback)
                 local fn = callbacks.active[id]
                 if fn then
                     local ran, callback_err = pcall(fn)
-                    if not ran then ngx.log(ngx.ERR, "qjson abort cleanup failed: ", tostring(callback_err)) end
+                    if not ran then ngx.log(ngx.ERR, "leanjson abort cleanup failed: ", tostring(callback_err)) end
                 end
             end
         end)
-        if not ok then return nil, "qjson.openresty: ngx.on_abort: " .. tostring(err) end
+        if not ok then return nil, "leanjson.openresty: ngx.on_abort: " .. tostring(err) end
         ngx.ctx[ABORT] = callbacks
     end
     callbacks.next_id = callbacks.next_id + 1
@@ -54,7 +54,7 @@ end
 _M.on_abort = on_abort
 
 local function completed(opts, json)
-    if ngx.ctx[OWNER] then return nil, "request body already owned by qjson.openresty" end
+    if ngx.ctx[OWNER] then return nil, "request body already owned by leanjson.openresty" end
     ngx.ctx[OWNER] = "completed"
     ngx.req.read_body()
     local data = ngx.req.get_body_data()
@@ -81,9 +81,9 @@ local function completed(opts, json)
     if file then
         -- decode_file keeps an open fd; the Nginx-owned pathname is never removed
         -- or read into a full Lua string by this adapter.
-        ok, value = pcall(qjson.decode_file, file, json)
+        ok, value = pcall(leanjson.decode_file, file, json)
     else
-        ok, value = pcall(qjson.decode, data or "", json)
+        ok, value = pcall(leanjson.decode, data or "", json)
     end
     if not ok then unregister(); return nil, value, info end
     if cancellation.aborted then release(value); unregister(); return nil, "client aborted", info end
@@ -130,7 +130,7 @@ function Session:get(path)
     while true do
         if self.error then return nil, "ERROR", self.error end
         if self.done then
-            local ok, value = pcall(qjson.get, self.value, path)
+            local ok, value = pcall(leanjson.get, self.value, path)
             if not ok then return nil, "ERROR", value end
             if value == nil then return nil, "ABSENT" end
             return value, "READY"
@@ -178,8 +178,8 @@ function _M.start_body(opts)
         local session = setmetatable({ done = true, value = value, waiters = 0 }, Session)
         return session, nil, info
     end
-    if ngx.ctx[OWNER] then return nil, "request body already owned by qjson.openresty" end
-    local ok, decoder = pcall(qjson.new_decoder, json)
+    if ngx.ctx[OWNER] then return nil, "request body already owned by leanjson.openresty" end
+    local ok, decoder = pcall(leanjson.new_decoder, json)
     if not ok then return nil, decoder end
     ngx.ctx[OWNER] = "socket"
     local input, err = ngx.req.socket()
@@ -223,7 +223,7 @@ function _M.request(httpc, params, value, opts)
     local size = opts.chunk_size or 65536
     local state = { attempts = 0, delivered_bytes = 0, max_chunk = 0,
         headers_may_have_been_sent = false, reader_closed = false, stage = "prepare" }
-    local ok, reader = pcall(qjson.reader, value, { chunk_size = size, normalize_duplicates = true })
+    local ok, reader = pcall(leanjson.reader, value, { chunk_size = size, normalize_duplicates = true })
     if not ok then httpc:close(); return nil, reader, state end
     local function close_reader()
         if not state.reader_closed then reader:close(); state.reader_closed = true end

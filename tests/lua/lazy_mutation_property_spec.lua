@@ -1,4 +1,4 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 local cjson = require("cjson")
 local prop = require("tests.lua.property_json")
 
@@ -13,13 +13,13 @@ local function positive_int_env(name, default)
     return tonumber(value)
 end
 
-local CASES = positive_int_env("QJSON_MUT_PROP_CASES", 40)
-local SEED  = positive_int_env("QJSON_MUT_PROP_SEED", 104104)
-local STEPS = positive_int_env("QJSON_MUT_PROP_STEPS", 24)
+local CASES = positive_int_env("LEANJSON_MUT_PROP_CASES", 40)
+local SEED  = positive_int_env("LEANJSON_MUT_PROP_SEED", 104104)
+local STEPS = positive_int_env("LEANJSON_MUT_PROP_STEPS", 24)
 
 -- Supported lazy proxy API under test:
---   t.k reads/writes/deletes, t[i] reads/writes/appends, qjson.pairs,
---   qjson.ipairs, qjson.len, qjson.encode, and qjson.materialize.
+--   t.k reads/writes/deletes, t[i] reads/writes/appends, leanjson.pairs,
+--   leanjson.ipairs, leanjson.len, leanjson.encode, and leanjson.materialize.
 --
 -- Explicitly out of scope because they bypass the proxy contract:
 --   rawset, rawget, next, and direct metatable replacement/mutation.
@@ -206,7 +206,7 @@ local function model_to_lua(v, seen)
         return v
     end
     if v.kind == "null" then
-        return qjson.null
+        return leanjson.null
     end
 
     seen = seen or {}
@@ -221,7 +221,7 @@ local function model_to_lua(v, seen)
             out[i] = model_to_lua(item, seen)
         end
         if #out == 0 then
-            setmetatable(out, qjson.empty_array_mt)
+            setmetatable(out, leanjson.empty_array_mt)
         end
         return out
     end
@@ -240,13 +240,13 @@ end
 
 local function model_to_assignable(v)
     if is_model_node(v, "object") or is_model_node(v, "array") then
-        return qjson.decode(model_encode(v))
+        return leanjson.decode(model_encode(v))
     end
     return model_to_lua(v)
 end
 
 local function is_json_null(v)
-    return rawequal(v, qjson.null) or rawequal(v, cjson.null)
+    return rawequal(v, leanjson.null) or rawequal(v, cjson.null)
 end
 
 local function numbers_equal(a, b)
@@ -259,11 +259,11 @@ end
 
 -- semantic_equal(model, value) is intentionally stricter than a plain table
 -- deep-equal but less strict than byte-equality:
---   * qjson.null and cjson.null are equivalent JSON null sentinels.
+--   * leanjson.null and cjson.null are equivalent JSON null sentinels.
 --   * Empty arrays must carry an array metatable, so [] and {} stay distinct.
 --   * Numbers compare by numeric value with a small floating tolerance.
 --   * Object key order is part of the ordered model and is asserted through
---     model_encode(model) == qjson.encode(lazy). Plain Lua materialized objects
+--     model_encode(model) == leanjson.encode(lazy). Plain Lua materialized objects
 --     cannot preserve order, so this function checks their structure only.
 local function semantic_equal(model, value, seen)
     if is_model_node(model, "null") then
@@ -369,8 +369,8 @@ local function actual_debug_json(value)
     local note = nil
     if type(value) == "table" then
         local mt = getmetatable(value)
-        if mt == qjson._LazyObject or mt == qjson._LazyArray then
-            local ok, materialized = pcall(qjson.materialize, value)
+        if mt == leanjson._LazyObject or mt == leanjson._LazyArray then
+            local ok, materialized = pcall(leanjson.materialize, value)
             if ok then
                 debug_value = materialized
             else
@@ -379,7 +379,7 @@ local function actual_debug_json(value)
         end
     end
 
-    local ok, encoded = pcall(qjson.encode, debug_value)
+    local ok, encoded = pcall(leanjson.encode, debug_value)
     if ok then
         if note then
             return encoded .. "\n" .. note
@@ -403,8 +403,8 @@ local function assert_model_value(ctx, label, expected, actual, trace)
     local value = actual
     if type(actual) == "table" then
         local mt = getmetatable(actual)
-        if mt == qjson._LazyObject or mt == qjson._LazyArray then
-            value = qjson.materialize(actual)
+        if mt == leanjson._LazyObject or mt == leanjson._LazyArray then
+            value = leanjson.materialize(actual)
         end
     end
     assert.is_true(
@@ -419,7 +419,7 @@ local function assert_model_value(ctx, label, expected, actual, trace)
 end
 
 local function assert_checkpoint(ctx, name, lazy, model, trace)
-    local materialized = qjson.materialize(lazy)
+    local materialized = leanjson.materialize(lazy)
     local expected_json = model_encode(model)
     assert.is_true(
         semantic_equal(model, materialized),
@@ -431,7 +431,7 @@ local function assert_checkpoint(ctx, name, lazy, model, trace)
         )
     )
 
-    local encoded = qjson.encode(lazy)
+    local encoded = leanjson.encode(lazy)
     assert.is_true(
         encoded == expected_json,
         fail_message(ctx, name, trace, "expected=" .. expected_json .. "\nactual_encoded=" .. encoded)
@@ -448,14 +448,14 @@ local function assert_checkpoint(ctx, name, lazy, model, trace)
         )
     )
 
-    local reparsed = qjson.materialize(qjson.decode(encoded))
+    local reparsed = leanjson.materialize(leanjson.decode(encoded))
     assert.is_true(
         semantic_equal(model, reparsed),
         fail_message(
             ctx,
             name,
             trace,
-            "expected=" .. expected_json .. "\nactual_qjson_roundtrip=" .. actual_debug_json(reparsed)
+            "expected=" .. expected_json .. "\nactual_leanjson_roundtrip=" .. actual_debug_json(reparsed)
         )
     )
 end
@@ -549,9 +549,9 @@ local function op_read_nested(ctx)
 end
 
 local function op_traverse_object(ctx)
-    append_trace(ctx.trace, "traverse root with qjson.pairs")
+    append_trace(ctx.trace, "traverse root with leanjson.pairs")
     local i = 0
-    for k, v in qjson.pairs(ctx.lazy) do
+    for k, v in leanjson.pairs(ctx.lazy) do
         i = i + 1
         local expected = ctx.model.entries[i]
         assert.is_truthy(expected, fail_message(ctx, "pairs root", ctx.trace, "too many keys"))
@@ -567,10 +567,10 @@ local function op_traverse_array(ctx)
         append_trace(ctx.trace, "traverse arr skipped")
         return
     end
-    append_trace(ctx.trace, "traverse arr with qjson.ipairs")
+    append_trace(ctx.trace, "traverse arr with leanjson.ipairs")
     local lazy_arr = ctx.lazy.arr
     local i = 0
-    for idx, value in qjson.ipairs(lazy_arr) do
+    for idx, value in leanjson.ipairs(lazy_arr) do
         i = i + 1
         assert.are.equal(i, idx)
         assert_model_value(ctx, "ipairs arr value", arr.items[i], value, ctx.trace)
@@ -645,7 +645,7 @@ local function op_append_array(ctx)
     local value = random_scalar(ctx.rng)
     append_trace(ctx.trace, "append arr[] = " .. model_encode(value))
     local lazy_arr = ctx.lazy.arr
-    lazy_arr[qjson.len(lazy_arr) + 1] = model_to_assignable(value)
+    lazy_arr[leanjson.len(lazy_arr) + 1] = model_to_assignable(value)
     arr.items[#arr.items + 1] = value
 end
 
@@ -706,7 +706,7 @@ local function op_rejected_sparse_write(ctx)
     append_trace(ctx.trace, "reject sparse arr[" .. tostring(index) .. "]")
     assert.has_error(function()
         if deleting then lazy[index] = nil else lazy[index] = 7 end
-    end, "qjson: sparse proxy arrays require explicit materialization")
+    end, "leanjson: sparse proxy arrays require explicit materialization")
 end
 
 local function op_encode_midsequence(ctx)
@@ -716,7 +716,7 @@ end
 
 local function op_materialize_midsequence(ctx)
     append_trace(ctx.trace, "materialize mid-sequence")
-    local materialized = qjson.materialize(ctx.lazy)
+    local materialized = leanjson.materialize(ctx.lazy)
     assert.is_true(
         semantic_equal(ctx.model, materialized),
         fail_message(ctx, "mid-sequence materialize", ctx.trace, "materialized value mismatch")
@@ -755,7 +755,7 @@ local function execute_case(seed, case_no, steps)
         source = source,
         rng = rng,
         model = clone_model(model),
-        lazy = qjson.decode(source),
+        lazy = leanjson.decode(source),
         trace = {},
     }
 
@@ -776,7 +776,7 @@ local function shortest_failing_prefix(seed, case_no, steps)
     return nil
 end
 
-describe("qjson lazy mutation stateful property coverage", function()
+describe("leanjson lazy mutation stateful property coverage", function()
     it("keeps encode/materialize semantics aligned with an ordered model", function()
         for case_no = 1, CASES do
             local ok, err = pcall(execute_case, SEED, case_no, STEPS)
@@ -792,90 +792,90 @@ describe("qjson lazy mutation stateful property coverage", function()
     end)
 end)
 
-describe("qjson lazy mutation deterministic regressions", function()
+describe("leanjson lazy mutation deterministic regressions", function()
     it("re-emits unmodified proxy bytes through the fast path", function()
         local src = '{"z":3,"a":{"x":1},"a":{"x":2}}'
-        local t = qjson.decode(src)
-        assert.are.equal(src, qjson.encode(t))
+        local t = leanjson.decode(src)
+        assert.are.equal(src, leanjson.encode(t))
     end)
 
     it("mutates an old child proxy after parent materialization", function()
-        local t = qjson.decode('{"a":{"x":1},"b":2}')
+        local t = leanjson.decode('{"a":{"x":1},"b":2}')
         local old = t.a
         t.c = 3
         old.x = 9
-        assert.are.equal('{"a":{"x":9},"b":2,"c":3}', qjson.encode(t))
+        assert.are.equal('{"a":{"x":9},"b":2,"c":3}', leanjson.encode(t))
     end)
 
     it("marks ancestors dirty when a nested child changes", function()
-        local t = qjson.decode('{"a":{"b":{"c":1}},"d":2}')
+        local t = leanjson.decode('{"a":{"b":{"c":1}},"d":2}')
         t.a.b.c = 7
-        assert.are.equal('{"a":{"b":{"c":7}},"d":2}', qjson.encode(t))
+        assert.are.equal('{"a":{"b":{"c":7}},"d":2}', leanjson.encode(t))
     end)
 
     it("handles duplicate keys with fast-path preservation and mutated last-wins collapse", function()
         local src = '{"a":1,"a":2}'
-        assert.are.equal(src, qjson.encode(qjson.decode(src)))
+        assert.are.equal(src, leanjson.encode(leanjson.decode(src)))
 
-        local t = qjson.decode(src)
+        local t = leanjson.decode(src)
         t.b = 3
-        assert.are.equal('{"a":2,"b":3}', qjson.encode(t))
+        assert.are.equal('{"a":2,"b":3}', leanjson.encode(t))
     end)
 
     it("ignores earlier duplicate container mutations under last-wins materialization", function()
-        local t = qjson.decode('{"a":{"x":1},"a":{"y":2}}')
-        for _, v in qjson.pairs(t) do
+        local t = leanjson.decode('{"a":{"x":1},"a":{"y":2}}')
+        for _, v in leanjson.pairs(t) do
             if v.x then
                 v.x = 99
             end
         end
-        assert.are.equal('{"a":{"y":2}}', qjson.encode(t))
+        assert.are.equal('{"a":{"y":2}}', leanjson.encode(t))
     end)
 
     it("handles escaped object keys and escaped string values after mutation", function()
-        local t = qjson.decode('{"a\\nb":"x\\t\\"y","holder":{"k":"v"}}')
+        local t = leanjson.decode('{"a\\nb":"x\\t\\"y","holder":{"k":"v"}}')
         t.extra = true
-        assert.are.equal('{"a\\nb":"x\\t\\"y","holder":{"k":"v"},"extra":true}', qjson.encode(t))
+        assert.are.equal('{"a\\nb":"x\\t\\"y","holder":{"k":"v"},"extra":true}', leanjson.encode(t))
     end)
 
     it("preserves nulls, empty arrays, and internal-name-like user keys", function()
-        local t = qjson.decode('{"_keys":[],"_values":{"x":null},"n":null}')
-        t.added = qjson.null
-        local m = qjson.materialize(t)
-        assert.are.equal(qjson.empty_array_mt, getmetatable(m._keys))
-        assert.are.equal(qjson.null, m._values.x)
-        assert.are.equal(qjson.null, m.n)
-        assert.are.equal(qjson.null, m.added)
-        assert.are.equal('{"_keys":[],"_values":{"x":null},"n":null,"added":null}', qjson.encode(t))
+        local t = leanjson.decode('{"_keys":[],"_values":{"x":null},"n":null}')
+        t.added = leanjson.null
+        local m = leanjson.materialize(t)
+        assert.are.equal(leanjson.empty_array_mt, getmetatable(m._keys))
+        assert.are.equal(leanjson.null, m._values.x)
+        assert.are.equal(leanjson.null, m.n)
+        assert.are.equal(leanjson.null, m.added)
+        assert.are.equal('{"_keys":[],"_values":{"x":null},"n":null,"added":null}', leanjson.encode(t))
     end)
 
     it("captures proxy assignments as independent snapshots", function()
-        local t = qjson.decode('{"a":{"x":1},"b":2}')
+        local t = leanjson.decode('{"a":{"x":1},"b":2}')
         local a = t.a
         t.alias = a
         t.alias.x = 9
         assert.are_not.equal(t.a, t.alias)
-        assert.are.equal('{"a":{"x":1},"b":2,"alias":{"x":9}}', qjson.encode(t))
+        assert.are.equal('{"a":{"x":1},"b":2,"alias":{"x":9}}', leanjson.encode(t))
     end)
 
     it("captures an ancestor assignment without a mutable reference cycle", function()
-        local t = qjson.decode('{"a":{}}')
+        local t = leanjson.decode('{"a":{}}')
         t.a.self = t
-        assert.are.equal('{"a":{"self":{"a":{}}}}', qjson.encode(t))
+        assert.are.equal('{"a":{"self":{"a":{}}}}', leanjson.encode(t))
     end)
 
     it("rejects sparse proxy holes instead of truncating later elements", function()
-        local t = qjson.decode('[1,2,3]')
+        local t = leanjson.decode('[1,2,3]')
         assert.has_error(function() t[2] = nil end,
-            "qjson: sparse proxy arrays require explicit materialization")
-        assert.are.equal(3, qjson.len(t))
-        assert.are.equal("[1,2,3]", qjson.encode(t))
+            "leanjson: sparse proxy arrays require explicit materialization")
+        assert.are.equal(3, leanjson.len(t))
+        assert.are.equal("[1,2,3]", leanjson.encode(t))
     end)
 
     it("supports mutation during object iteration with final ordered state", function()
-        local t = qjson.decode('{"a":1,"b":2}')
+        local t = leanjson.decode('{"a":1,"b":2}')
         local seen = {}
-        for k, v in qjson.pairs(t) do
+        for k, v in leanjson.pairs(t) do
             seen[#seen + 1] = k .. "=" .. tostring(v)
             if k == "a" then
                 t.b = 20
@@ -884,59 +884,59 @@ describe("qjson lazy mutation deterministic regressions", function()
         end
 
         assert.are.same({"a=1", "b=2"}, seen)
-        assert.are.equal('{"a":1,"b":20,"c":3}', qjson.encode(t))
+        assert.are.equal('{"a":1,"b":20,"c":3}', leanjson.encode(t))
     end)
 
     it("rejects mutation during lazy array iteration with a clean error", function()
-        local t = qjson.decode('[1,2,3]')
+        local t = leanjson.decode('[1,2,3]')
         assert.has_error(function()
-            for i in qjson.ipairs(t) do
+            for i in leanjson.ipairs(t) do
                 if i == 1 then
                     t[2] = 20
                 end
             end
-        end, "qjson: invalid argument")
+        end, "leanjson: invalid argument")
     end)
 
     it("preserves untouched numeric tokens after reads and unrelated writes", function()
-        local t = qjson.decode('{"big":9007199254740993,"negzero":-0,"sci":1.25e3,"float":12.5}')
+        local t = leanjson.decode('{"big":9007199254740993,"negzero":-0,"sci":1.25e3,"float":12.5}')
         local _ = t.big
         t.extra = 1
         assert.are.equal(
             '{"big":9007199254740993,"negzero":-0,"sci":1.25e3,"float":12.5,"extra":1}',
-            qjson.encode(t)
+            leanjson.encode(t)
         )
         t.big = t.big
         assert.are.equal(
             '{"big":9.007199254741e+15,"negzero":-0,"sci":1.25e3,"float":12.5,"extra":1}',
-            qjson.encode(t)
+            leanjson.encode(t)
         )
     end)
 
     it("keeps cached child proxies alive across GC", function()
-        local t = qjson.decode('{"a":{"x":1},"b":2}')
+        local t = leanjson.decode('{"a":{"x":1},"b":2}')
         local a = t.a
         collectgarbage()
         collectgarbage()
         a.x = 7
-        assert.are.equal('{"a":{"x":7},"b":2}', qjson.encode(t))
+        assert.are.equal('{"a":{"x":7},"b":2}', leanjson.encode(t))
     end)
 
     it("encodes lazy proxies idempotently", function()
-        local t = qjson.decode('{"a":{"x":1},"b":2}')
+        local t = leanjson.decode('{"a":{"x":1},"b":2}')
         t.a.x = 5
-        local once = qjson.encode(t)
-        local twice = qjson.encode(t)
+        local once = leanjson.encode(t)
+        local twice = leanjson.encode(t)
         assert.are.equal(once, twice)
     end)
 
     it("does not pollute a source proxy when materializing a child", function()
-        local t = qjson.decode('{"a":{"x":1},"b":2}')
+        local t = leanjson.decode('{"a":{"x":1},"b":2}')
         local child = t.a
-        local materialized = qjson.materialize(child)
+        local materialized = leanjson.materialize(child)
         materialized.x = 9
 
         assert.are.equal(1, child.x)
-        assert.are.equal('{"a":{"x":1},"b":2}', qjson.encode(t))
+        assert.are.equal('{"a":{"x":1},"b":2}', leanjson.encode(t))
     end)
 end)

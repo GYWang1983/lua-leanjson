@@ -39,10 +39,10 @@ function M.has_ci(fixture, tag)
     return false
 end
 
--- Build an access function over a qjson Doc that touches every check path with
+-- Build an access function over a leanjson Doc that touches every check path with
 -- the getter matching its declared type. This is the manifest-driven
 -- replacement for hand-written per-fixture access closures.
-function M.qjson_access(checks)
+function M.leanjson_access(checks)
     return function(d)
         for i = 1, #checks do
             local c = checks[i]

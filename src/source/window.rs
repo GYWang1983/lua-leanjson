@@ -1,4 +1,4 @@
-use crate::error::{qjson_err, qjson_type};
+use crate::error::{leanjson_err, leanjson_type};
 use super::{Node, SourceError, DETAIL_BAD_WINDOW};
 use super::validate::StringState;
 
@@ -29,10 +29,10 @@ pub struct SourceReader {
 
 impl SourceReader {
     pub fn new(node: &Node, scalar: bool, window_size: usize) -> Result<Self, SourceError> {
-        if scalar && matches!(node.kind, qjson_type::QJSON_T_ARR | qjson_type::QJSON_T_OBJ) {
-            return Err(SourceError::json(qjson_err::QJSON_TYPE_MISMATCH, node.raw_start));
+        if scalar && matches!(node.kind, leanjson_type::LEANJSON_T_ARR | leanjson_type::LEANJSON_T_OBJ) {
+            return Err(SourceError::json(leanjson_err::LEANJSON_TYPE_MISMATCH, node.raw_start));
         }
-        let string = scalar && node.kind == qjson_type::QJSON_T_STR;
+        let string = scalar && node.kind == leanjson_type::LEANJSON_T_STR;
         let limit = if window_size == 0 { 65536 } else { window_size };
         Ok(Self {
             position: node.raw_start + u64::from(string), end: node.raw_end - u64::from(string),

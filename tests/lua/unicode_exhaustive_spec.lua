@@ -1,4 +1,4 @@
-local qjson = require("qjson")
+local leanjson = require("leanjson")
 
 local function utf8_char(cp)
     if cp < 0x80 then
@@ -23,13 +23,13 @@ local function utf8_char(cp)
     )
 end
 
-describe("qjson exhaustive Unicode encode/decode", function()
+describe("leanjson exhaustive Unicode encode/decode", function()
     it("round-trips every Unicode scalar value through encode and parse", function()
         for cp = 0, 0x10FFFF do
             if cp < 0xD800 or cp > 0xDFFF then
                 local s = utf8_char(cp)
-                local encoded = qjson.encode(s)
-                local doc = qjson.parse(encoded)
+                local encoded = leanjson.encode(s)
+                local doc = leanjson.parse(encoded)
                 assert.are.equal(s, doc:get_str(""), string.format("U+%04X encoded as %s", cp, encoded))
             end
         end

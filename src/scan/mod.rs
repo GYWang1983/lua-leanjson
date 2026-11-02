@@ -11,7 +11,7 @@ use once_cell::sync::OnceCell;
 /// a string literal to `out`. On shallow validation failure (unclosed string,
 /// unmatched bracket), returns `Err(offset)` where `offset` is the byte
 /// position the failure was detected at; parse callers propagate it through
-/// `qjson_error.offset`.
+/// `leanjson_error.offset`.
 pub trait Scanner {
     fn scan(buf: &[u8], out: &mut Vec<u32>) -> Result<(), usize>;
 }

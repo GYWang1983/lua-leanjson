@@ -1,25 +1,25 @@
 -- The byte grammar deliberately matches src/path.rs, including leading and
 -- repeated dots and zero-based uint32 bracket indexes.
-local proxy = require("qjson.proxy")
+local proxy = require("leanjson.proxy")
 local M = {}
 
 function M.parse(path)
-    if type(path) ~= "string" then error("qjson.get: path must be a string", 0) end
+    if type(path) ~= "string" then error("leanjson.get: path must be a string", 0) end
     local segments, pos = {}, 1
     while pos <= #path do
         local byte = path:byte(pos)
         if byte == 46 then
             pos = pos + 1
-            if pos > #path then error("qjson.get: invalid path", 0) end
+            if pos > #path then error("leanjson.get: invalid path", 0) end
         elseif byte == 91 then
             local last = path:find("]", pos + 1, true)
-            if not last or last == pos + 1 then error("qjson.get: invalid path", 0) end
+            if not last or last == pos + 1 then error("leanjson.get: invalid path", 0) end
             local index = 0
             for i = pos + 1, last - 1 do
                 local digit = path:byte(i) - 48
-                if digit < 0 or digit > 9 then error("qjson.get: invalid path", 0) end
+                if digit < 0 or digit > 9 then error("leanjson.get: invalid path", 0) end
                 index = index * 10 + digit
-                if index > 4294967295 then error("qjson.get: invalid path", 0) end
+                if index > 4294967295 then error("leanjson.get: invalid path", 0) end
             end
             segments[#segments + 1] = { kind = "array", key = index + 1 }
             pos = last + 1
@@ -34,7 +34,7 @@ end
 
 function M.from_node(node, segments, scope)
     for _, segment in ipairs(segments) do
-        if node.kind ~= segment.kind then error("qjson.get: type mismatch", 0) end
+        if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
         local _, values = proxy.members(node, scope)
         node = values[segment.key]
         if node == nil then return nil end
@@ -53,7 +53,7 @@ function M.get(value, path)
             for j = i, #segments do rest[#rest + 1] = segments[j] end
             return proxy.get_path(value, rest)
         end
-        if proxy.type(value) ~= segment.kind then error("qjson.get: type mismatch", 0) end
+        if proxy.type(value) ~= segment.kind then error("leanjson.get: type mismatch", 0) end
         value = value[segment.key]
         if type(value) == "nil" then return nil end
     end

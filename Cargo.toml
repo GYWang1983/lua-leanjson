@@ -1,14 +1,14 @@
 [package]
-name = "qjson"
+name = "leanjson"
 version = "0.1.0"
 edition = "2021"
-description = "Fast JSON decoder for LuaJIT FFI consumers"
+description = "Memory-conscious JSON processing for LuaJIT and OpenResty"
 license = "Apache-2.0"
-repository = "https://github.com/api7/lua-qjson"
-homepage = "https://github.com/api7/lua-qjson"
+repository = "https://github.com/GYWang1983/lua-leanjson"
+homepage = "https://github.com/GYWang1983/lua-leanjson"
 
 [lib]
-name = "qjson"
+name = "leanjson"
 crate-type = ["cdylib", "rlib"]
 
 [features]

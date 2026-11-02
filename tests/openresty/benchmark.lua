@@ -1,13 +1,13 @@
 local cjson = require "cjson"
 local http = require "resty.http"
-local port = tonumber(os.getenv("QJSON_TEST_PORT"))
-local scenario = os.getenv("QJSON_BENCH_CASE") or "prompt"
-local method = os.getenv("QJSON_BENCH_METHOD") or "qjson"
-local size = tonumber(os.getenv("QJSON_BENCH_BYTES")) or 1048576
-local concurrency = tonumber(os.getenv("QJSON_BENCH_CONCURRENCY")) or 2
-local requests = tonumber(os.getenv("QJSON_BENCH_REQUESTS")) or 3
-local branches = tonumber(os.getenv("QJSON_BENCH_BRANCHES")) or 2
-local chunk_size = tonumber(os.getenv("QJSON_BENCH_CHUNK_SIZE")) or 65536
+local port = tonumber(os.getenv("LEANJSON_TEST_PORT"))
+local scenario = os.getenv("LEANJSON_BENCH_CASE") or "prompt"
+local method = os.getenv("LEANJSON_BENCH_METHOD") or "leanjson"
+local size = tonumber(os.getenv("LEANJSON_BENCH_BYTES")) or 1048576
+local concurrency = tonumber(os.getenv("LEANJSON_BENCH_CONCURRENCY")) or 2
+local requests = tonumber(os.getenv("LEANJSON_BENCH_REQUESTS")) or 3
+local branches = tonumber(os.getenv("LEANJSON_BENCH_BRANCHES")) or 2
+local chunk_size = tonumber(os.getenv("LEANJSON_BENCH_CHUNK_SIZE")) or 65536
 local raw
 -- Fixed key order makes paired input byte-identical across fresh Lua states.
 if scenario == "messages" then
@@ -56,7 +56,7 @@ for _ = 1, concurrency do
             assert(res.status == 200, res.body)
             local result = cjson.decode(res.body)
             assert(result.sink.bytes == result.output.length)
-            if method == "qjson" then assert(result.output.max_chunk <= chunk_size) end
+            if method == "leanjson" then assert(result.output.max_chunk <= chunk_size) end
             latencies[#latencies + 1] = (ngx.now() - start) * 1000
             first_bytes[#first_bytes + 1] = (result.sink.first_byte_at - start) * 1000
             results[#results + 1] = result

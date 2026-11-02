@@ -1,8 +1,8 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use qjson::doc::Document;
-use qjson::options::{Options, QJSON_MODE_EAGER};
+use leanjson::doc::Document;
+use leanjson::options::{Options, LEANJSON_MODE_EAGER};
 use serde_json::Value;
 
 const FUZZ_MAX_DEPTH: u32 = 128;
@@ -13,14 +13,14 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
 
-    let opts = Options { mode: QJSON_MODE_EAGER, max_depth: FUZZ_MAX_DEPTH };
-    let qjson_ok = Document::parse_with_options(data, &opts).is_ok();
+    let opts = Options { mode: LEANJSON_MODE_EAGER, max_depth: FUZZ_MAX_DEPTH };
+    let leanjson_ok = Document::parse_with_options(data, &opts).is_ok();
     let serde_result = serde_json::from_slice::<Value>(data);
     let serde_ok = serde_result.is_ok();
 
-    if qjson_ok != serde_ok && !(qjson_ok && serde_rejected_allowed_value(data, &serde_result)) {
+    if leanjson_ok != serde_ok && !(leanjson_ok && serde_rejected_allowed_value(data, &serde_result)) {
         panic!(
-            "qjson eager / serde_json accept-reject mismatch: qjson_ok={qjson_ok} serde_ok={serde_ok} input={:?}",
+            "leanjson eager / serde_json accept-reject mismatch: leanjson_ok={leanjson_ok} serde_ok={serde_ok} input={:?}",
             data,
         );
     }
@@ -64,9 +64,9 @@ fn serde_rejected_allowed_value(data: &[u8], result: &Result<Value, serde_json::
         Ok(_) => false,
         Err(err) => {
             let msg = err.to_string();
-            // qjson eager validates JSON number grammar, while
+            // leanjson eager validates JSON number grammar, while
             // serde_json::Value also requires representability in its number
-            // model. qjson also accepts escaped lone UTF-16 surrogates at
+            // model. leanjson also accepts escaped lone UTF-16 surrogates at
             // parse time; lazy string decode rejects them when accessed. Serde
             // reports some leading-surrogate cases as "unexpected end of hex
             // escape", so gate that message on an input-level surrogate check.

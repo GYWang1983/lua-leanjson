@@ -2,9 +2,9 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use qjson::doc::Document;
-use qjson::ffi::*;
-use qjson::options::{Options, QJSON_MODE_EAGER, QJSON_MODE_LAZY};
+use leanjson::doc::Document;
+use leanjson::ffi::*;
+use leanjson::options::{Options, LEANJSON_MODE_EAGER, LEANJSON_MODE_LAZY};
 use serde_json::Value;
 use std::os::raw::c_char;
 
@@ -307,15 +307,15 @@ fuzz_target!(|test_case: TestCase| {
     let data = json.as_bytes();
 
     // Test EAGER mode
-    let opts_eager = Options { mode: QJSON_MODE_EAGER, max_depth: FUZZ_MAX_DEPTH };
-    let qjson_eager_result = Document::parse_with_options(data, &opts_eager);
+    let opts_eager = Options { mode: LEANJSON_MODE_EAGER, max_depth: FUZZ_MAX_DEPTH };
+    let leanjson_eager_result = Document::parse_with_options(data, &opts_eager);
     let serde_result = serde_json::from_slice::<Value>(data);
 
     let is_rfc8259_valid = test_case.number.is_rfc8259_valid();
 
     // EAGER mode should reject RFC 8259 violations
     if !is_rfc8259_valid {
-        if qjson_eager_result.is_ok() {
+        if leanjson_eager_result.is_ok() {
             panic!(
                 "EAGER mode accepted invalid RFC 8259 number: {:?}\njson: {}",
                 test_case.number, json
@@ -324,7 +324,7 @@ fuzz_target!(|test_case: TestCase| {
         // serde_json should also reject
         if serde_result.is_ok() {
             panic!(
-                "serde_json accepted invalid RFC 8259 number (qjson correctly rejected): {:?}\njson: {}",
+                "serde_json accepted invalid RFC 8259 number (leanjson correctly rejected): {:?}\njson: {}",
                 test_case.number, json
             );
         }
@@ -332,47 +332,47 @@ fuzz_target!(|test_case: TestCase| {
     }
 
     // For valid RFC 8259 numbers, check accept/reject consistency
-    let qjson_eager_ok = qjson_eager_result.is_ok();
+    let leanjson_eager_ok = leanjson_eager_result.is_ok();
     let serde_ok = serde_result.is_ok();
 
-    // Allow divergence when serde rejects for reasons qjson handles differently:
+    // Allow divergence when serde rejects for reasons leanjson handles differently:
     // - "number out of range": serde's f64 model is stricter
     // - "invalid number": serde may reject some edge cases differently
-    if qjson_eager_ok != serde_ok {
-        if qjson_eager_ok && !serde_ok {
+    if leanjson_eager_ok != serde_ok {
+        if leanjson_eager_ok && !serde_ok {
             let err_msg = serde_result.as_ref().err().unwrap().to_string();
             let allowed_divergence = err_msg.contains("number out of range")
                 || err_msg.contains("invalid number");
             if !allowed_divergence {
                 panic!(
-                    "EAGER/serde mismatch: qjson_ok={} serde_ok={} serde_err={:?}\nnumber: {:?}\njson: {}",
-                    qjson_eager_ok, serde_ok, err_msg, test_case.number, json
+                    "EAGER/serde mismatch: leanjson_ok={} serde_ok={} serde_err={:?}\nnumber: {:?}\njson: {}",
+                    leanjson_eager_ok, serde_ok, err_msg, test_case.number, json
                 );
             }
         } else {
             panic!(
-                "EAGER/serde mismatch: qjson_ok={} serde_ok={}\nnumber: {:?}\njson: {}",
-                qjson_eager_ok, serde_ok, test_case.number, json
+                "EAGER/serde mismatch: leanjson_ok={} serde_ok={}\nnumber: {:?}\njson: {}",
+                leanjson_eager_ok, serde_ok, test_case.number, json
             );
         }
     }
 
     // Test LAZY mode (only for valid RFC 8259)
-    let opts_lazy = Options { mode: QJSON_MODE_LAZY, max_depth: FUZZ_MAX_DEPTH };
-    let qjson_lazy_result = Document::parse_with_options(data, &opts_lazy);
+    let opts_lazy = Options { mode: LEANJSON_MODE_LAZY, max_depth: FUZZ_MAX_DEPTH };
+    let leanjson_lazy_result = Document::parse_with_options(data, &opts_lazy);
 
     // LAZY mode should accept structurally valid JSON (brackets/quotes balanced)
     // but may defer number validation to access time
-    let qjson_lazy_ok = qjson_lazy_result.is_ok();
+    let leanjson_lazy_ok = leanjson_lazy_result.is_ok();
 
-    // If both qjson modes parsed successfully, test number extraction
-    if qjson_eager_ok && qjson_lazy_ok {
+    // If both leanjson modes parsed successfully, test number extraction
+    if leanjson_eager_ok && leanjson_lazy_ok {
         test_number_extraction(&json, &test_case.number);
     }
 
     // LAZY should be more permissive than EAGER for number-level issues
     // (but both will reject bracket/quote imbalance equally)
-    if qjson_eager_ok && !qjson_lazy_ok {
+    if leanjson_eager_ok && !leanjson_lazy_ok {
         panic!(
             "EAGER succeeded but LAZY failed (LAZY should be more permissive): number: {:?}\njson: {}",
             test_case.number, json
@@ -381,9 +381,9 @@ fuzz_target!(|test_case: TestCase| {
 });
 
 fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
-    let mut err = qjson_error::default();
+    let mut err = leanjson_error::default();
     let doc = unsafe {
-        qjson_parse(
+        leanjson_parse(
             json.as_ptr(),
             json.len(),
             &mut err
@@ -400,7 +400,7 @@ fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
     // Try i64 extraction
     let mut i64_val: i64 = 0;
     let i64_rc = unsafe {
-        qjson_get_i64(
+        leanjson_get_i64(
             doc,
             path.as_ptr() as *const c_char,
             path.len(),
@@ -411,7 +411,7 @@ fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
     // Try f64 extraction
     let mut f64_val: f64 = 0.0;
     let f64_rc = unsafe {
-        qjson_get_f64(
+        leanjson_get_f64(
             doc,
             path.as_ptr() as *const c_char,
             path.len(),
@@ -427,7 +427,7 @@ fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
                 if let Some(num) = arr.get(0).and_then(|v| v.as_i64()) {
                     if i64_val != num {
                         panic!(
-                            "i64 mismatch: qjson={} serde={} number: {:?}\njson: {}",
+                            "i64 mismatch: leanjson={} serde={} number: {:?}\njson: {}",
                             i64_val, num, number_spec, json
                         );
                     }
@@ -461,7 +461,7 @@ fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
 
                     if rel_error > 1e-10 || abs_error > 1e-10 {
                         panic!(
-                            "f64 mismatch: qjson={} serde={} rel_error={} abs_error={} number: {:?}\njson: {}",
+                            "f64 mismatch: leanjson={} serde={} rel_error={} abs_error={} number: {:?}\njson: {}",
                             f64_val, num, rel_error, abs_error, number_spec, json
                         );
                     }
@@ -470,5 +470,5 @@ fn test_number_extraction(json: &str, number_spec: &NumberSpec) {
         }
     }
 
-    unsafe { qjson_free(doc) };
+    unsafe { leanjson_free(doc) };
 }

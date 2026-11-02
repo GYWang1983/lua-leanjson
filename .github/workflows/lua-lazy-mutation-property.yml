@@ -6,13 +6,13 @@ on:
   workflow_dispatch:
     inputs:
       cases:
-        description: "Override QJSON_MUT_PROP_CASES (default: 4000)"
+        description: "Override LEANJSON_MUT_PROP_CASES (default: 4000)"
         required: false
       steps:
-        description: "Override QJSON_MUT_PROP_STEPS (default: 200)"
+        description: "Override LEANJSON_MUT_PROP_STEPS (default: 200)"
         required: false
       seed:
-        description: "Override QJSON_MUT_PROP_SEED (random if empty)"
+        description: "Override LEANJSON_MUT_PROP_SEED (random if empty)"
         required: false
 
 env:
@@ -108,11 +108,11 @@ jobs:
       - name: Run lazy mutation property suite
         env:
           LUAJIT: ${{ steps.luajit.outputs.path }}
-          QJSON_MUT_PROP_CASES: ${{ steps.params.outputs.cases }}
-          QJSON_MUT_PROP_STEPS: ${{ steps.params.outputs.steps }}
-          QJSON_MUT_PROP_SEED: ${{ steps.params.outputs.seed }}
+          LEANJSON_MUT_PROP_CASES: ${{ steps.params.outputs.cases }}
+          LEANJSON_MUT_PROP_STEPS: ${{ steps.params.outputs.steps }}
+          LEANJSON_MUT_PROP_SEED: ${{ steps.params.outputs.seed }}
         run: |
-          echo "QJSON_MUT_PROP_CASES=$QJSON_MUT_PROP_CASES"
-          echo "QJSON_MUT_PROP_STEPS=$QJSON_MUT_PROP_STEPS"
-          echo "QJSON_MUT_PROP_SEED=$QJSON_MUT_PROP_SEED"
+          echo "LEANJSON_MUT_PROP_CASES=$LEANJSON_MUT_PROP_CASES"
+          echo "LEANJSON_MUT_PROP_STEPS=$LEANJSON_MUT_PROP_STEPS"
+          echo "LEANJSON_MUT_PROP_SEED=$LEANJSON_MUT_PROP_SEED"
           make lua-mutation-property-test

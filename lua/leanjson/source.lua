@@ -1,12 +1,12 @@
 -- Versioned file/window source. Rust owns only metadata; Lua owns the fd and
 -- one lease for every independent consumer. No original file is ever unlinked.
 local ffi = require("ffi")
-local C = require("qjson.lib")
-local io_source = require("qjson.source_io")
-local path = require("qjson.path")
-local proxy = require("qjson.proxy")
-local leases = require("qjson.leases")
-local options = require("qjson.options").normalize
+local C = require("leanjson.lib")
+local io_source = require("leanjson.source_io")
+local path = require("leanjson.path")
+local proxy = require("leanjson.proxy")
+local leases = require("leanjson.leases")
+local options = require("leanjson.options").normalize
 local M = {}
 local Backend = {}; Backend.__index = Backend
 local Decoder = {}; Decoder.__index = Decoder
@@ -18,7 +18,7 @@ local details = { "source I/O error", "source aborted", "source closed", "invali
     "invalid source offset", "invalid source options" }
 
 local function exact(value)
-    if value > MAX_EXACT then error("qjson: source offset exceeds Lua exact integer range", 0) end
+    if value > MAX_EXACT then error("leanjson: source offset exceeds Lua exact integer range", 0) end
     return tonumber(value)
 end
 
@@ -26,15 +26,15 @@ local function result_error(result)
     local r = result[0]
     local message
     if r.detail ~= 0 then message = details[tonumber(r.detail)] or "source error"
-    else message = ffi.string(C.qjson_strerror(r.code)) end
+    else message = ffi.string(C.leanjson_strerror(r.code)) end
     if r.offset ~= U64_MAX then message = message .. " at byte " .. tostring(exact(r.offset)) end
-    return "qjson: " .. message
+    return "leanjson: " .. message
 end
 
 local function require_status(status, expected, result)
     if status ~= expected then
         if status == ERROR then error(result_error(result), 0) end
-        error("qjson: unexpected source status " .. status, 0)
+        error("leanjson: unexpected source status " .. status, 0)
     end
 end
 
@@ -44,7 +44,7 @@ local function close_state(state)
         state.fd, state.path = nil, nil
     end
     if state.source ~= nil then
-        C.qjson_source_v1_release(state.source)
+        C.leanjson_source_v1_release(state.source)
         state.source = nil
     end
 end
@@ -68,14 +68,14 @@ function Backend:release(token)
 end
 
 function Backend:check_open()
-    if self.state.fd == nil then error("qjson: source closed", 0) end
+    if self.state.fd == nil then error("leanjson: source closed", 0) end
     if self.failure then error(self.failure, 0) end
 end
 
 function Backend:fail(message, detail)
     if not self.failure then
         self.failure = tostring(message)
-        if self.state.source ~= nil then C.qjson_source_v1_abort(self.state.source, detail or 1, nil) end
+        if self.state.source ~= nil then C.leanjson_source_v1_abort(self.state.source, detail or 1, nil) end
     end
     return self.failure
 end
@@ -93,16 +93,16 @@ function Backend:read(offset, length, scope)
     offset = exact(offset)
     length = math.min(length, self.opts.chunk_size)
     if offset < 0 or offset ~= math.floor(offset) or length < 1 or length ~= math.floor(length)
-        or offset > MAX_EXACT - length then error("qjson: invalid source read range", 0) end
+        or offset > MAX_EXACT - length then error("leanjson: invalid source read range", 0) end
     local lease = self:retain()
     local record = leases.track(scope, function() self:release(lease) end)
     local ok, chunk = pcall(function()
         local read_ok, value, err = pcall(io_source.read, self.state.fd, offset, length)
         leases.check(scope)
         if not read_ok then error(self:fail(value), 0) end
-        if type(value) ~= "string" then error(self:fail(err or "qjson: source read failed"), 0) end
-        if #value == 0 then error(self:fail("qjson: unexpected source EOF"), 0) end
-        if #value > length then error(self:fail("qjson: source exceeded read bound"), 0) end
+        if type(value) ~= "string" then error(self:fail(err or "leanjson: source read failed"), 0) end
+        if #value == 0 then error(self:fail("leanjson: unexpected source EOF"), 0) end
+        if #value > length then error(self:fail("leanjson: source exceeded read bound"), 0) end
         self:notify(scope)
         return value
     end)
@@ -113,8 +113,8 @@ end
 
 local function info(self, handle)
     self:check_open()
-    local out, result = ffi.new("qjson_source_v1_node_info[1]"), ffi.new("qjson_source_v1_result[1]")
-    require_status(C.qjson_source_v1_node_get_info(handle, out, result), READY, result)
+    local out, result = ffi.new("leanjson_source_v1_node_info[1]"), ffi.new("leanjson_source_v1_result[1]")
+    require_status(C.leanjson_source_v1_node_get_info(handle, out, result), READY, result)
     return out[0]
 end
 
@@ -127,30 +127,30 @@ end
 local function scalar_bytes(self, handle, base, scope)
     leases.check(scope)
     local lease = self:retain()
-    local out, result = ffi.new("qjson_source_v1_op *[1]"), ffi.new("qjson_source_v1_result[1]")
-    local status = C.qjson_source_v1_node_scalar_begin(handle, out, result)
+    local out, result = ffi.new("leanjson_source_v1_op *[1]"), ffi.new("leanjson_source_v1_result[1]")
+    local status = C.leanjson_source_v1_node_scalar_begin(handle, out, result)
     if status == ERROR then self:release(lease); error(result_error(result), 0) end
-    local operation = ffi.gc(out[0], C.qjson_source_v1_op_release)
+    local operation = ffi.gc(out[0], C.leanjson_source_v1_op_release)
     local record = leases.track(scope, function()
-        if operation then ffi.gc(operation, nil); C.qjson_source_v1_op_release(operation); operation = nil end
+        if operation then ffi.gc(operation, nil); C.leanjson_source_v1_op_release(operation); operation = nil end
         self:release(lease)
     end)
     local ok, value = pcall(function()
         local parts, ptr, size = {}, ffi.new("const uint8_t *[1]"), ffi.new("size_t[1]")
         while status ~= DONE do
             leases.check(scope)
-            if not operation then error("qjson: source operation closed", 0) end
+            if not operation then error("leanjson: source operation closed", 0) end
             if status == NEED_READ then
                 local offset, length = exact(result[0].offset), exact(result[0].length)
                 local chunk = self:read((base or 0) + offset, length, scope)
                 leases.check(scope)
-                require_status(C.qjson_source_v1_provide_window(operation, offset, chunk, #chunk, result), READY, result)
+                require_status(C.leanjson_source_v1_provide_window(operation, offset, chunk, #chunk, result), READY, result)
             elseif status == READY then
                 -- Copy before another operation step can invalidate the pointer.
                 parts[#parts + 1] = ffi.string(ptr[0], size[0])
                 self:notify(scope)
             else error(result_error(result), 0) end
-            status = C.qjson_source_v1_op_step(operation, ptr, size, result)
+            status = C.leanjson_source_v1_op_step(operation, ptr, size, result)
         end
         return table.concat(parts)
     end)
@@ -167,7 +167,7 @@ function Backend:scalar(handle, scope)
         if kind == "boolean" then return raw == "true" end
         if kind == "null" then return nil end
         local number = tonumber(raw)
-        if number == nil or number == math.huge or number == -math.huge then error("qjson: number out of range", 0) end
+        if number == nil or number == math.huge or number == -math.huge then error("leanjson: number out of range", 0) end
         return number
     end)
     if not ok then error(value, 0) end
@@ -175,31 +175,31 @@ function Backend:scalar(handle, scope)
 end
 
 local function native_options(opts)
-    return ffi.new("qjson_source_v1_options[1]", { { 1, 0, opts.max_depth, opts.chunk_size } })
+    return ffi.new("leanjson_source_v1_options[1]", { { 1, 0, opts.max_depth, opts.chunk_size } })
 end
 
 local function key_string(self, first, last, scope)
     -- Keys have spans rather than value-node handles. A temporary bounded
     -- source reuses the same Rust string validator/decoder without aggregating
     -- a raw quoted key or maintaining a second Lua escape implementation.
-    local result = ffi.new("qjson_source_v1_result[1]")
-    local source = C.qjson_source_v1_new(native_options(self.opts), result)
+    local result = ffi.new("leanjson_source_v1_result[1]")
+    local source = C.leanjson_source_v1_new(native_options(self.opts), result)
     if source == nil then error(result_error(result), 0) end
-    source = ffi.gc(source, C.qjson_source_v1_release)
+    source = ffi.gc(source, C.leanjson_source_v1_release)
     local record = leases.track(scope, function()
-        if source then ffi.gc(source, nil); C.qjson_source_v1_release(source); source = nil end
+        if source then ffi.gc(source, nil); C.leanjson_source_v1_release(source); source = nil end
     end)
     local ok, value = pcall(function()
         local position = first
         while position < last do
             local chunk = self:read(position, math.min(last - position, self.opts.chunk_size), scope)
             leases.check(scope)
-            require_status(C.qjson_source_v1_feed(source, position - first, chunk, #chunk, result), NEED_INPUT, result)
+            require_status(C.leanjson_source_v1_feed(source, position - first, chunk, #chunk, result), NEED_INPUT, result)
             position = position + #chunk
         end
-        require_status(C.qjson_source_v1_finish(source, last - first, result), READY, result)
-        local root = ffi.new("qjson_source_v1_node[1]")
-        require_status(C.qjson_source_v1_root(source, root, result), READY, result)
+        require_status(C.leanjson_source_v1_finish(source, last - first, result), READY, result)
+        local root = ffi.new("leanjson_source_v1_node[1]")
+        require_status(C.leanjson_source_v1_root(source, root, result), READY, result)
         return scalar_bytes(self, root[0], first, scope)
     end)
     leases.finish(scope, record)
@@ -210,12 +210,12 @@ end
 function Backend:children(handle, scope)
     local kind = self:type(handle)
     local lease = self:retain()
-    local out, result = ffi.new("qjson_source_v1_iter *[1]"), ffi.new("qjson_source_v1_result[1]")
-    local status = C.qjson_source_v1_iter_begin(handle, out, result)
+    local out, result = ffi.new("leanjson_source_v1_iter *[1]"), ffi.new("leanjson_source_v1_result[1]")
+    local status = C.leanjson_source_v1_iter_begin(handle, out, result)
     if status ~= READY then self:release(lease); error(result_error(result), 0) end
-    local iterator = ffi.gc(out[0], C.qjson_source_v1_iter_release)
+    local iterator = ffi.gc(out[0], C.leanjson_source_v1_iter_release)
     local record = leases.track(scope, function()
-        if iterator then ffi.gc(iterator, nil); C.qjson_source_v1_iter_release(iterator); iterator = nil end
+        if iterator then ffi.gc(iterator, nil); C.leanjson_source_v1_iter_release(iterator); iterator = nil end
         if lease then self:release(lease); lease = nil end
     end)
     local fallback = leases.fallback(scope, record)
@@ -223,15 +223,15 @@ function Backend:children(handle, scope)
         leases.check(scope)
         if not fallback or not iterator then return nil end
         local ok, key, child = pcall(function()
-            local member = ffi.new("qjson_source_v1_member[1]")
-            local rc = C.qjson_source_v1_iter_next(iterator, member, result)
+            local member = ffi.new("leanjson_source_v1_member[1]")
+            local rc = C.leanjson_source_v1_iter_next(iterator, member, result)
             if rc == DONE then return nil end
             require_status(rc, READY, result)
             local value = member[0]
             local name = kind == "array" and (exact(value.ordinal) + 1)
                 or key_string(self, exact(value.key_start), exact(value.key_end), scope)
             if kind == "array" then self:notify(scope) end
-            return name, ffi.new("qjson_source_v1_node", value.value)
+            return name, ffi.new("leanjson_source_v1_node", value.value)
         end)
         if not ok then leases.finish(scope, record); fallback = nil; error(key, 0) end
         if key == nil then leases.finish(scope, record); fallback = nil end
@@ -240,8 +240,8 @@ function Backend:children(handle, scope)
 end
 
 local function backend_new(fd, spool_path, opts)
-    local result = ffi.new("qjson_source_v1_result[1]")
-    local source = C.qjson_source_v1_new(native_options(opts), result)
+    local result = ffi.new("leanjson_source_v1_result[1]")
+    local source = C.leanjson_source_v1_new(native_options(opts), result)
     if source == nil then io_source.close(fd, spool_path); error(result_error(result), 0) end
     local backend = setmetatable({ state = { fd = fd, path = spool_path, source = source, leases = 0 },
         total = 0, opts = opts }, Backend)
@@ -249,9 +249,9 @@ local function backend_new(fd, spool_path, opts)
 end
 
 local function feed_bytes(backend, chunk, spool, scope)
-    if type(chunk) ~= "string" then error("qjson: feed chunk must be a string", 0) end
-    if #chunk > MAX_EXACT - backend.total then error("qjson: source offset exceeds Lua exact integer range", 0) end
-    local result, position = ffi.new("qjson_source_v1_result[1]"), 0
+    if type(chunk) ~= "string" then error("leanjson: feed chunk must be a string", 0) end
+    if #chunk > MAX_EXACT - backend.total then error("leanjson: source offset exceeds Lua exact integer range", 0) end
+    local result, position = ffi.new("leanjson_source_v1_result[1]"), 0
     while position < #chunk do
         leases.check(scope)
         local count = math.min(#chunk - position, backend.opts.chunk_size)
@@ -259,7 +259,7 @@ local function feed_bytes(backend, chunk, spool, scope)
             local written, err = io_source.write(backend.state.fd, backend.total, chunk, position, count)
             if not written then error(backend:fail(err), 0) end
         end
-        require_status(C.qjson_source_v1_feed(backend.state.source, backend.total,
+        require_status(C.leanjson_source_v1_feed(backend.state.source, backend.total,
             ffi.cast("const uint8_t *", chunk) + position, count, result), NEED_INPUT, result)
         backend.total, position = backend.total + count, position + count
         backend:notify(scope)
@@ -267,23 +267,23 @@ local function feed_bytes(backend, chunk, spool, scope)
 end
 
 local function finish_backend(backend)
-    local result, root = ffi.new("qjson_source_v1_result[1]"), ffi.new("qjson_source_v1_node[1]")
-    require_status(C.qjson_source_v1_finish(backend.state.source, backend.total, result), READY, result)
-    require_status(C.qjson_source_v1_root(backend.state.source, root, result), READY, result)
-    return { backend = backend, handle = ffi.new("qjson_source_v1_node", root[0]), kind = backend:type(root[0]) }
+    local result, root = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v1_node[1]")
+    require_status(C.leanjson_source_v1_finish(backend.state.source, backend.total, result), READY, result)
+    require_status(C.leanjson_source_v1_root(backend.state.source, root, result), READY, result)
+    return { backend = backend, handle = ffi.new("leanjson_source_v1_node", root[0]), kind = backend:type(root[0]) }
 end
 
 function M.decode_file(filename, opts)
     opts = options(opts)
-    if type(filename) ~= "string" or filename:find("\0", 1, true) then error("qjson: file path must be a string without NUL", 0) end
+    if type(filename) ~= "string" or filename:find("\0", 1, true) then error("leanjson: file path must be a string without NUL", 0) end
     local fd, open_error = io_source.open(filename)
     if fd == nil then error(open_error, 0) end
     local backend, owner = backend_new(fd, nil, opts)
     local ok, value = pcall(function()
         while true do
             local chunk, err = io_source.read(fd, backend.total, opts.chunk_size)
-            if type(chunk) ~= "string" then error(err or "qjson: source read failed", 0) end
-            if #chunk > opts.chunk_size then error("qjson: source exceeded read bound", 0) end
+            if type(chunk) ~= "string" then error(err or "leanjson: source read failed", 0) end
+            if #chunk > opts.chunk_size then error("leanjson: source exceeded read bound", 0) end
             if #chunk == 0 then break end
             feed_bytes(backend, chunk, false)
         end
@@ -318,9 +318,9 @@ end
 
 function Decoder:feed(chunk)
     if self.failure then return nil, self.failure end
-    if self.closed then return nil, "qjson.decoder: closed for input" end
-    if self.input_busy then return nil, "qjson.decoder: input operation in progress" end
-    if self.finished then return nil, "qjson.decoder: closed for input" end
+    if self.closed then return nil, "leanjson.decoder: closed for input" end
+    if self.input_busy then return nil, "leanjson.decoder: input operation in progress" end
+    if self.finished then return nil, "leanjson.decoder: closed for input" end
     local lease = self.backend:retain()
     local record = leases.track(self.scope, function() self.backend:release(lease) end)
     self.input_busy = true
@@ -333,8 +333,8 @@ end
 
 function Decoder:finish()
     if self.failure then return nil, self.failure end
-    if self.closed then return nil, "qjson.decoder: closed" end
-    if self.input_busy then return nil, "qjson.decoder: input operation in progress" end
+    if self.closed then return nil, "leanjson.decoder: closed" end
+    if self.input_busy then return nil, "leanjson.decoder: input operation in progress" end
     self.input_busy = true
     local ok, value = pcall(function()
         leases.check(self.scope)
@@ -350,7 +350,7 @@ end
 
 function Decoder:get(query)
     if self.failure then return nil, "ERROR", self.failure end
-    if self.closed then return nil, "ERROR", "qjson.decoder: closed" end
+    if self.closed then return nil, "ERROR", "leanjson.decoder: closed" end
     local ok, segments = pcall(path.parse, query)
     if not ok then return nil, "ERROR", tostring(segments) end
     local usable, source_error = pcall(leases.check, self.scope)
@@ -363,9 +363,9 @@ function Decoder:get(query)
 end
 
 function Decoder:abort(reason)
-    if self.finished then return nil, "qjson.decoder: cannot abort a finished decoder" end
-    if self.closed then return nil, self.failure or "qjson.decoder: closed" end
-    self:fail(reason or "qjson.decoder: aborted")
+    if self.finished then return nil, "leanjson.decoder: cannot abort a finished decoder" end
+    if self.closed then return nil, self.failure or "leanjson.decoder: closed" end
+    self:fail(reason or "leanjson.decoder: aborted")
     return true
 end
 

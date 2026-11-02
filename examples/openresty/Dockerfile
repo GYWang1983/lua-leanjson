@@ -26,21 +26,21 @@ WORKDIR /workspace
 CMD ["bash"]
 
 FROM dev AS build
-ARG QJSON_REVISION
-RUN test ${#QJSON_REVISION} = 40
+ARG LEANJSON_REVISION
+RUN test ${#LEANJSON_REVISION} = 40
 COPY . /workspace
 RUN cargo build --locked --release
 
 FROM ${OPENRESTY_IMAGE} AS runtime
-ARG QJSON_REVISION
-LABEL org.opencontainers.image.source="https://github.com/GYWang1983/lua-qjson" \
-    org.opencontainers.image.revision="${QJSON_REVISION}"
-ENV LD_LIBRARY_PATH=/opt/qjson/lib
-COPY --from=build /workspace/target/release/libqjson.so /opt/qjson/lib/libqjson.so
-COPY --from=build /workspace/lua/ /opt/qjson/lua/
-COPY --from=build /workspace/examples/openresty/ /opt/qjson/examples/
-COPY --from=build /workspace/LICENSE /opt/qjson/LICENSE
+ARG LEANJSON_REVISION
+LABEL org.opencontainers.image.source="https://github.com/GYWang1983/lua-leanjson" \
+    org.opencontainers.image.revision="${LEANJSON_REVISION}"
+ENV LD_LIBRARY_PATH=/opt/leanjson/lib
+COPY --from=build /workspace/target/release/libleanjson.so /opt/leanjson/lib/libleanjson.so
+COPY --from=build /workspace/lua/ /opt/leanjson/lua/
+COPY --from=build /workspace/examples/openresty/ /opt/leanjson/examples/
+COPY --from=build /workspace/LICENSE /opt/leanjson/LICENSE
 COPY --from=build /usr/local/share/lua/5.1/resty/ /usr/local/openresty/site/lualib/resty/
-RUN mkdir -p /tmp/qjson-body /tmp/qjson-logs/logs && chmod 777 /tmp/qjson-body /tmp/qjson-logs
+RUN mkdir -p /tmp/leanjson-body /tmp/leanjson-logs/logs && chmod 777 /tmp/leanjson-body /tmp/leanjson-logs
 EXPOSE 8080
-CMD ["/usr/local/openresty/nginx/sbin/nginx", "-p", "/tmp/qjson-logs/", "-c", "/opt/qjson/examples/nginx.conf"]
+CMD ["/usr/local/openresty/nginx/sbin/nginx", "-p", "/tmp/leanjson-logs/", "-c", "/opt/leanjson/examples/nginx.conf"]

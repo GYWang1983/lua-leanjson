@@ -1,9 +1,9 @@
 local cjson = require "cjson"
-local qjson = require "qjson"
-local adapter = require "qjson.openresty"
+local leanjson = require "leanjson"
+local adapter = require "leanjson.openresty"
 local http = require "resty.http"
 local metrics = require "metrics"
-local method = ngx.var.arg_method or "qjson"
+local method = ngx.var.arg_method or "leanjson"
 local initial = metrics.sample()
 local lua_max = initial.lua_kib
 local function sample()
@@ -20,8 +20,8 @@ if method == "cjson" or ngx.var.arg_cold == "1" then
         local ok, err = metrics.cold_advice(file)
         cold = ok and "fsync-fadvise-dontneed" or err
     end
-    if method == "qjson" then
-        body = file and qjson.decode_file(file, opts) or qjson.decode(raw, opts)
+    if method == "leanjson" then
+        body = file and leanjson.decode_file(file, opts) or leanjson.decode(raw, opts)
     else
         if file then
             -- Explicit complete-body baseline: include the original full string
@@ -52,17 +52,17 @@ local function copy(value)
 end
 local branches = {}
 for i = 1, (tonumber(ngx.var.arg_branches) or 2) do
-    local branch = method == "qjson" and qjson.fork(body) or copy(body)
+    local branch = method == "leanjson" and leanjson.fork(body) or copy(body)
     branch.model = "rewritten-" .. i
     branches[i] = branch
 end
 sample()
 local client = http.new()
 client:set_timeout(30000)
-assert(client:connect { scheme = "http", host = "127.0.0.1", port = tonumber(os.getenv("QJSON_SINK_PORT")) })
+assert(client:connect { scheme = "http", host = "127.0.0.1", port = tonumber(os.getenv("LEANJSON_SINK_PORT")) })
 local response, err, output
 local headers = { ["x-capture-id"] = ngx.req.get_headers()["x-capture-id"] }
-if method == "qjson" then
+if method == "leanjson" then
     response, err, output = adapter.request(client, { method = "POST", path = "/sink", headers = headers }, branches[1], opts)
 else
     local encoded = cjson.encode(branches[1])
@@ -75,9 +75,9 @@ local sink = cjson.decode(assert(response:read_body()))
 client:close()
 sample()
 local final = metrics.sample()
-if method == "qjson" then
-    for _, branch in ipairs(branches) do qjson.close(branch) end
-    qjson.close(body)
+if method == "leanjson" then
+    for _, branch in ipairs(branches) do leanjson.close(branch) end
+    leanjson.close(body)
 end
 ngx.header.content_type = "application/json"
 ngx.say(cjson.encode { method = method, source_bytes = tonumber(ngx.var.content_length), input = info,

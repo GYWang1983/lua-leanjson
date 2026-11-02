@@ -1,4 +1,4 @@
-//! qjson: Rust JSON decoder for LuaJIT FFI consumers.
+//! leanjson: Rust JSON decoder for LuaJIT FFI consumers.
 
 pub mod error;
 pub mod options;
@@ -25,5 +25,5 @@ pub mod __test_api {
 #[doc(hidden)]
 pub mod __bench_api {
     pub use crate::doc::Document;
-    pub use crate::options::{Options, QJSON_MODE_LAZY};
+    pub use crate::options::{Options, LEANJSON_MODE_LAZY};
 }

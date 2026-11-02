@@ -1,6 +1,6 @@
 # Contributing
 
-Thanks for helping improve qjson. The project is a Rust JSON decoder exposed to
+Thanks for helping improve leanjson. The project is a Rust JSON decoder exposed to
 LuaJIT through FFI, so changes often need both Rust and Lua verification.
 
 ## Development setup
@@ -58,8 +58,8 @@ LD_LIBRARY_PATH=./target/release \
   busted --lua="$(command -v luajit)" tests/lua --lpath='./lua/?.lua'
 ```
 
-On macOS, the release cdylib is named `libqjson.dylib`; if the direct Lua test
-command cannot find qjson, add the dylib template to `LUA_CPATH`:
+On macOS, the release cdylib is named `libleanjson.dylib`; if the direct Lua test
+command cannot find leanjson, add the dylib template to `LUA_CPATH`:
 
 ```sh
 DYLD_LIBRARY_PATH=./target/release \
@@ -117,8 +117,8 @@ When adding, removing, or renumbering any code, keep these files in sync in the
 same change:
 
 - `src/error.rs`
-- `include/qjson.h`
-- `lua/qjson.lua`
+- `include/leanjson.h`
+- `lua/leanjson.lua`
 
 Add or update tests that prove the new value can cross the FFI boundary and is
 visible from Lua when applicable. Renumbering existing codes is a breaking
@@ -138,7 +138,7 @@ the PR description so reviewers can intentionally skip the changelog update.
 
 ## Fuzzing
 
-qjson parses arbitrary bytes at an API gateway trust boundary. The Rust decoder
+leanjson parses arbitrary bytes at an API gateway trust boundary. The Rust decoder
 has a cargo-fuzz harness for parser regression checks.
 
 Install the local fuzzing tools:
@@ -157,16 +157,16 @@ cargo +nightly fuzz run fuzz_ffi_ops -- -max_total_time=60
 cargo +nightly fuzz run fuzz_parse_lazy -- -max_total_time=60
 ```
 
-The `fuzz_parse_eager` target compares qjson EAGER parse accept/reject behavior
+The `fuzz_parse_eager` target compares leanjson EAGER parse accept/reject behavior
 against `serde_json::Value`. It skips inputs deeper than 64 containers because
 deep nesting has its own target. It also documents two `serde_json::Value`
-rejections that qjson accepts at parse time: numbers outside serde's numeric
+rejections that leanjson accepts at parse time: numbers outside serde's numeric
 range and escaped unpaired UTF-16 surrogates. The latter is guarded by an
 input-level surrogate check because serde may report a leading surrogate as an
-unexpected end of hex escape; qjson rejects those strings later if decoded.
+unexpected end of hex escape; leanjson rejects those strings later if decoded.
 
-The `fuzz_depth` target is non-differential. It pins qjson's nesting contract:
-depth `N` is accepted and `N+1` returns `QJSON_NESTING_TOO_DEEP` at both the
+The `fuzz_depth` target is non-differential. It pins leanjson's nesting contract:
+depth `N` is accepted and `N+1` returns `LEANJSON_NESTING_TOO_DEEP` at both the
 default depth (`1024`) and the clamped ceiling (`4096`). Accepted boundary
 inputs are also walked through the FFI cursor API to exercise Phase 2 without
 recursive descent.
@@ -178,13 +178,13 @@ parses/frees, and mixed root/cursor accessors.
 
 The `fuzz_parse_lazy` target is the Phase 2 semantic replay target. It compares
 serde-accepted inputs by reconstructing a whole `serde_json::Value` through
-qjson's public cursor FFI APIs, including ordered `object_entry_at` replay,
+leanjson's public cursor FFI APIs, including ordered `object_entry_at` replay,
 varied-order `cursor_field` / `cursor_index` lookups, and root getter vs cursor
 getter consistency for path-safe unique-key paths. It normalizes numbers through
-qjson's `f64` getter semantics, with serde_json's `float_roundtrip` parser
+leanjson's `f64` getter semantics, with serde_json's `float_roundtrip` parser
 enabled for bit-exact `f64` oracle comparisons. Duplicate keys and path-like
 keys are covered by ordered entry replay; they are not used for path getter
-consistency because qjson path syntax cannot express those object members
+consistency because leanjson path syntax cannot express those object members
 unambiguously. Repeated varied-order sibling lookups exercise both cold and warm
 skip-cache paths.
 
@@ -207,7 +207,7 @@ quick regression signal without pretending to be a deep fuzz campaign.
 
 ## Lua encode property tests
 
-`qjson.encode` and `qjson.materialize` live in Lua (`lua/qjson/table.lua`), so
+`leanjson.encode` and `leanjson.materialize` live in Lua (`lua/leanjson/table.lua`), so
 they are outside cargo-fuzz's Rust decoder targets. Lua-side round-trip coverage
 uses deterministic busted property tests instead of luzer for now: busted is
 already installed in CI and gives a portable PR regression guard without adding
@@ -224,7 +224,7 @@ Increase the generated case count or pin a different deterministic seed when
 investigating locally:
 
 ```sh
-make lua-property-test QJSON_PROP_CASES=1000 QJSON_PROP_SEED=12345
+make lua-property-test LEANJSON_PROP_CASES=1000 LEANJSON_PROP_SEED=12345
 ```
 
 The property suite generates valid JSON containers, runs
@@ -245,7 +245,7 @@ Stress this focused suite locally by overriding case/step count and seed:
 
 ```sh
 make lua-mutation-property-test \
-  QJSON_MUT_PROP_CASES=4000 \
-  QJSON_MUT_PROP_STEPS=200 \
-  QJSON_MUT_PROP_SEED=12345
+  LEANJSON_MUT_PROP_CASES=4000 \
+  LEANJSON_MUT_PROP_STEPS=200 \
+  LEANJSON_MUT_PROP_SEED=12345
 ```

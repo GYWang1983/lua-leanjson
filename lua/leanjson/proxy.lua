@@ -2,7 +2,7 @@
 -- associates a public (always empty) Lua table with its private state.
 local M = {}
 local ffi = require("ffi")
-local leases = require("qjson.leases")
+local leases = require("leanjson.leases")
 local META = setmetatable({}, { __mode = "k" })
 local GC_TOKENS = setmetatable({}, { __mode = "k" })
 local Object, Array = {}, {}
@@ -55,7 +55,7 @@ function M.span(node)
         local first, last = node.backend:span(node.handle)
         if type(first) ~= "number" or type(last) ~= "number"
             or first < 0 or last < first or first ~= math.floor(first) or last ~= math.floor(last)
-        then error("qjson: invalid source span", 0) end
+        then error("leanjson: invalid source span", 0) end
         return node.backend, first, last
     end
 end
@@ -141,8 +141,8 @@ snapshot = function(value, active, depth)
     if holder then leases.check(holder.scope); return holder.cell.node end
     local tv = type(value)
     if tv ~= "table" then return { kind = tv, value = value } end
-    if active[value] then error("qjson.encode: circular reference", 0) end
-    if depth > 1000 then error("qjson.encode: max depth exceeded", 0) end
+    if active[value] then error("leanjson.encode: circular reference", 0) end
+    if depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
     active[value] = true
     local kind, n = config.classify(value)
     local node = { kind = kind, keys = {}, values = {} }
@@ -155,7 +155,7 @@ snapshot = function(value, active, depth)
         for key, child in pairs(value) do
             local kt = type(key)
             if kt ~= "string" and kt ~= "number" then
-                error("qjson.encode: object key must be a string or number, got " .. kt, 0)
+                error("leanjson.encode: object key must be a string or number, got " .. kt, 0)
             end
             key = tostring(key)
             if node.values[key] == nil then node.keys[#node.keys + 1] = key end
@@ -183,13 +183,13 @@ function M.get_path(value, segments)
     return leases.guard(owner.scope, owner.cell.node, function()
         local cell, node = owner.cell, owner.cell.node
         for i, segment in ipairs(segments) do
-            if node.kind ~= segment.kind then error("qjson.get: type mismatch", 0) end
+            if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
             local _, values = M.members(node, owner.scope)
             leases.check(owner.scope)
             node = values[segment.key]
             if node == nil then return nil end
             if i == #segments then return expose(node, cell, segment.key, false, owner.scope) end
-            if node.kind ~= "object" and node.kind ~= "array" then error("qjson.get: type mismatch", 0) end
+            if node.kind ~= "object" and node.kind ~= "array" then error("leanjson.get: type mismatch", 0) end
             -- Intermediate cells are canonical logical links, not public
             -- holders. Every yielded operation still uses the initiating scope.
             cell = child_cell(node, cell, segment.key, false, owner.scope)
@@ -297,7 +297,7 @@ local function mutate(holder, prepare)
                 local current = live_holder(entry.cell)
                 if entry.cell.closed or entry.cell.node ~= entry.node or entry.cell.version ~= entry.version
                     or entry.cell.parent ~= entry.parent or entry.cell.key ~= entry.key or current ~= entry.holder
-                then error("qjson: stale proxy mutation", 0) end
+                then error("leanjson: stale proxy mutation", 0) end
             end
             -- Backend lease transfers, cache edits and publication do not yield.
             for _, update in ipairs(updates) do
@@ -324,15 +324,15 @@ local function write(proxy, key, value)
     local cell = holder.cell
     return mutate(holder, function(original, scope, dependencies)
         if original.kind == "object" then
-            if type(key) ~= "string" then error("qjson: object key must be a string, got " .. type(key), 0) end
+            if type(key) ~= "string" then error("leanjson: object key must be a string, got " .. type(key), 0) end
         elseif type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key == math.huge then
-            error("qjson: array index must be a positive integer", 0)
+            error("leanjson: array index must be a positive integer", 0)
         end
         local present = type(value) ~= "nil"
         if original.kind == "array" then
             local n = array_length(original, scope)
             if (present and key > n + 1) or (not present and key < n) then
-                error("qjson: sparse proxy arrays require explicit materialization", 0)
+                error("leanjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
         local node = present and M.snapshot(value) or nil
@@ -367,7 +367,7 @@ function M.ipairs(value)
     local index, version = 0, cell.version
     return function()
         leases.check(holder.scope)
-        if cell.version ~= version then error("qjson: invalid argument", 0) end
+        if cell.version ~= version then error("leanjson: invalid argument", 0) end
         index = index + 1
         local child = read(value, index)
         if child ~= nil then return index, child end
@@ -412,31 +412,31 @@ Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs
 local function check_index(index, n, inserting)
     if type(index) ~= "number" or index ~= math.floor(index) or index < 1
         or index > n + (inserting and 1 or 0)
-    then error("qjson: array index out of range", 0) end
+    then error("leanjson: array index out of range", 0) end
 end
 
 local function check_plain_array(value, index, inserting)
-    if M.type(value) ~= "array" then error("qjson: expected array", 0) end
+    if M.type(value) ~= "array" then error("leanjson: expected array", 0) end
     local n = #value
     local count = 0
     for key in pairs(value) do
         if type(key) ~= "number" or key < 1 or key ~= math.floor(key) or key > n then
-            error("qjson: array operations require a dense array", 0)
+            error("leanjson: array operations require a dense array", 0)
         end
         count = count + 1
     end
-    if count ~= n then error("qjson: array operations require a dense array", 0) end
+    if count ~= n then error("leanjson: array operations require a dense array", 0) end
     check_index(index, n, inserting)
 end
 
 function M.array_insert(value, index, child)
     local holder = META[value]
     if not holder then check_plain_array(value, index, true) end
-    if type(child) == "nil" then error("qjson: array_insert requires a value", 0) end
+    if type(child) == "nil" then error("leanjson: array_insert requires a value", 0) end
     if not holder then table.insert(value, index, child); return end
     local cell = holder.cell
     return mutate(holder, function(original, scope, dependencies)
-        if original.kind ~= "array" then error("qjson: expected array", 0) end
+        if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, true)
         local inserted = M.snapshot(child)
@@ -461,7 +461,7 @@ function M.array_remove(value, index)
     if not holder then check_plain_array(value, index, false); return table.remove(value, index) end
     local cell = holder.cell
     return mutate(holder, function(original, scope, dependencies)
-        if original.kind ~= "array" then error("qjson: expected array", 0) end
+        if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, false)
         local _, old = M.members(original, scope)

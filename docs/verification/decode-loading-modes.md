@@ -53,6 +53,14 @@ cases pause after multiple reads and verify cleanup before resuming, plus normal
 and error exits. The earlier full gate was not rerun for this two-file fix; native,
 ABI and unchanged HTTP evidence retains its original revision boundary.
 
+The final whole-change review covered `634f827..41991f0` and found no remaining
+critical, important or minor issues. An additional public-API probe verified
+preloaded array insertion/removal, shifted held children, fork/frozen-reader
+isolation and child leases. Selected reads after edits added zero source
+callbacks. Mutations through an unselected route-only ancestor can still scan
+that ancestor's metadata; the preload read guarantee does not promise I/O-free
+writes. The review, probe source and output are included in the raw archive.
+
 ## Independent acceptance method
 
 ```sh

@@ -90,5 +90,5 @@ shortcuts for measured public behavior.
 - [x] Update README examples and report exact revisions, scopes, selected-memory
   accounting, path limitations and performance tradeoffs. Do not claim a complete
   JSONPath/Schema implementation or universal cjson performance equivalence.
-- [ ] Complete independent task/whole-change review and meaningful final checks;
+- [x] Complete independent task/whole-change review and meaningful final checks;
   preserve the local branch/worktree and original raw evidence.

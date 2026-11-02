@@ -75,8 +75,17 @@ def main():
             "--env", f"LD_LIBRARY_PATH={library_path}"]
     if args.target_volume:
         base.extend(["--mount", f"type=volume,source={args.target_volume},target=/workspace/target,readonly"])
+    digest_command = base + ["--entrypoint", "sha256sum", args.image, f"{library_path}/libleanjson.so"]
     base.extend(["--entrypoint", "/usr/local/openresty/bin/resty", args.image,
                  "-I", library, "-I", "/workspace/tests/openresty"])
+
+    def runtime_fingerprint():
+        native = subprocess.check_output(digest_command, text=True).split()[0]
+        lua_digest = hashlib.sha256()
+        if not args.runtime_image:
+            for path in sorted((repo / "lua").rglob("*.lua")):
+                lua_digest.update(str(path.relative_to(repo)).encode() + b"\0" + path.read_bytes() + b"\0")
+        return {"native_sha256": native, "lua_sha256": None if args.runtime_image else lua_digest.hexdigest()}
 
     def run(script, values):
         began = time.monotonic()
@@ -91,7 +100,9 @@ def main():
         '{{index .Config.Labels "org.opencontainers.image.revision"}}'], text=True).strip()
     revision = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True).strip())
+    runtime = runtime_fingerprint()
     environment = {"kind": "environment", "image": args.image, "image_id": image_id, "image_revision": image_revision,
+                   "runtime": runtime,
                    "checkout_revision": revision, "checkout_dirty": dirty, "runtime_image": args.runtime_image,
                    "target_bytes": args.bytes, "branches": args.branches, "sources": args.sources,
                    "cases": args.cases, "index_budget_bytes": args.index_budget_bytes,
@@ -141,6 +152,8 @@ def main():
                       f"cjson={receipt['cjson_hwm_kib']/1024:.2f} MiB "
                       f"leanjson={receipt['leanjson_hwm_kib']/1024:.2f} MiB ratio={ratio:.3f}", flush=True)
             (output / input_name).unlink()
+    if runtime_fingerprint() != runtime:
+        raise AssertionError("runtime changed during measurement; results are not accepted")
     summary = {"passed":not failures, "pairs":len(receipts), "failures":failures, "receipts":receipts,
                "results":str(output / "results.jsonl")}
     (output / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

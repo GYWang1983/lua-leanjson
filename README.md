@@ -1,335 +1,270 @@
-# qjson
+# LeanJSON
 
-Rust-implemented fast JSON decoder exposed to LuaJIT via FFI. Optimized for the common case where a large JSON is parsed once and only a small number of fields are extracted before the document is discarded.
+**Memory-conscious JSON processing for LuaJIT and OpenResty.**
 
-Primary supported runtime is OpenResty LuaJIT. Stock LuaJIT is supported with
-the caveats documented below. Standard PUC Lua 5.1/5.2/5.3/5.4 is not
-supported because qjson depends on LuaJIT FFI.
+LeanJSON is a Rust-backed JSON library for applications that receive large
+payloads but inspect or change only a few fields. It exposes mutable Lua proxies
+while keeping untouched content in its original source. File-backed input and
+chunked output let applications avoid assembling the entire request, object
+tree and rewritten body in Lua memory.
 
-See [CHANGELOG.md](CHANGELOG.md) for release notes.
+This project is a fork of **[api7/lua-qjson](https://github.com/api7/lua-qjson)**.
+It builds on qjson's Rust structural scanners, offset indexes, lazy field access
+and LuaJIT FFI integration. The fork adds source-backed mutation, independent
+snapshots, bounded output, file/incremental sources and native OpenResty body
+adapters. It is distributed under its own name, **`lua-leanjson`**, with the Lua
+module **`leanjson`**. Credit for the original implementation belongs to the
+qjson authors; the project retains the [Apache-2.0 license](LICENSE).
 
-## Documentation
+## Why LeanJSON?
 
-- [Migrating from lua-cjson](docs/migrating-from-cjson.md) maps common
-  `cjson.*` calls to qjson and calls out behavior differences.
-- [CONTRIBUTING.md](CONTRIBUTING.md) covers local setup, tests, linting, and
-  release/contribution conventions.
-- [Native OpenResty example](examples/openresty/README.md) receives validated
-  memory/file bodies and sends bounded JSON readers, with a reproducible image.
-- [OpenResty source verification](docs/verification/openresty-json-source.md)
-  documents adapters, ownership, real HTTP acceptance tests, and benchmarks.
+A gateway may need only `model`, `stream` or a few routing parameters from a
+request containing megabytes of messages, prompts or inline media. Decoding all
+that content into Lua values and building another complete JSON string can
+consume substantially more memory than the fields being changed require.
 
-## Status
+LeanJSON keeps source spans for untouched values. Reading a selected value
+decodes it on demand; writing a field records a replacement. A reader then
+combines original spans and modifications into bounded chunks.
 
-This fork adds mutable copy-on-write proxies, independent forks, bounded JSON
-readers, file sources and incremental input under native OpenResty. See the
-[proxy API](docs/source-proxy-api.md), [source API](docs/file-source-api.md),
-and [verified scope and measured limits](docs/verification/openresty-json-source.md).
-Incremental queries publish after full validation; disk I/O is synchronous.
-Long-string workloads can use less memory, but many short objects currently
-use substantially more memory and CPU than cjson.
+This is most useful when:
 
-Initial implementation complete: scalar, AVX2/PCLMUL, and ARM64 NEON/PMULL structural scanners (runtime-dispatched); root-path and cursor APIs; escape-decoded strings; integer/float/bool/typeof/len accessors; FFI panic barrier; and a LuaJIT wrapper. Rust unit/integration tests and Lua busted tests run in CI. The benchmark harness compares against lua-cjson and lua-resty-simdjson on x86_64; ARM64 NEON/PMULL is correctness-tested via the scanner cross-check suite, with a parse + access benchmark on Apple M4 reported in `docs/benchmarks.md` (cjson comparison only).
+- Large strings or subtrees pass through unchanged.
+- Only a small part of the document is inspected or modified.
+- Several independent variants share the same input.
+- Input can stay in a file and output can be consumed incrementally.
 
-## Building
+Memory use still includes structural indexes, keys, modifications and any
+values explicitly read. A long string becomes a complete Lua string when
+accessed. In-memory input retains its original string. LeanJSON does **not**
+promise constant memory or lower memory use for every JSON shape.
+
+## What this fork adds
+
+| Capability | What it enables |
+| --- | --- |
+| Mutable JSON proxies | Read and assign fields without decoding untouched sibling values. |
+| Copy-on-write forks | Create independent request variants that share immutable source data. |
+| Bounded JSON reader | Emit original spans and changed values in chunks, and calculate the encoded length without building a complete output string. |
+| File-backed decoding | Validate and access a file through bounded windows instead of reading the whole file into Lua. |
+| Incremental input | Feed incoming chunks into a parser and owned disk spool. Final values become available after complete validation. |
+| Native OpenResty adapter | Receive memory/file/request-socket input and send readers through lua-resty-http, with explicit cancellation and error handling. |
+| Explicit resource ownership | Close holders deterministically; independently held children, forks and readers keep their source alive. |
+
+The JSON core does not depend on `ngx`. OpenResty integration is isolated in
+`leanjson.openresty`.
+
+## Install from source
+
+The renamed package has **not yet been published to LuaRocks**. Install from
+this fork's development branch; pin a commit for reproducible deployments:
 
 ```sh
-cargo build --release
-# Output: target/release/libqjson.so
+git clone --branch feat/openresty-json-source https://github.com/GYWang1983/lua-leanjson.git
+cd lua-leanjson
+luarocks --lua-version=5.1 make rockspec/lua-leanjson-scm-1.rockspec
 ```
 
-A `Makefile` wraps the common workflows; run `make help` to see `build`, `test`, `lint`, `bench`, and `clean` targets. Override `LUAJIT` / `LUA_CPATH` per invocation if your environment differs from the defaults.
+Building requires Rust/Cargo and LuaRocks configured for LuaJIT's Lua 5.1 ABI.
+The pinned verification environment uses Rust 1.90 and OpenResty LuaJIT.
+Standard PUC Lua is not supported: the library requires LuaJIT FFI.
 
-## Installing
+Rust is a **build-time dependency only**. Runtime deployments need LuaJIT,
+`leanjson.so` and the installed `leanjson.lua` / `leanjson/` modules. The supplied
+[OpenResty Docker example](examples/openresty/README.md) builds and copies the
+native library and Lua modules into a runtime image without Rust.
 
-To install this fork's source/reader APIs, build from the reviewed branch
-(pin its commit for deployment):
+If using a raw Cargo build rather than a LuaRocks installation, make
+`libleanjson.so` (Linux) or `libleanjson.dylib` (macOS) discoverable by the FFI
+loader. For example, Linux development uses `LD_LIBRARY_PATH=target/release`.
 
-```sh
-git clone --branch feat/openresty-json-source https://github.com/GYWang1983/lua-qjson.git
-cd lua-qjson
-luarocks --lua-version=5.1 make rockspec/lua-qjson-0.1.0-1.rockspec
-```
-
-The following registry command installs the upstream release, which does not
-include this fork's additions:
-
-```sh
-luarocks --lua-version=5.1 install lua-qjson
-```
-
-Build/install requirements:
-
-- Rust/Cargo (the rock builds the native library during install)
-- LuaRocks targeting a Lua 5.1 / LuaJIT-compatible tree
-  (`--lua-version=5.1`)
-
-Runtime requirements:
-
-- OpenResty LuaJIT (intended runtime) or stock LuaJIT with the caveats below
-- Access to the installed qjson native library and Lua module files
-
-The Lua module name remains `qjson`:
+## Read, change and fork a document
 
 ```lua
-local qjson = require("qjson")
+local json = require "leanjson"
+
+local body = json.decode([[{
+  "model": "public-model",
+  "stream": true,
+  "messages": [{"role": "user", "content": "Hello"}]
+}]])
+
+print(body.model)                  -- public-model
+local variant = json.fork(body)
+variant.model = "provider-model"  -- body.model stays public-model
+variant.stream = false
+
+local encoded = json.encode(variant)
+json.close(variant)
+json.close(body)
+print(encoded)
 ```
 
-## Production deployment (no Rust at runtime)
+`encode()` is convenient for small results but allocates the complete output
+string. For large results, consume a reader instead. `materialize()` explicitly
+creates ordinary Lua values; reserve it for consumers that require them.
 
-Rust/Cargo is only a build-time dependency. For production images, install the
-rock into a staging tree in a builder stage, then copy that tree into a runtime
-stage that contains OpenResty LuaJIT (preferred) or LuaJIT, but no Rust
-toolchain.
+## Rewrite a file without assembling the output
 
-The runtime file set is small:
+This example keeps the original file as its source, changes `model`, and writes
+chunks of at most 64 KiB to standard output. Cleanup covers ordinary errors as
+well as successful completion.
 
-| Installed path | Purpose |
-|---|---|
-| `/usr/local/lib/lua/5.1/qjson.so` | Compiled native library |
-| `/usr/local/share/lua/5.1/qjson.lua` | Public Lua module |
-| `/usr/local/share/lua/5.1/qjson/lib.lua` | FFI loader |
-| `/usr/local/share/lua/5.1/qjson/table.lua` | Lazy table API and encoder |
-| `/usr/local/share/lua/5.1/qjson/{proxy,reader,source_memory}.lua` | Immutable nodes, bounded output and memory source adapter |
-| `/usr/local/share/lua/5.1/qjson/{leases,options,path,source,source_io}.lua` | Holder ownership, shared parsing policy, paths and file/incremental source support |
-| `/usr/local/share/lua/5.1/qjson/openresty.lua` | Explicit native OpenResty input/output adapter |
+```lua
+local json = require "leanjson"
+local body, variant, reader
 
-The runtime also needs OpenResty LuaJIT (preferred) or LuaJIT, plus the normal
-OS shared libraries required by LuaJIT and the native module.
+local ok, err = pcall(function()
+    body = json.decode_file("request.json", { chunk_size = 65536 })
+    variant = json.fork(body)
+    variant.model = "provider-model"
+    json.close(body)
+    body = nil
 
-Example multi-stage Dockerfile:
+    reader = json.reader(variant, {
+        chunk_size = 65536,
+        normalize_duplicates = true,
+    })
+    json.close(variant)             -- the reader owns its snapshot
+    variant = nil
 
-```Dockerfile
-FROM rust:1-bookworm AS qjson-builder
+    while true do
+        local chunk, read_err = reader:next()
+        if read_err then error(read_err) end
+        if chunk == nil then break end
+        assert(io.write(chunk))
+    end
+end)
 
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends \
-        ca-certificates \
-        git \
-        libluajit-5.1-dev \
-        luarocks \
-        luajit \
-    && rm -rf /var/lib/apt/lists/*
-
-RUN luarocks --lua-version=5.1 install --tree=/qjson-rock lua-qjson
-
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates luajit \
-    && rm -rf /var/lib/apt/lists/*
-
-COPY --from=qjson-builder /qjson-rock/ /usr/local/
-
-RUN ! command -v cargo \
-    && ! command -v rustc \
-    && luajit -e 'local qjson = require("qjson"); local doc = qjson.parse("{\"ok\":true}"); assert(doc:get_bool("ok") == true)'
+if reader then reader:close() end
+json.close(variant)
+json.close(body)
+if not ok then error(err) end
 ```
 
-For local release testing from a checkout, use the same staging pattern with
-the rockspec:
+`reader:length()` returns the actual encoded byte count or `nil, error`, without
+advancing output. `next()` returns `nil, nil` at EOF and `nil, error` on failure.
+It completes validation/counting before returning its first chunk. Do not turn
+reader errors into ordinary EOF when integrating with an HTTP client.
+
+The input file must stay immutable while holders use it. LeanJSON closes its
+file descriptor when the final holder releases it; it never deletes an
+original input file. Incremental decoder spools are owned by LeanJSON and are
+removed after their final holder closes.
+
+## Native OpenResty integration
+
+```lua
+local input = require "leanjson.openresty"
+```
+
+- `input.read_body(opts)` waits for Nginx to receive the body, then uses its
+  memory buffer or temporary file.
+- `input.start_body(opts)` can receive and scan chunks while a fixed-length
+  HTTP/1.1 upload is arriving. HTTP/2 and chunked uploads use the completed-body
+  fallback. The current decoder publishes final query values only after EOF
+  and full validation; this is not early forwarding of an incomplete JSON body.
+- `input.request(httpc, request, value, opts)` sends bounded JSON chunks through
+  lua-resty-http, sets the encoded Content-Length, and preserves reader errors.
+  It makes one attempt and does not retry automatically.
+
+The [complete handler](examples/openresty/handler.lua) covers client aborts,
+source errors, holder cleanup and connection cleanup. Configure
+`lua_check_client_abort on`, register cleanup before operations that may yield,
+and close each independently owned container view, fork and reader. Closing
+only the root intentionally leaves independently held children alive.
+
+Run the reproducible example from a committed checkout:
 
 ```sh
-luarocks --lua-version=5.1 make --tree=/tmp/qjson-rock rockspec/lua-qjson-0.1.0-1.rockspec
+scripts/build-openresty-image.sh HEAD lua-leanjson-openresty:local
+scripts/verify-openresty-image.sh lua-leanjson-openresty:local
+docker run --rm -p 8080:8080 -v leanjson-body:/tmp/leanjson-body lua-leanjson-openresty:local
 ```
 
-Then copy `/tmp/qjson-rock` into the runtime filesystem root that LuaJIT uses
-for `/usr/local`.
+Then, from another terminal:
 
-## Testing
+```sh
+curl --data-binary '{"model":"public-model","prompt":"hello"}' http://localhost:8080/
+```
+
+The example forwards to a local test sink. See the [deployment instructions](examples/openresty/README.md)
+for buffering, disk storage, upstream settings and cancellation behavior.
+
+## Measured advantages and current limits
+
+A recorded native OpenResty benchmark of this fork, **before the LeanJSON
+rename and final ownership/policy fixes**, measured these process RSS high-water
+marks under the same input, concurrency and branch count:
+
+| Workload | lua-cjson | This fork's measured baseline |
+| --- | ---: | ---: |
+| 8 MiB prompt dominated by a long string | 73.8 MiB | 15.1 MiB |
+| 8 MiB nested messages with long content | 73.8 MiB | 14.9 MiB |
+| 32,768 short objects, about 0.9 MiB input | 45.9 MiB | 254.3 MiB |
+
+The long-string cases used much less memory but had **higher latency and lower
+throughput**. Many short objects were substantially worse in both memory and
+CPU. These historical measurements are not timings of the renamed revision or
+a production guarantee. The [full verification report](docs/verification/openresty-json-source.md)
+records commits, hardware, methodology, latency, throughput and limitations;
+[raw measurements](docs/verification/openresty-json-source-benchmarks.jsonl)
+retain their original qjson labels for traceability.
+
+Additional boundaries:
+
+- File I/O is synchronous. Bounded buffers and yields do not make disk access
+  asynchronous; storage latency can still delay an OpenResty worker.
+- This is not a transparent drop-in replacement for lua-cjson. Use
+  `leanjson.encode` for proxies, or explicitly materialize for other encoders.
+- Native `next`, `rawget` and `rawset` bypass proxy behavior. Use
+  `json.pairs`, `json.ipairs` and `json.len`; these also work on stock LuaJIT
+  without Lua 5.2 compatibility support.
+- Proxy arrays stay dense. Use `array_insert` / `array_remove` for structural
+  changes. `nil` deletes a field; `json.null` represents JSON null.
+- Concurrent mutations on the same branch may report a stale-mutation conflict
+  across a yield. Use independent forks or handle the conflict explicitly.
+- The core follows strict validation by default. File/incremental Source APIs
+  require complete validation; the inherited low-level `parse` API also has
+  an explicitly opt-in lazy-validation mode.
+
+## Compatibility and migration
+
+All current public names use the new namespace:
+
+| Surface | LeanJSON name |
+| --- | --- |
+| Repository / LuaRocks package | `lua-leanjson` |
+| Lua module / OpenResty adapter | `leanjson` / `leanjson.openresty` |
+| Rust crate / native library | `leanjson` / `libleanjson` |
+| C header / exported symbols | `include/leanjson.h` / `leanjson_*` |
+| Environment variables | `LEANJSON_*` |
+
+There is no `qjson` compatibility alias. Applications using this fork's old
+name must update imports and build/package references; C callers must use the
+new header and rebuild against the new library. Upstream qjson remains a
+separate project and package.
+
+## Verification and contributing
+
+The canonical full gate builds Rust modes, checks Clippy/Lua lint, runs the Lua
+suite and extended properties, replays JSON corpora, and exercises real native
+OpenResty HTTP paths including cancellation and resource cleanup:
 
 ```sh
 git submodule update --init --recursive
-cargo test --release
+make openresty-dev-image
+make openresty-docker-test
 ```
 
-## LuaJIT Usage
+`make help` lists focused build, test and benchmark commands. CI additionally
+checks Linux/macOS, multiple OpenResty versions, installed packaging, fuzz
+corpus replay and memory tooling. Test results describe their recorded revision;
+see the [CI runs](https://github.com/GYWang1983/lua-leanjson/actions/workflows/ci.yml)
+for the current branch.
 
-```lua
-local qjson = require("qjson")
-local doc = qjson.parse(json_str)
-
--- Root-path getter:
-local model = doc:get_str("body.model")
-
--- Cursor (avoid re-walking shared prefix):
-local body = doc:open("body")
-local model      = body:get_str("model")
-local temp       = body:get_f64("temperature") -- Lua number (double)
-local request_id = body:get_i64("request_id")  -- int64_t cdata, lossless
-```
-
-`get_i64` returns LuaJIT `int64_t` cdata and `get_u64` returns `uint64_t`
-cdata, preserving JSON integers that do not fit exactly in a Lua `number`.
-Use `get_f64` for the convenient Lua-number path, or `tonumber(...)` when a
-64-bit cdata value is known to fit in double precision.
-
-### Lazy table API (`qjson.decode` / `qjson.encode`)
-
-For callers migrating from `cjson`, an alternative API returns a table-shaped
-lazy view. Reads decode requested values; writes record immutable field overlays
-without decoding sibling values. Arrays and objects keep private proxy state.
-See [mutable views and bounded output](docs/source-proxy-api.md) for snapshot,
-duplicate-key, array-operation and reader semantics.
-
-```lua
-local qjson    = require("qjson")
-local cjson = require("cjson")          -- optional; provides null / empty_array sentinels
-
-local t = qjson.decode(json_str)
-
-print(t.model)
-for _, m in qjson.ipairs(t.messages) do
-    print(m.role, m.content)
-end
-
-t.extra = "x"
-
-local s = qjson.encode(t)                  -- cjson-compatible encode path for lazy proxies
-```
-
-`qjson.encode` works on lazy proxies (re-emitting unmodified subtrees as the
-original JSON bytes), real Lua tables (matching `cjson.encode` output), mixed
-trees, and LuaJIT `int64_t` / `uint64_t` cdata values. Callers cannot pass a
-lazy proxy directly to `cjson.encode` (cjson bypasses metamethods in C); use
-`qjson.encode` instead, or call `qjson.materialize(t)` to get a plain Lua table
-that any third-party encoder can handle.
-
-`qjson.fork(value)` creates an independent snapshot while sharing source nodes.
-Assigning a table or proxy to a proxy field also captures a snapshot. Object
-getters use the last duplicate key; untouched numbers and strings retain their
-raw tokens until explicitly replaced. Proxy arrays support dense replacement,
-append and explicit `qjson.array_insert` / `qjson.array_remove`; interior nil holes
-and noncontiguous writes require explicit materialization.
-
-`qjson.reader(value, { chunk_size = 65536, normalize_duplicates = true })`
-freezes its input and returns `length()`, `next()` and idempotent `close()` methods.
-It emits bounded chunks for original source spans and newly assigned strings.
-`next()` returns `nil, nil` at EOF or `nil, error` on failure; later calls return a
-closed error. `length()` counts actual encoded bytes without building output.
-`qjson.encode` continues to allocate a complete string. The new core APIs do not
-require `ngx`; input remains an in-memory string in this phase.
-
-`qjson.materialize(t, { keep_origin = true })` keeps lightweight provenance on
-the returned plain Lua tables so `qjson.encode` can preserve key order and
-reuse selected original tokens. Recording is intentionally threshold-based:
-
-- String children are recorded only when their raw JSON token (including
-  quotes) is longer than 24 bytes.
-- Table children are recorded in the parent only when the child origin is
-  complete and its raw subtree span is longer than 64 bytes.
-- Numbers, booleans, null, and short strings are not recorded.
-
-Each recorded container tracks whether its provenance is complete:
-
-- `complete = true`: every child needed to prove byte-for-byte identity is
-  recorded, so an unchanged container can be emitted as the original slice.
-- `complete = false`: provenance is partial. Objects still preserve original
-  key order for existing keys and can reuse recorded large children, but arrays
-  fall back to normal array/object encoding.
-
-Because materialized tables are ordinary Lua tables (no dirty-tracking
-metatable), `keep_origin` with partial provenance preserves JSON-equivalent
-output rather than guaranteeing byte-identical re-emission of every unchanged
-small token.
-
-**Native `next` caveat.** `next(t)` is not proxy-aware: it bypasses the
-`__pairs` / `__ipairs` hooks and sees the proxy's empty raw storage instead of
-JSON fields. Do not use native `next` to iterate a lazy proxy or test whether it
-is empty. Use `qjson.pairs(t)`, `qjson.ipairs(t)`, or `qjson.len(t)` instead, or
-call `qjson.materialize(t)` before passing the value to code that requires
-ordinary Lua table traversal.
-
-**LuaJIT compat-52 caveat.** `for k, v in pairs/ipairs(t)` and `#t` on a lazy
-proxy rely on `__pairs` / `__ipairs` / `__len`, which LuaJIT only invokes when
-built with `LUAJIT_ENABLE_LUA52COMPAT` (OpenResty's default and the intended
-runtime setup). On a stock LuaJIT 5.1, use the explicit `qjson.pairs(t)`,
-`qjson.ipairs(t)`, and `qjson.len(t)` helpers — they work on both builds.
-
-## Testing — Lua
-
-Requires LuaJIT + busted + lua-cjson installed system-wide.
-
-```sh
-cargo build --release
-LD_LIBRARY_PATH="$PWD/target/release" \
-  busted --lua="$(which luajit)" tests/lua --lpath='./lua/?.lua'
-```
-
-## Benchmarks
-
-`qjson` vs. `lua-cjson` and `lua-resty-simdjson` on multimodal
-chat-completion payloads (median ops/s under OpenResty LuaJIT 2.1,
-AMD EPYC Rome, Zen 2, 4 vCPUs; 5 rounds, deterministic payload).
-
-### Parse + access (read-only)
-
-| Size | cjson | simdjson | `qjson.parse` | `qjson.decode + access` | speedup vs. cjson |
-|---:|---:|---:|---:|---:|---:|
-|   2 KB |  92,716 | 102,602 | 128,005 | 125,815 |  1.4× /  1.4× |
-|  60 KB |   9,007 |  82,699 | 116,198 | 219,491 | 12.9× / 24.4× |
-| 100 KB |   2,769 |  40,437 |  84,034 | 121,803 | 30.3× / 44.0× |
-|   1 MB |     512 |   4,020 |  16,056 |  15,400 | 31.4× / 30.1× |
-|  10 MB |      51 |     363 |   1,830 |   1,783 | 35.9× / 35.0× |
-
-### Encode (unmodified) + modify-then-re-encode
-
-Historical numbers from the same upstream run as [`docs/benchmarks.md`](docs/benchmarks.md).
-These timings predate the mutable proxy and reader changes; rerun benchmarks on
-the target build before using them for a comparison.
-
-| Size | encode (unmodified) | modify top + encode | modify nested + encode |
-|---:|---:|---:|---:|
-|    2 KB | 260,322 | 58,242 |  43,003 |
-|   60 KB | 141,563 | 37,498 | 134,590 |
-|  100 KB | 105,374 | 28,114 |  71,942 |
-|    1 MB |  16,269 |  3,125 |  13,649 |
-
-> **qjson.encode(unmodified)** reuses the original byte range without decoding
-> fields, then collects the bounded output into the requested complete string.
-> **qjson modify+encode** records changes without decoding siblings; unmodified
-> siblings stay on the fast path. See [`docs/benchmarks.md`](docs/benchmarks.md)
-> for the full size ladder, cjson comparisons, speedup ratios, memory
-> numbers, and environment.
-
-```sh
-make bench-smoke # correctness smoke, no timing
-make bench       # qjson vs cjson and lua-resty-simdjson
-```
-
-## RFC 8259 conformance
-
-This crate implements RFC 8259 with both strict and lenient modes; the strict
-(eager) mode is the default and is required by API-gateway use cases that must
-reject malformed payloads before forwarding them upstream.
-
-- Strict-mode acceptance corpus: `tests/rfc8259_compliance.rs`
-- Industry corpus: `tests/json_test_suite.rs` (against the
-  [JSONTestSuite](https://github.com/nst/JSONTestSuite) submodule at
-  `tests/vendor/JSONTestSuite`)
-- Behavior on implementation-defined (`i_*`) cases: `docs/rfc8259-conformance.md`
-
-### Switching modes
-
-From Lua:
-
-```lua
-local doc = qjson.parse(json)                            -- eager (default)
-local doc = qjson.parse(json, { lazy = true })           -- lazy mode
-local doc = qjson.parse(json, { max_depth = 256 })       -- stricter depth limit
-local doc = qjson.parse(json, { lazy = true, max_depth = 256 })
-```
-
-From C:
-
-```c
-qjson_options opts = { .mode = QJSON_MODE_LAZY, .max_depth = 256 };
-qjson_doc* doc = qjson_parse_ex(buf, len, &opts, &err);
-```
-
-### Known gaps
-
-There are no known strict-mode structural grammar gaps at this time:
-`tests/json_test_suite.rs::KNOWN_N_FAILURES` is empty, and the RFC 8259
-suite has no ignored structural cases. Update this section whenever a
-temporary conformance exception is introduced.
+- [Proxy, mutation and reader API](docs/source-proxy-api.md)
+- [File/incremental input and ownership](docs/file-source-api.md)
+- [OpenResty APIs, verification and benchmarks](docs/verification/openresty-json-source.md)
+- [Migrating from lua-cjson](docs/migrating-from-cjson.md)
+- [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)

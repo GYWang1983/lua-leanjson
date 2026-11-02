@@ -1,16 +1,20 @@
 -- One fresh native process per method/input/mode. Input construction and the
 -- complete semantic oracle run elsewhere, never in this measured process.
-local json = require "leanjson"
+local method, source, input, output = assert(arg[1]), assert(arg[2]), assert(arg[3]), assert(arg[4])
+assert(method == "leanjson" or method == "cjson")
+local json = method == "leanjson" and require("leanjson") or nil
 local cjson = require "cjson"
 local metrics = require "metrics"
-local method, source, input, output = assert(arg[1]), assert(arg[2]), assert(arg[3]), assert(arg[4])
+if method == "cjson" then
+    assert(not package.loaded.leanjson and not package.loaded["leanjson.lib"] and not package.loaded["leanjson.openresty"],
+        "cjson benchmark requires a fresh process without LeanJSON")
+end
 local access = arg[5] or "model"
 local options = { chunk_size = 65536 }
 if arg[6] then options.index_budget_bytes = assert(tonumber(arg[6])) end
 local branches_count = tonumber(arg[7]) or 0
 if arg[8] then options.index_depth = assert(tonumber(arg[8])) end
 if arg[9] then options.index_array_limit = assert(tonumber(arg[9])) end
-assert(method == "leanjson" or method == "cjson")
 assert(source == "memory" or source == "file" or source == "feed")
 local phases = {}
 local body, raw

@@ -49,7 +49,13 @@ for _ = 1, concurrency do
             assert(res.status == 200, res.body)
             local result = cjson.decode(res.body)
             assert(result.sink.bytes == result.output.length)
-            if method == "leanjson" then assert(result.output.max_chunk <= chunk_size) end
+            if method == "leanjson" then
+                assert(result.output.max_chunk <= chunk_size)
+                local stats = assert(result.index_stats, "missing effective index settings")
+                assert(stats.index_depth == index_depth and stats.index_array_limit == index_array_limit
+                    and stats.budget_bytes == index_budget_bytes, "effective index settings differ from request")
+                assert(stats.index_bytes <= index_budget_bytes, "effective index budget exceeded")
+            end
             latencies[#latencies + 1] = (ngx.now() - start) * 1000
             first_bytes[#first_bytes + 1] = (result.sink.first_byte_at - start) * 1000
             results[#results + 1] = result

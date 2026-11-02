@@ -1,9 +1,16 @@
+local method = ngx.var.arg_method or "leanjson"
+assert(method == "leanjson" or method == "cjson")
 local cjson = require "cjson"
-local leanjson = require "leanjson"
-local adapter = require "leanjson.openresty"
+local leanjson, adapter
+if method == "leanjson" then
+    leanjson, adapter = require("leanjson"), require("leanjson.openresty")
+end
 local http = require "resty.http"
 local metrics = require "metrics"
-local method = ngx.var.arg_method or "leanjson"
+if method == "cjson" then
+    assert(not package.loaded.leanjson and not package.loaded["leanjson.lib"] and not package.loaded["leanjson.openresty"],
+        "cjson benchmark requires a fresh worker without LeanJSON")
+end
 local initial = metrics.sample()
 local lua_max = initial.lua_kib
 local phases = { baseline = initial }
@@ -14,11 +21,12 @@ local function phase(name)
     phases[name] = metrics.sample()
     sample()
 end
-local opts = { chunk_size = tonumber(ngx.var.arg_chunk_size) or 65536,
+local decode_opts = { chunk_size = tonumber(ngx.var.arg_chunk_size) or 65536,
     index_depth = tonumber(ngx.var.arg_index_depth) or 3,
     index_array_limit = tonumber(ngx.var.arg_index_array_limit) or 3,
     index_budget_bytes = tonumber(ngx.var.arg_index_budget_bytes) or 1048576,
     on_chunk = function() sample(); ngx.sleep(0) end }
+local opts = { decode = decode_opts, chunk_size = decode_opts.chunk_size, on_chunk = decode_opts.on_chunk }
 local body, info, cold, raw
 if method == "cjson" or ngx.var.arg_cold == "1" then
     ngx.req.read_body()
@@ -30,7 +38,7 @@ if method == "cjson" or ngx.var.arg_cold == "1" then
         cold = ok and "fsync-fadvise-dontneed" or err
     end
     if method == "leanjson" then
-        body = file and leanjson.decode_file(file, opts) or leanjson.decode(raw, opts)
+        body = file and leanjson.decode_file(file, decode_opts) or leanjson.decode(raw, decode_opts)
     else
         if file then
             -- Explicit complete-body baseline: include the original full string

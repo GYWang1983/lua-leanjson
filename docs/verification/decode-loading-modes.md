@@ -6,12 +6,12 @@ Unselected fields remain lazy and complete output is preserved.
 
 ## Environment and evidence
 
-Runtime revision: `db052d45a841e03370b774080cac1e437dece543`. Validation passed;
-independent acceptance passed 18/18 cells. The measurements were taken before the
-runtime commit, with a dirty checkout recorded in their environment JSON. Native
-and Lua fingerprints were rechecked after the commit and canonical/installed
-gates and match exactly; the commit identifier alone is not the measurement's
-runtime proof.
+Final runtime revision: `1bacb136c6be27b91493dd39ab18271b0b471cfd`.
+Refreshed independent acceptance passed 18/18 cells. The run preceded the final
+runtime commit, with its dirty checkout recorded in the environment JSON; the Lua
+fingerprint was rechecked after commit and matches exactly. Native code is
+unchanged from the canonical/installed gates. Both the earlier full-gate runtime
+and the final Lua ownership fix have separate evidence below.
 
 - Linux ARM64, Rust 1.90.0, OpenResty 1.29.2.4, LuaJIT 2.1.ROLLING,
   lua-cjson 2.1.0.11.
@@ -20,15 +20,16 @@ runtime proof.
 - Native library SHA-256:
   `20e4db6e52ad82f7378550e2cc3943485e456cc1880e825f69ae445774c29d42`.
 - Lua runtime tree SHA-256 (relative filename, NUL, content, NUL, sorted):
-  `6bf53d7b021b8bce5afaa320c13d28b8862b8af9d9b8d6f34e5b6591c70ec4fa`.
+  `c6f539b2f4971378e62756cfdda779a6d340227f6ef83ed2126e91aa2e827843`.
 
 The [raw evidence archive](decode-loading-modes-logs.tar.gz) includes commands,
 complete logs, independent measurements, probe source, reports and a SHA-256
 manifest. `acceptance-initial` is intermediate diagnostic evidence;
-`acceptance-final` is the runtime above. Review outcomes are retained separately
-from executed test evidence.
+`acceptance-final` is the pre-review runtime, and `acceptance-reviewed` covers
+the final runtime above. Review outcomes are retained separately from executed
+test evidence.
 
-The canonical `make openresty-verify` gate passed: Rust default/scalar/test-panic
+At `db052d4`, the canonical `make openresty-verify` gate passed: Rust default/scalar/test-panic
 matrices, Clippy with warnings denied, **435 Lua tests**, lint (67 files, zero
 warnings), 2,000 encode property cases, 1,000 mutation cases with 100 operations
 each, 500 + 500 source stress cases, pinned JSON corpus replay and **60 real HTTP
@@ -41,6 +42,16 @@ coverage, not a new fuzz campaign. A fresh LuaRocks installed-tree smoke passed
 from `/tmp`, with `LD_LIBRARY_PATH` cleared and only installed Lua/native search
 paths: new module/ABI loading, memory/file/feed eager results, repeat queries and
 selective byte-preserved output. Existing published v1/v2 layouts are unchanged.
+
+Review found that a repeated eager rebuild could retain its partial tree and
+scratch native parser after decoder close while the coroutine stayed suspended.
+The final Lua-only fix scopes that cleanup, clears payload references and releases
+the native parser immediately; late resume cannot use or release it again. Four
+new regressions failed before the fix. Afterward, **60 covering loading/lifecycle/
+review tests** and full 67-file Lua lint passed. Both finish and container-get
+cases pause after multiple reads and verify cleanup before resuming, plus normal
+and error exits. The earlier full gate was not rerun for this two-file fix; native,
+ABI and unchanged HTTP evidence retains its original revision boundary.
 
 ## Independent acceptance method
 
@@ -83,17 +94,17 @@ property on the final array element. The wildcard case selects every message rol
 
 | Workload | Source | cjson peak RSS | LeanJSON peak RSS | cjson input + decode CPU | LeanJSON input + decode CPU |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Wide, eager values + full encode | memory | 24.29 MiB | 40.36 MiB | 9.7 ms | 48.6 ms |
-| Wide, eager values + full encode | file | 24.34 MiB | 35.99 MiB | 7.8 ms | 53.3 ms |
-| Wide, eager values + full encode | feed | 24.34 MiB | 36.96 MiB | 6.5 ms | 36.2 ms |
-| Selected fields + reader | memory | 36.47 MiB | 27.34 MiB | 5.0 ms | 70.2 ms |
-| Selected fields + reader | file | 36.45 MiB | 14.50 MiB | 4.0 ms | 65.6 ms |
-| Selected fields + reader | feed | 34.38 MiB | 14.08 MiB | 5.1 ms | 65.9 ms |
-| Wildcard roles + reader | memory | 34.40 MiB | 30.11 MiB | 5.4 ms | 72.6 ms |
-| Wildcard roles + reader | file | 34.41 MiB | 20.17 MiB | 4.1 ms | 75.4 ms |
-| Wildcard roles + reader | feed | 34.43 MiB | 20.14 MiB | 4.5 ms | 73.9 ms |
+| Wide, eager values + full encode | memory | 24.35 MiB | 40.41 MiB | 9.1 ms | 46.7 ms |
+| Wide, eager values + full encode | file | 24.31 MiB | 36.11 MiB | 6.3 ms | 48.1 ms |
+| Wide, eager values + full encode | feed | 24.32 MiB | 37.08 MiB | 6.9 ms | 38.4 ms |
+| Selected fields + reader | memory | 34.41 MiB | 27.44 MiB | 5.1 ms | 73.0 ms |
+| Selected fields + reader | file | 36.45 MiB | 14.50 MiB | 4.3 ms | 67.9 ms |
+| Selected fields + reader | feed | 36.46 MiB | 14.11 MiB | 4.5 ms | 65.3 ms |
+| Wildcard roles + reader | memory | 34.41 MiB | 30.16 MiB | 5.0 ms | 64.7 ms |
+| Wildcard roles + reader | file | 34.38 MiB | 21.54 MiB | 3.9 ms | 68.7 ms |
+| Wildcard roles + reader | feed | 34.42 MiB | 21.28 MiB | 4.0 ms | 66.1 ms |
 
-Eager **decode-phase** peak RSS was 22.66–24.05 MiB, compared with 20.38–20.44 MiB
+Eager **decode-phase** peak RSS was 22.85–24.41 MiB, compared with 20.35–20.48 MiB
 for cjson; output increased its peak further. Eager mode provides ordinary values,
 not allocator/CPU parity with cjson. The earlier bounded-metadata RSS result is
 not a guarantee for this opt-in eager workflow.

@@ -309,7 +309,7 @@ The [loading-mode report](docs/verification/decode-loading-modes.md) separately
 records eager and explicit-preload results. In its 4.28 MiB completed-file case,
 selected fields plus bounded output peaked at **14.50 MiB**, compared with cjson's
 **36.45 MiB**. Eager ordinary values plus full encoding of 32,768 small-object
-fields used **35.99 MiB versus 24.34 MiB**. Both modes took more CPU than cjson in
+fields used **36.11 MiB versus 24.31 MiB**. Both modes took more CPU than cjson in
 these runs. Disabling lazy loading is a compatibility option, not a promise of
 cjson's memory or speed.
 

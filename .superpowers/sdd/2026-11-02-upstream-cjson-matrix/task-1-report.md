@@ -383,3 +383,51 @@ vendor, worker dispatch, root audit scripts, ledger and archive were not edited.
 evidence remains retained. The Minor stale-status-artifact issue was deliberately
 left for supervisor triage. Formal scoped re-review and supervisor archive refresh
 remain supervisor work.
+
+## Final fix wave: invocation status reuse
+
+Base: `c383ed8`. Fix commit:
+`73e9933fdf0aec127046f7aa4cab94892c256fcf`.
+The final review's sole Minor is fixed: every parsed CLI invocation clears its
+prior `summary.json` and `harness-error.json` before work. The error handler also
+removes any partial summary before writing the current failure. Other output
+artifacts are retained; preserving complete previous runs still uses separate
+directories.
+
+The real CLI regression reuses one output directory for success then failure,
+and a second directory for failure then success. Successful invocations execute
+the focused native/target controls. An intentionally invalid locale directory
+exercises the real failure handler before any full-matrix worker starts. Both
+transitions assert mutually exclusive current statuses and preservation of a
+historical diagnostic file. Commands, process output and status snapshots are
+retained in `task-1-artifacts/status-reuse-controls/*/invocations.jsonl` and the
+adjacent step logs.
+
+The only test command run for this wave was:
+
+```sh
+python3 -m unittest discover -s tests/upstream-cjson -p 'test_*.py' -k reusing_output -v
+```
+
+Observed red (`task-1-artifacts/status-reuse-red.log`):
+
+```text
+success -> failure: failed invocation retained an older healthy summary.json
+failure -> success: successful invocation retained an older harness-error.json
+Ran 1 test in 5.239s; FAILED (failures=2)
+```
+
+Observed green (`task-1-artifacts/status-reuse-green.log`):
+
+```text
+test_reusing_output_keeps_only_the_current_invocation_status ... ok
+Ran 1 test in 5.264s; OK
+```
+
+The preceding round's eight tests had passed; this wave ran only the new ninth
+focused test with its two transition subtests. It did not rerun all nine tests,
+the full matrix or `make test`. Existing authoritative final results remain
+valid and untouched. Changes are limited to the runner, focused test file, tests
+README, the verification document's controls description (explicitly authorized),
+and this appended report. Runtime, vendor, root review scripts, ledger and archive
+were not edited. `git diff --check` passed before the scoped commits.

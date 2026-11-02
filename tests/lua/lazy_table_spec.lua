@@ -216,6 +216,20 @@ describe("__pairs / leanjson.pairs over LazyObject", function()
 end)
 
 describe("__ipairs / leanjson.ipairs over LazyArray", function()
+    it("keeps object proxies empty and delegates plain tables to numeric iteration", function()
+        local object = leanjson.decode('{"a":1,"1":2}')
+        for _ = 1, 2 do
+            local next_value, state, initial = leanjson.ipairs(object)
+            assert.are.equal(0, initial)
+            assert.is_nil(next_value(state, initial))
+            object.extra = 3
+        end
+        leanjson.close(object)
+        local plain, seen = { 10, 20, a = 30 }, {}
+        for index, value in leanjson.ipairs(plain) do seen[index] = value end
+        assert.are.same({ 10, 20 }, seen)
+    end)
+
     it("iterates elements 1..n in order", function()
         local t = leanjson.decode('[10,20,30]')
         local got = {}

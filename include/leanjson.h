@@ -249,7 +249,9 @@ typedef struct {
 int leanjson_source_v2_get_workspace_stats(const leanjson_source_v1 *, leanjson_source_v2_workspace_stats *, leanjson_source_v1_result *);
 
 /* normalize=0 yields every lexical occurrence; normalize=1 yields first-key
- * position with final whole value. Arrays are zero-based. iter_next returns
+ * position with final whole value; normalize=2 preserves lexical occurrences
+ * and pre-scans one bounded/spilled final-key map for iter_next_current.
+ * Arrays are zero-based. iter_next returns
  * READY, DONE, NEED_READ or ERROR. Supply NEED_READ with a nonempty window at
  * offset, at most length; partial windows work. Key pointer is valid only until
  * next/provide/release on that iterator. Copy keys immediately. Each iterator
@@ -257,6 +259,10 @@ int leanjson_source_v2_get_workspace_stats(const leanjson_source_v1 *, leanjson_
 int leanjson_source_v2_iter_begin(leanjson_source_v2_node, uint32_t normalize, leanjson_source_v2_iter **, leanjson_source_v1_result *);
 int leanjson_source_v2_lookup_begin(leanjson_source_v2_node, const uint8_t *key, size_t key_len, uint64_t index, leanjson_source_v2_iter **, leanjson_source_v1_result *);
 int leanjson_source_v2_iter_next(leanjson_source_v2_iter *, leanjson_source_v2_member *, leanjson_source_v1_result *);
+/* Same step plus current=1 for final decoded-key occurrences in mode 2,
+ * normalized mode 1, and arrays. Mode 0 object occurrences are unknown/0.
+ * A non-READY result resets current to 0. Member and current must be writable. */
+int leanjson_source_v2_iter_next_current(leanjson_source_v2_iter *, leanjson_source_v2_member *, uint32_t *current, leanjson_source_v1_result *);
 int leanjson_source_v2_iter_provide_window(leanjson_source_v2_iter *, uint64_t, const uint8_t *, size_t, leanjson_source_v1_result *);
 void leanjson_source_v2_iter_release(leanjson_source_v2_iter *);
 /* Scalar operations use unchanged v1 op_step/provide/release functions. */

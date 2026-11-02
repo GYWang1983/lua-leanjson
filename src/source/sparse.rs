@@ -11,14 +11,22 @@ pub(crate) enum Lookup { Key(Vec<u8>), Index(u64) }
 pub(crate) struct Walker {
     parser: Source, end: u64, limit: usize, window: Vec<u8>, cursor: usize, requested: bool,
     normalized: Option<KeyMap>, collected: bool, lookup: Option<Lookup>, found: Option<SpanMember>, done: bool,
+    replay: Option<Box<Walker>>, current: bool,
 }
 impl Walker {
     pub(crate) fn new(span: Span, limit: usize, normalize: bool, lookup: Option<Lookup>, directory: PathBuf, workspace: WorkspacePool) -> Self {
         let normalized = (normalize && span.kind == leanjson_type::LEANJSON_T_OBJ).then(|| KeyMap::new(directory.clone(), workspace.clone()));
         Self { parser: Source::walker(span.raw_start, limit, normalize, directory, workspace), end: span.raw_end,
             limit, window: Vec::new(), cursor: 0, requested: false, normalized, collected: false,
-            lookup, found: None, done: false }
+            lookup, found: None, done: false, replay: None, current: true }
     }
+    pub(crate) fn linked(span: Span, limit: usize, directory: PathBuf, workspace: WorkspacePool) -> Self {
+        let mut walker = Self::new(span, limit, false, None, directory.clone(), workspace.clone());
+        walker.normalized = Some(KeyMap::new(directory.clone(), workspace.clone()));
+        walker.replay = Some(Box::new(Self::new(span, limit, false, None, directory, workspace)));
+        walker
+    }
+    pub(crate) fn is_current(&self) -> bool { self.current }
     pub(crate) fn resume(span: Span, offset: u64, ordinal: u64, limit: usize, normalize: bool, directory: PathBuf, workspace: WorkspacePool) -> Self {
         let mut walker = Self::new(span, limit, normalize, None, directory.clone(), workspace.clone());
         walker.parser = Source::walker_resume(span, offset, ordinal, limit, normalize, directory, workspace);
@@ -27,6 +35,15 @@ impl Walker {
     pub(crate) fn next(&mut self) -> Result<WalkStep, SourceError> {
         if self.done { return Ok(WalkStep::Done); }
         if self.collected {
+            if let Some(replay) = self.replay.as_mut() {
+                let step = replay.next()?;
+                match &step {
+                    WalkStep::Member(member) => self.current = self.normalized.as_mut().unwrap().is_current(member)?,
+                    WalkStep::Done => self.done = true,
+                    WalkStep::NeedRead { .. } => {},
+                }
+                return Ok(step);
+            }
             if let Some(map) = self.normalized.as_mut() {
                 return Ok(match map.next()? { Some(member) => WalkStep::Member(member), None => { self.done = true; WalkStep::Done } });
             }
@@ -60,6 +77,9 @@ impl Walker {
         }
     }
     pub(crate) fn provide(&mut self, offset: u64, bytes: &[u8]) -> Result<(), SourceError> {
+        if self.collected {
+            if let Some(replay) = self.replay.as_mut() { return replay.provide(offset, bytes); }
+        }
         if !self.requested || offset != self.parser.offset() || bytes.is_empty() || bytes.len() > self.limit
             || offset.checked_add(bytes.len() as u64).is_none_or(|end| end > self.end) {
             return Err(SourceError::argument(DETAIL_BAD_WINDOW, offset));

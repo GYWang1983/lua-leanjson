@@ -221,3 +221,56 @@ fn v2_option_status_and_scalar_operation_contracts_preserve_v1_layouts() {
         leanjson_source_v2_iter_release(ptr::null_mut());
     }
 }
+
+#[test]
+fn annotated_lexical_iteration_marks_exact_final_occurrences_in_two_partial_window_passes() {
+    unsafe {
+        let mut bytes = Vec::from(b"{".as_slice());
+        for i in 0..128 {
+            if i != 0 { bytes.push(b','); }
+            bytes.extend_from_slice(format!("\"k{i}\":{{\"x\":{i}}}").as_bytes());
+        }
+        bytes.extend_from_slice(br#", "\u006b0":false,"k127":null}"#);
+        let source = parsed(&bytes, leanjson_source_v2_options { window_size: 7, index_budget_bytes: 0, ..Default::default() }, 1);
+        let mut iter = ptr::null_mut();
+        let mut result = leanjson_source_v1_result::default();
+        assert_eq!(leanjson_source_v2_iter_begin(root(source), 2, &mut iter, &mut result), 0);
+        let mut member = leanjson_source_v2_member::default();
+        assert_eq!(leanjson_source_v2_iter_next_current(iter, &mut member, ptr::null_mut(), &mut result), 5);
+        assert_eq!(leanjson_source_v2_clear_indexes(source, &mut result), 0);
+        leanjson_source_v1_release(source);
+        let mut count = 0;
+        let mut provided_bytes = 0;
+        loop {
+            let mut current = 99;
+            match leanjson_source_v2_iter_next_current(iter, &mut member, &mut current, &mut result) {
+                0 => {
+                    let key = std::slice::from_raw_parts(member.key, member.key_len);
+                    match count {
+                        0..=127 => {
+                            assert_eq!(key, format!("k{count}").as_bytes());
+                            assert_eq!(current, u32::from(count != 0 && count != 127));
+                        },
+                        128 => { assert_eq!(key, b"k0"); assert_eq!(current, 1); assert_eq!(member.value.kind, 1); },
+                        129 => { assert_eq!(key, b"k127"); assert_eq!(current, 1); assert_eq!(member.value.kind, 0); },
+                        _ => panic!("extra lexical occurrence"),
+                    }
+                    assert_eq!(member.ordinal, count);
+                    count += 1;
+                },
+                1 => { assert_eq!(current, 0); break; },
+                3 => {
+                    assert_eq!(current, 0);
+                    let mut window = [bytes[result.offset as usize]];
+                    assert_eq!(leanjson_source_v2_iter_provide_window(iter, result.offset, window.as_ptr(), 1, &mut result), 0);
+                    window.fill(0);
+                    provided_bytes += 1;
+                },
+                status => panic!("unexpected status {status}: {result:?}"),
+            }
+        }
+        assert_eq!(count, 130);
+        assert_eq!(provided_bytes, bytes.len() * 2);
+        leanjson_source_v2_iter_release(iter);
+    }
+}

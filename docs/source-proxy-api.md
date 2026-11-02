@@ -36,6 +36,8 @@ body.copy.x = 3            -- body.settings.x stays 1
 
 Object getters use the last occurrence of a duplicate key. For compatibility, iteration of an untouched source object still yields lexical occurrences, and ordinary output can retain untouched source bytes. Editing an object collapses its duplicate keys, keeping first-appearance order and the last logical value; deleting a key removes every occurrence. `normalize_duplicates = true` collapses duplicates recursively for forwarding. Keys compare by decoded bytes, so `"a"` and `"\u0061"` are equal. Unchanged subtrees proven free of duplicates can pass through as raw spans; unknown status is scanned. Normalized output can therefore retain whitespace or lexical spellings inside such clean spans.
 
+Unique and final duplicate container occurrences from `leanjson.pairs` share the current attached child returned by a direct read. Earlier duplicate occurrences and values replaced since iteration began remain snapshots. Untouched source object iteration makes one initial pass into the bounded/spilled exact-key workspace before replaying lexical members; it does not rescan the parent for each child or retain a full Lua sibling index. `leanjson.ipairs` returns no members for an object, including numeric-looking string keys.
+
 Untouched scalar tokens remain source spans even if their parent changes. Merely reading a large integer does not alter its output token. Assigning the decoded Lua number back is an explicit replacement and may round or normalize it under the existing numeric encoder settings.
 
 ```lua

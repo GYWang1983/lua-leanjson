@@ -12,6 +12,13 @@ for i = 1, 96 do
     assert(iterator() == "a")
     pending[#pending + 1] = iterator
 
+    local object = json.decode('{"a":{},"b":1,"c":2,"d":3,"e":4,"f":5,"g":6,"h":7,"i":8}',
+        { temp_dir = directory, index_budget_bytes = 0 })
+    local linked_iterator = json.pairs(object)
+    assert(linked_iterator() == "a")
+    pending[#pending + 1] = linked_iterator
+    if mode == "closed" then json.close(object) end
+
     local scalar, handle = memory.open('"\\u0041"')
     function scalar:read() coroutine.yield("scalar pending"); return "A" end
     local worker = coroutine.create(function() scalar:scalar(handle) end)

@@ -318,21 +318,37 @@ local function iterate(value, array)
     local original, version = cell.node, cell.version
     local pin = leases.pin(holder.scope, original)
     local fallback = leases.fallback(holder.scope, pin)
-    local next_member = M.iter(original, holder.scope, false)
+    local next_member = M.iter(original, holder.scope, false, not array)
     return function()
         leases.check(META[value].scope)
         if array and cell.version ~= version then error("leanjson: invalid argument", 0) end
         if not fallback then return nil end
-        local key, node = next_member()
+        local key, node, current = next_member()
+        leases.check(holder.scope)
         if key ~= nil then
-            return key, expose(node, cell, key, not array, holder.scope, original)
+            local lexical, expected = false, original
+            if not array and (node.kind == "object" or node.kind == "array") then
+                expected = cell.node
+                lexical = not current or not nodes.same(nodes.lookup_known(expected, key, original, node, holder.scope), node)
+                leases.check(holder.scope)
+            end
+            return key, expose(node, cell, key, lexical, holder.scope, expected)
         end
         leases.finish(holder.scope, pin)
         fallback = nil
     end, nil, array and 0 or nil
 end
 function M.ipairs(value)
-    if not META[value] then return ipairs(value) end
+    local holder = META[value]
+    if not holder then return ipairs(value) end
+    leases.check(holder.scope)
+    if holder.cell.node.kind ~= "array" then
+        local cell, version = holder.cell, holder.cell.version
+        return function()
+            leases.check(META[value].scope)
+            if cell.version ~= version then error("leanjson: invalid argument", 0) end
+        end, nil, 0
+    end
     return iterate(value, true)
 end
 function M.pairs(value)

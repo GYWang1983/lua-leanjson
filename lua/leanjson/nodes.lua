@@ -40,7 +40,18 @@ function M.lookup(node, key, scope)
     end
     return found
 end
-function M.iter(node, scope, normalize)
+-- Resolve edits against an iterator's known logical member. Flattened object
+-- patches retain their original base, so unchanged keys need no source rescan.
+function M.lookup_known(node, key, original, value, scope)
+    if M.same(node, original) then return value end
+    if node.patches then
+        local patch = node.patches[key]
+        if patch ~= nil then if patch ~= DELETE then return patch end; return nil end
+        if M.same(node.base, original.patches and original.base or original) then return value end
+    end
+    return M.lookup(node, key, scope)
+end
+function M.iter(node, scope, normalize, linked)
     if node.patches then
         local base = M.iter(node.base, scope, true)
         local index, finished = 0, false
@@ -50,7 +61,7 @@ function M.iter(node, scope, normalize)
                 if key == nil then finished = true
                 elseif not node.moved[key] then
                     local patch = node.patches[key]
-                    if patch ~= DELETE then return key, patch or value end
+                    if patch ~= DELETE then return key, patch or value, true end
                 end
             end
             while true do
@@ -58,7 +69,7 @@ function M.iter(node, scope, normalize)
                 local key = node.added[index]
                 if key == nil then return nil end
                 local value = node.patches[key]
-                if value ~= DELETE then return key, value end
+                if value ~= DELETE then return key, value, true end
             end
         end
     end
@@ -89,13 +100,13 @@ function M.iter(node, scope, normalize)
         return function()
             index = index + 1
             local key = node.keys[index]
-            if key ~= nil then return key, node.values[key] end
+            if key ~= nil then return key, node.values[key], true end
         end
     end
-    local next_child = node.backend:children(node.handle, scope, normalize)
+    local next_child = node.backend:children(node.handle, scope, normalize, linked)
     return function()
-        local key, handle = next_child()
-        if key ~= nil then return key, M.raw(node.backend, handle) end
+        local key, handle, current = next_child()
+        if key ~= nil then return key, M.raw(node.backend, handle), current end
     end
 end
 function M.length(node, scope)

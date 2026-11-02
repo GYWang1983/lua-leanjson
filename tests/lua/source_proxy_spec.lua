@@ -143,6 +143,63 @@ describe("source proxy overlays", function()
         assert.are.equal('{"a":{"y":2}}', leanjson.encode(body))
     end)
 
+    it("shares unique object children between direct reads and pairs", function()
+        for _, budget in ipairs({ 0, 1048576 }) do
+            local body = leanjson.decode('{"a":{"x":1},"tail":false}', { index_budget_bytes = budget })
+            local held, via_pairs = body.a
+            for key, child in leanjson.pairs(body) do
+                if key == "a" then via_pairs = child
+                else assert.is_false(child) end
+            end
+            assert.are.equal(held, via_pairs)
+            held.x = 2
+            assert.are.equal(2, via_pairs.x)
+            via_pairs.x = 3
+            assert.are.equal(3, body.a.x)
+            leanjson.close(held); leanjson.close(body)
+        end
+    end)
+
+    it("links the final escaped duplicate while earlier occurrences stay snapshots", function()
+        for _, budget in ipairs({ 0, 1048576 }) do
+            local body = leanjson.decode('{"a":{"x":1},"\\u0061":{"x":2},"tail":false}', { index_budget_bytes = budget })
+            local held, earlier, final = body.a
+            for key, child in leanjson.pairs(body) do
+                if key ~= "a" then assert.is_false(child)
+                elseif not earlier then
+                    earlier = child
+                    assert.are_not.equal(held, earlier)
+                    earlier.x = 9
+                else final = child end
+            end
+            assert.are.equal(held, final)
+            assert.are.equal(2, body.a.x)
+            held.x = 3
+            assert.are.equal(3, final.x)
+            final.x = 4
+            assert.are.equal(4, body.a.x)
+            assert.are.equal(9, earlier.x)
+            assert.are.equal('{"a":{"x":4},"tail":false}', leanjson.encode(body))
+            leanjson.close(earlier); leanjson.close(held); leanjson.close(body)
+        end
+    end)
+
+    it("keeps a pre-mutation iterator snapshot separate from the current object child", function()
+        local body = leanjson.decode('{"a":{"x":1},"tail":false}', { index_budget_bytes = 0 })
+        local held = body.a
+        local next_child = leanjson.pairs(body)
+        held.x = 2
+        local key, snapshot = next_child()
+        assert.are.equal("a", key)
+        assert.are_not.equal(held, snapshot)
+        assert.are.equal(1, snapshot.x)
+        snapshot.x = 3
+        assert.are.equal(2, body.a.x)
+        assert.are.equal("tail", next_child())
+        assert.is_nil(next_child())
+        leanjson.close(snapshot); leanjson.close(held); leanjson.close(body)
+    end)
+
     it("snapshots plain table and proxy assignments at assignment time", function()
         local body = leanjson.decode('{"a":{"x":1}}')
         local plain = { child = { x = 2 } }

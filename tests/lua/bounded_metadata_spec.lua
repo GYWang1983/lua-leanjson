@@ -100,10 +100,39 @@ describe("bounded source metadata", function()
             for _, child in json.ipairs(body) do sum = sum + child.x end
             assert.are.equal(33558528, sum)
             collectgarbage("collect"); collectgarbage("collect")
-            assert.is_true(collectgarbage("count") - before < 512, "discarded views left a full sibling cache")
+            local retained = collectgarbage("count") - before
+            assert.is_true(retained < 512, "discarded views left a full sibling cache: " .. retained .. " KiB after pass " .. pass)
             assert.are.equal(0, json.source_stats(body).index_bytes)
         end
         json.close(body)
+    end)
+
+    it("streams wide object child links in bounded source passes", function()
+        local pieces = {}
+        for i = 1, 1024 do pieces[i] = '"k' .. i .. '":{"x":' .. i .. '}' end
+        local raw = '{' .. table.concat(pieces, ',') .. '}'
+        local filename = os.tmpname()
+        local output = assert(io.open(filename, "wb"))
+        assert(output:write(raw)); assert(output:close())
+        local body = json.decode_file(filename, { chunk_size = 256, index_budget_bytes = 0 })
+        local held = body.k1
+        local io_source = require("leanjson.source_io")
+        local original, reads = io_source.read, 0
+        io_source.read = function(...) reads = reads + 1; return original(...) end
+        local ok, err = pcall(function()
+            local count = 0
+            for key, child in json.pairs(body) do
+                count = count + 1
+                assert.are.equal("k" .. count, key)
+                if count == 1 then assert.are.equal(held, child) end
+            end
+            assert.are.equal(1024, count)
+            assert.is_true(reads <= 4 * math.ceil(#raw / 256), "pairs rescanned the parent for each child")
+            assert.are.equal(0, json.source_stats(body).index_bytes)
+        end)
+        io_source.read = original
+        json.close(held); json.close(body); assert(os.remove(filename))
+        assert.is_true(ok, err)
     end)
 
     it("preserves held children, forks and readers after materialization discards native indexes", function()

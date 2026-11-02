@@ -105,7 +105,7 @@ function M.scalar(self, handle, scope)
     if not ok then error(value, 0) end
     return value
 end
-local function iterator(self, handle, scope, normalize, lookup)
+local function iterator(self, handle, scope, normalize, lookup, linked)
     leases.check(scope)
     local lease = self:retain()
     local out, result = ffi.new("leanjson_source_v2_iter *[1]"), ffi.new("leanjson_source_v1_result[1]")
@@ -113,7 +113,7 @@ local function iterator(self, handle, scope, normalize, lookup)
     if lookup ~= nil then
         local key = handle.kind == 5 and lookup or ""
         status = C.leanjson_source_v2_lookup_begin(handle, key, #key, handle.kind == 4 and lookup - 1 or 0, out, result)
-    else status = C.leanjson_source_v2_iter_begin(handle, normalize and 1 or 0, out, result) end
+    else status = C.leanjson_source_v2_iter_begin(handle, normalize and 1 or linked and 2 or 0, out, result) end
     if status ~= READY then self:release(lease); error(M.result_error(result), 0) end
     local operation = out[0]
     local record = leases.track(scope, function()
@@ -122,19 +122,22 @@ local function iterator(self, handle, scope, normalize, lookup)
     end)
     local fallback = leases.fallback(scope, record)
     local member = ffi.new("leanjson_source_v2_member[1]")
+    local current = linked and ffi.new("uint32_t[1]")
     return function()
         leases.check(scope)
         if not fallback or not operation then return nil end
-        local ok, key, child = pcall(function()
+        local ok, key, child, is_current = pcall(function()
             while true do
-                local rc = C.leanjson_source_v2_iter_next(operation, member, result)
+                local rc
+                if linked then rc = C.leanjson_source_v2_iter_next_current(operation, member, current, result)
+                else rc = C.leanjson_source_v2_iter_next(operation, member, result) end
                 if rc == DONE then return nil end
                 if rc == READY then
                     local value = member[0]
                     local name = handle.kind == 4 and M.exact(value.ordinal) + 1 or ffi.string(value.key, value.key_len)
                     local own = ffi.new("leanjson_source_v2_node", value.value)
                     self:notify(scope)
-                    return name, own
+                    return name, own, linked and current[0] ~= 0
                 end
                 M.require_status(rc, NEED_READ, result)
                 local offset, count = M.exact(result[0].offset), M.exact(result[0].length)
@@ -150,10 +153,10 @@ local function iterator(self, handle, scope, normalize, lookup)
         end)
         if not ok or key == nil or lookup ~= nil then leases.finish(scope, record); fallback = nil end
         if not ok then error(key, 0) end
-        return key, child
+        return key, child, is_current
     end
 end
-function M.children(self, handle, scope, normalize) return iterator(self, handle, scope, normalize) end
+function M.children(self, handle, scope, normalize, linked) return iterator(self, handle, scope, normalize, nil, linked) end
 function M.lookup(self, handle, key, scope)
     if handle.kind == 4 and key > M.exact(handle.child_count) then return nil end
     local next_child = iterator(self, handle, scope, false, key)

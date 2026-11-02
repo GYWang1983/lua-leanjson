@@ -248,6 +248,23 @@ impl DiskMap {
             slot = (slot + 1) & (self.capacity - 1);
         }
     }
+    fn is_current(&mut self, entry: &SpanMember) -> Result<bool, SourceError> {
+        let fingerprint = hash(&entry.key);
+        let mut slot = fingerprint & (self.capacity - 1);
+        loop {
+            let (candidate_hash, location) = Self::slot(&mut self.slots, slot)?;
+            if location == 0 { return Ok(false); }
+            if candidate_hash == fingerprint {
+                let offset = location - 1;
+                let mut bytes = [0; HEADER]; read_at(&mut self.data, offset, &mut bytes)?;
+                let value = fields(&bytes);
+                if value[7] == entry.key.len() as u64 && self.key_equals(offset + HEADER as u64, &entry.key)? {
+                    return Ok(value[4] == entry.value.raw_start);
+                }
+            }
+            slot = (slot + 1) & (self.capacity - 1);
+        }
+    }
     fn next(&mut self) -> Result<Option<SpanMember>, SourceError> {
         if self.cursor == self.end { return Ok(None); }
         let mut bytes = [0; HEADER]; read_at(&mut self.data, self.cursor, &mut bytes)?;
@@ -268,6 +285,10 @@ impl KeyMap {
         Self { small: Vec::new(), bytes: 0, disk: None, directory, pool, duplicates: false, cursor: 0 }
     }
     pub(crate) fn had_duplicates(&self) -> bool { self.duplicates }
+    pub(crate) fn is_current(&mut self, entry: &SpanMember) -> Result<bool, SourceError> {
+        if let Some(disk) = self.disk.as_mut() { return disk.is_current(entry); }
+        Ok(self.small.iter().any(|value| value.key == entry.key && value.value.raw_start == entry.value.raw_start))
+    }
     pub(crate) fn insert_key(&mut self, key: &[u8]) -> Result<(), SourceError> {
         self.insert(SpanMember { ordinal: 0, key_start: 0, key_end: 0, key: key.to_vec(),
             value: Span { kind: leanjson_type::LEANJSON_T_NULL, flags: 1, raw_start: 0, raw_end: 0, child_count: 0 } })

@@ -54,7 +54,7 @@ pub struct leanjson_source_v2_workspace_stats {
 }
 enum CacheWalk { Prefix { ordinal: u64, offset: u64 }, Index(u64), Object { remaining: usize, hash: u64 }, Streaming, Finished }
 pub struct leanjson_source_v2_iter {
-    source: Rc<leanjson_source_v1>, span: Span, normalize: bool, lookup: Option<Lookup>,
+    source: Rc<leanjson_source_v1>, span: Span, mode: u32, lookup: Option<Lookup>,
     cached: CacheWalk, walker: Option<Walker>, pending: Option<SpanMember>, key_reader: Option<SourceReader>,
     key: Vec<u8>, failure: Option<SourceError>,
 }
@@ -137,7 +137,7 @@ pub unsafe extern "C" fn leanjson_source_v2_clear_indexes(handle: *const leanjso
         Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY)) })
 }
 unsafe fn iter_begin(node: leanjson_source_v2_node, normalize: u32, lookup: Option<Lookup>, iter_out: *mut *mut leanjson_source_v2_iter) -> Result<leanjson_source_v1_result, SourceError> {
-    if iter_out.is_null() || normalize > 1 { return Err(invalid_arg()); }
+    if iter_out.is_null() || normalize > 2 { return Err(invalid_arg()); }
     *iter_out = ptr::null_mut(); let span = node.span()?;
     if !matches!(span.kind, leanjson_type::LEANJSON_T_ARR | leanjson_type::LEANJSON_T_OBJ) {
         return Err(SourceError::json(leanjson_err::LEANJSON_TYPE_MISMATCH, span.raw_start));
@@ -154,15 +154,16 @@ unsafe fn iter_begin(node: leanjson_source_v2_node, normalize: u32, lookup: Opti
             },
             _ => CacheWalk::Streaming,
         },
-        None if normalize == 1 && span.kind == leanjson_type::LEANJSON_T_OBJ => CacheWalk::Streaming,
+        None if normalize != 0 && span.kind == leanjson_type::LEANJSON_T_OBJ => CacheWalk::Streaming,
         None => CacheWalk::Prefix { ordinal: 0, offset: span.raw_start },
     };
     *iter_out = Box::into_raw(Box::new(leanjson_source_v2_iter { source: clone_source(node.source), span,
-        normalize: normalize == 1, lookup, cached, walker: None, pending: None, key_reader: None,
+        mode: normalize, lookup, cached, walker: None, pending: None, key_reader: None,
         key: Vec::new(), failure: None }));
     Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
 }
-/// Start lexical (normalize=0) or first-slot/last-value normalized iteration.
+/// Start lexical (0), normalized (1), or lexical with final-occurrence metadata
+/// (2). Mode 2 pre-scans one bounded/spilled key map, then replays the source.
 /// # Safety
 /// Span source must be live, outputs writable. Iterator independently retains source.
 #[no_mangle]
@@ -186,6 +187,10 @@ fn output_member(iter: &mut leanjson_source_v2_iter, member: SpanMember) -> lean
         key: iter.key.as_ptr(), key_len: iter.key.len(), value: leanjson_source_v2_node::from_span(Rc::as_ptr(&iter.source), member.value) }
 }
 impl leanjson_source_v2_iter {
+    fn is_current(&self) -> bool {
+        self.span.kind != leanjson_type::LEANJSON_T_OBJ || self.mode == 1
+            || (self.mode == 2 && self.walker.as_ref().is_some_and(Walker::is_current))
+    }
     fn cached_entry(&self, ordinal: usize) -> Option<(crate::source::Member, Span)> {
         self.source.inner.borrow().cached_member(self.span.raw_start, ordinal)
     }
@@ -218,8 +223,13 @@ impl leanjson_source_v2_iter {
                 CacheWalk::Finished => return Ok(WalkStep::Done),
                 CacheWalk::Streaming => {
                     if self.walker.is_none() {
-                        self.walker = Some(Walker::new(self.span, self.source.inner.borrow().window_size(), self.normalize,
-                            self.lookup.clone(), self.source.spill_dir.clone(), self.source.inner.borrow().workspace()));
+                        let source = self.source.inner.borrow();
+                        self.walker = Some(if self.mode == 2 && self.span.kind == leanjson_type::LEANJSON_T_OBJ {
+                            Walker::linked(self.span, source.window_size(), self.source.spill_dir.clone(), source.workspace())
+                        } else {
+                            Walker::new(self.span, source.window_size(), self.mode == 1,
+                                self.lookup.clone(), self.source.spill_dir.clone(), source.workspace())
+                        });
                     }
                     return self.walker.as_mut().unwrap().next();
                 },
@@ -238,7 +248,7 @@ impl leanjson_source_v2_iter {
                         else { return Ok(WalkStep::Member(SpanMember { ordinal, key_start: 0, key_end: 0, key: Vec::new(), value })); }
                     } else {
                         self.walker = Some(Walker::resume(self.span, offset, ordinal, self.source.inner.borrow().window_size(),
-                            self.normalize, self.source.spill_dir.clone(), self.source.inner.borrow().workspace()));
+                            self.mode == 1, self.source.spill_dir.clone(), self.source.inner.borrow().workspace()));
                         self.cached = CacheWalk::Streaming;
                     }
                 },
@@ -266,16 +276,30 @@ impl leanjson_source_v2_iter {
 /// Iterator live, outputs writable for their types.
 #[no_mangle]
 pub unsafe extern "C" fn leanjson_source_v2_iter_next(iter: *mut leanjson_source_v2_iter, member_out: *mut leanjson_source_v2_member, out: *mut leanjson_source_v1_result) -> i32 {
-    boundary(out, || {
-        if member_out.is_null() { return Err(invalid_arg()); }
-        let iter = iter.as_mut().ok_or_else(invalid_arg)?; iter.source.inner.borrow().ready()?;
-        let step = match iter.next() { Ok(step) => step, Err(error) => { iter.failure = Some(error); return Err(error); } };
-        Ok(match step {
-            WalkStep::Member(member) => { *member_out = output_member(iter, member); leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY) },
-            WalkStep::Done => leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_DONE),
-            WalkStep::NeedRead { offset, length } => leanjson_source_v1_result { offset, length: length as u64, ..leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_NEED_READ) },
-        })
+    boundary(out, || next_member(iter, member_out, None))
+}
+unsafe fn next_member(iter: *mut leanjson_source_v2_iter, member_out: *mut leanjson_source_v2_member, mut current: Option<&mut u32>) -> Result<leanjson_source_v1_result, SourceError> {
+    if let Some(current) = current.as_deref_mut() { *current = 0; }
+    if member_out.is_null() { return Err(invalid_arg()); }
+    let iter = iter.as_mut().ok_or_else(invalid_arg)?; iter.source.inner.borrow().ready()?;
+    let step = match iter.next() { Ok(step) => step, Err(error) => { iter.failure = Some(error); return Err(error); } };
+    Ok(match step {
+        WalkStep::Member(member) => {
+            if let Some(current) = current { *current = u32::from(iter.is_current()); }
+            *member_out = output_member(iter, member); leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY)
+        },
+        WalkStep::Done => leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_DONE),
+        WalkStep::NeedRead { offset, length } => leanjson_source_v1_result { offset, length: length as u64, ..leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_NEED_READ) },
     })
+}
+/// Step as iter_next and report whether the occurrence is the final decoded key
+/// in mode 2. Arrays and normalized mode 1 report 1; lexical mode 0 is unknown/0.
+/// Non-READY results reset current_out to 0. Existing member layouts are unchanged.
+/// # Safety
+/// Iterator live and all output pointers writable for their types.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_iter_next_current(iter: *mut leanjson_source_v2_iter, member_out: *mut leanjson_source_v2_member, current_out: *mut u32, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || next_member(iter, member_out, Some(current_out.as_mut().ok_or_else(invalid_arg)?)))
 }
 /// Supply one requested nonempty bounded window; no caller pointer survives.
 /// # Safety

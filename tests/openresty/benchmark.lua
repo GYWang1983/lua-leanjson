@@ -8,18 +8,7 @@ local concurrency = tonumber(os.getenv("LEANJSON_BENCH_CONCURRENCY")) or 2
 local requests = tonumber(os.getenv("LEANJSON_BENCH_REQUESTS")) or 3
 local branches = tonumber(os.getenv("LEANJSON_BENCH_BRANCHES")) or 2
 local chunk_size = tonumber(os.getenv("LEANJSON_BENCH_CHUNK_SIZE")) or 65536
-local raw
--- Fixed key order makes paired input byte-identical across fresh Lua states.
-if scenario == "messages" then
-    raw = '{"model":"original","messages":[{"role":"user","content":' .. cjson.encode(("m"):rep(size)) .. '}]}'
-elseif scenario == "input" then raw = '{"model":"original","input":' .. cjson.encode(("i"):rep(size)) .. '}'
-elseif scenario == "escaped" then
-    raw = '{"model":"original","prompt":' .. cjson.encode(("\n\t\"\\"):rep(math.floor(size / 8))) .. '}'
-elseif scenario == "short-elements" then
-    local items = {}
-    for i = 1, math.max(1, math.floor(size / 32)) do items[i] = '{"id":' .. i .. ',"value":"small"}' end
-    raw = '{"model":"original","items":[' .. table.concat(items, ",") .. ']}'
-else raw = '{"model":"original","prompt":' .. cjson.encode(("p"):rep(size)) .. '}' end
+local raw = require("benchmark-fixtures").build(scenario, size)
 local payload_hash = assert(require("resty.sha256"):new())
 payload_hash:update(raw)
 local payload_sha256 = require("resty.string").to_hex(payload_hash:final())

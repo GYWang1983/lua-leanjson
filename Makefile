@@ -23,7 +23,7 @@ else
 LUA_ENV := LD_LIBRARY_PATH=$(LIB_DIR) LUA_PATH='$(LUA_PATH)' LUA_CPATH='$(LUA_CPATH)'
 endif
 
-.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test openresty-source-stress openresty-source-corpus bounded-fuzz
+.PHONY: help build test lua-property-test lua-mutation-property-test lint lua-lint bench-smoke bench bench-rust clean openresty-test openresty-bench openresty-verify openresty-dev-image openresty-docker-test openresty-source-stress openresty-source-corpus openresty-memory-gate bounded-fuzz
 
 help: ## Show this help
 	@# FS uses [^#]* (not .*) so a description containing `##` isn't truncated.
@@ -77,6 +77,9 @@ openresty-dev-image: ## Build the pinned Rust/native OpenResty verification imag
 openresty-docker-test: ## Run the complete native verification gate in the pinned image
 	docker run --rm -v '$(CURDIR):/workspace' -v leanjson-cargo-registry:/usr/local/cargo/registry \
 		-w /workspace '$(OPENRESTY_DEV_IMAGE)' make openresty-verify
+
+openresty-memory-gate: ## On Docker host, compare the built Linux checkout against native cjson (Python 3 required)
+	python3 scripts/verify-memory.py --image '$(OPENRESTY_DEV_IMAGE)'
 
 bounded-fuzz: ## Run bounded nightly libFuzzer sessions (cargo-fuzz required)
 	scripts/verify-bounded-fuzz.sh

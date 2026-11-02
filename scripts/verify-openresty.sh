@@ -40,7 +40,7 @@ for attempt in {1..100}; do
 done
 test_script=acceptance.lua
 if [[ ${LEANJSON_RUN_MODE:-acceptance} == benchmark ]]; then test_script=benchmark.lua; fi
-if ! "$resty" "$repo/tests/openresty/$test_script"; then
+if ! "$resty" -I "$repo/tests/openresty" "$repo/tests/openresty/$test_script"; then
     cat "$LEANJSON_TEST_PREFIX/error.log" >&2
     exit 1
 fi

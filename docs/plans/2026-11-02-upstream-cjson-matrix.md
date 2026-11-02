@@ -60,18 +60,18 @@ target volume `leanjson-bounded-target:/workspace/target`, registry volume
 `qjson-cargo-registry:/usr/local/cargo/registry`, bind worktree to `/workspace`.
 Native runtime already built and verified at the base; coordinate any build with root.
 
-- [ ] Inventory and negative-control tests; document adapter design choices.
-- [ ] Implement baseline/target dispatch and all matrix cells without omissions.
-- [ ] Run full matrix, focused controls and project gate; self-review and commit.
-- [ ] Task review and covering fixes complete.
+- [x] Inventory and negative-control tests; document adapter design choices.
+- [x] Implement baseline/target dispatch and all matrix cells without omissions.
+- [x] Run full matrix, focused controls and project gate; self-review and commit.
+- [x] Task review and covering fixes complete.
 
 ### Task 2: Independent audit, evidence and user documentation (supervisor)
 
 **Own:** README compatibility notes, docs/verification/upstream-cjson-compatibility.md
 and raw report archive, this spec/plan/ledger. Read-only audit of Task 1 runtime.
 
-- [ ] Independently enumerate suite definitions and reconcile every cell/fixture/helper.
-- [ ] Verify baseline source/native provenance and no cjson target delegation.
-- [ ] Reproduce representative mismatch categories and audit selective source dispatch.
-- [ ] Record complete per-cell totals, limitations and exact reproduction commands.
+- [x] Independently enumerate suite definitions and reconcile every cell/fixture/helper.
+- [x] Verify baseline source/native provenance and no cjson target delegation.
+- [x] Reproduce representative mismatch categories and audit selective source dispatch.
+- [x] Record complete per-cell totals, limitations and exact reproduction commands.
 - [ ] Independent task/final review; preserve local branch and all evidence.

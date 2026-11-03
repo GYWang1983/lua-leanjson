@@ -227,10 +227,11 @@ def lua_literal(value):
 
 
 class Environment:
-    def __init__(self, root, output, docker=True, image=IMAGE, tag="", locale_dir=None):
+    def __init__(self, root, output, docker=True, image=IMAGE, tag="", locale_dir=None, proxy_mode="table"):
         self.root, self.output = Path(root).resolve(), Path(output).resolve()
         self.docker, self.image, self.container = docker, image, None
         self.tag = tag + "-" if tag else ""
+        self.proxy_mode = proxy_mode
         self.locale_dir = Path(locale_dir).resolve() if locale_dir else None
         if self.locale_dir and not (self.locale_dir / "cs_CZ/LC_NUMERIC").is_file():
             raise HarnessError("locale directory does not contain cs_CZ/LC_NUMERIC")
@@ -299,6 +300,7 @@ class Environment:
         if hashlib.md5(utf8.read_bytes()).hexdigest() != "cff03b039d850f370a7362f3313e5268":
             raise HarnessError("upstream generated UTF-8 fixture hash mismatch")
         self.provenance = {"image": self.image if self.docker else None, "image_id": IMAGE_ID if self.docker else None,
+                           "proxy_mode": self.proxy_mode,
                            "build_directory": self.path(self.native), "native_library": self.path(self.native / "cjson.so"),
                            "native_library_sha256": digest(self.native / "cjson.so"),
                            "build_settings": {"target": "cjson.so", "cc": "cc", "CFLAGS": "-O3 -Wall -pedantic -DNDEBUG -g",
@@ -343,6 +345,7 @@ class Environment:
         config = {"root": self.path(self.root), "native": self.path(self.native),
                   "output": self.path(directory / "records.jsonl"), "blobs": self.path(self.output / "blobs"),
                   "implementation": implementation, "mode": mode, "source": source, "kind": kind,
+                  "proxy_mode": self.proxy_mode,
                   "cases": cases, "cell": "baseline" if implementation == "reference" else mode + "-" + source,
                   **extra}
         (self.output / "blobs").mkdir(exist_ok=True)
@@ -484,10 +487,10 @@ def run_selective(env, output, reference):
     return summaries, compatible
 
 
-def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None):
+def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None, proxy_mode="table"):
     inv = inventory(root / "vendor/lua-cjson")
     write_json(output / "inventory.json", inv)
-    with Environment(root, output, docker, image, locale_dir=locale_dir) as env:
+    with Environment(root, output, docker, image, locale_dir=locale_dir, proxy_mode=proxy_mode) as env:
         reference = run_suites(env, output / "baseline", inv, "reference", "native", "memory")
         baseline = {r["id"]: r for r in reference}
         for record in reference:
@@ -497,6 +500,7 @@ def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None):
         write_records(output / "baseline/records.jsonl", reference)
         print("baseline: " + json.dumps(summarize(reference)["classifications"]), flush=True)
         summary = {"schema_version": 1, "harness_healthy": True, "compatible": True,
+                   "proxy_mode": proxy_mode,
                    "inventory_total_per_cell": len(inv["cases"]), "baseline": summarize(reference), "matrix": {}, "selective": {}}
         for mode in MODES:
             for source in SOURCES:
@@ -515,9 +519,9 @@ def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None):
         return summary
 
 
-def run_negative_controls(root, output):
+def run_negative_controls(root, output, proxy_mode="table"):
     root, output = Path(root), Path(output)
-    with Environment(root, output) as env:
+    with Environment(root, output, proxy_mode=proxy_mode) as env:
         def control(name, rows, code, **options):
             reference, _ = env.worker(output / name / "reference", "reference", "native", "memory", rows,
                                       kind="control", code=code)
@@ -606,6 +610,7 @@ def main():
     parser.add_argument("--output", type=Path, default=Path(DEFAULT_OUTPUT))
     parser.add_argument("--docker", action="store_true", help="use the immutable pinned ARM64 development image")
     parser.add_argument("--image", default=IMAGE)
+    parser.add_argument("--proxy-mode", choices=("table", "userdata"), default="table")
     parser.add_argument("--strict", action="store_true", help="exit 1 for applicable differences/unsupported APIs; harness errors exit 2")
     parser.add_argument("--locale-dir", type=Path, help="prepared LOCPATH directory containing cs_CZ/LC_NUMERIC; hashed in provenance")
     parser.add_argument("--inventory-only", action="store_true")
@@ -620,8 +625,8 @@ def main():
             write_json(output / "inventory.json", inventory(ROOT / "vendor/lua-cjson"))
             return 0
         if args.controls:
-            return 0 if run_negative_controls(ROOT, output)["healthy"] else 2
-        report = run_matrix(ROOT, output, args.docker, args.image, args.locale_dir)
+            return 0 if run_negative_controls(ROOT, output, args.proxy_mode)["healthy"] else 2
+        report = run_matrix(ROOT, output, args.docker, args.image, args.locale_dir, args.proxy_mode)
         print(json.dumps({"harness_healthy": report["harness_healthy"], "compatible": report["compatible"], "output": str(output)}))
         return exit_status(report, args.strict)
     except (HarnessError, OSError, ValueError, KeyError) as error:

@@ -43,6 +43,7 @@ def arguments():
     parser.add_argument("--image", required=True)
     parser.add_argument("--runtime-image", action="store_true")
     parser.add_argument("--target-volume", help="Docker volume containing the built Linux target directory")
+    parser.add_argument("--proxy-mode", choices=("table", "userdata"), default="table")
     parser.add_argument("--cases", nargs="+", default=[
         "short-elements", "wide-objects", "wide-scalars", "duplicate-tail",
         "wide-duplicates", "deep-objects", "prompt", "messages",
@@ -122,6 +123,7 @@ def main():
                    "cases": args.cases, "index_budget_bytes": args.index_budget_bytes,
                    "index_depth": args.index_depth, "index_array_limit": args.index_array_limit,
                    "target_volume": args.target_volume,
+                   "proxy_mode": args.proxy_mode,
                    "methodology": "one fresh native OpenResty process per cell; no concurrent requests; external input/oracle; no forced GC during phases",
                    "gate": "LeanJSON process peak RSS <= native cjson process peak RSS for every paired cell"}
     failures, receipts = [], []
@@ -143,7 +145,7 @@ def main():
                     result_name = f"{name}-{source}-{method}-output.json"
                     stdout, wall = run("memory-phases.lua", [method, source, f"/measurement/{input_name}",
                         f"/measurement/{result_name}", access, args.index_budget_bytes, args.branches,
-                        args.index_depth, args.index_array_limit])
+                        args.index_depth, args.index_array_limit, args.proxy_mode])
                     row = json.loads(stdout.strip())
                     result = (output / result_name).read_bytes()
                     if not same_json(json.loads(result, object_pairs_hook=unique_object), expected):
@@ -155,6 +157,8 @@ def main():
                     records.write(json.dumps(row) + "\n"); records.flush()
                     pair[method] = row
                     (output / result_name).unlink()
+                if pair["leanjson"].get("visited") != pair["cjson"].get("visited"):
+                    raise AssertionError(f"visited-container count differs: {case}/{source}")
                 ratio = pair["leanjson"]["worker_hwm_kib"] / pair["cjson"]["worker_hwm_kib"]
                 passed = ratio <= 1.0
                 receipt = {"case":case, "source":source, "passed":passed, "rss_ratio":ratio,

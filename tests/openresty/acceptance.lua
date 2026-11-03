@@ -74,9 +74,10 @@ local function closed_source(probe)
     end
 end
 
+for _, proxy_mode in ipairs { "table", "userdata" } do
 for _, eager in ipairs { false, true } do
     for _, input in ipairs { "memory", "file", "incremental", "fallback" } do
-        check((eager and "eager" or "preloaded") .. " loading options reach HTTP " .. input, function()
+        check(proxy_mode .. " " .. (eager and "eager" or "preloaded") .. " loading options reach HTTP " .. input, function()
             local ignored = ("p"):rep(input == "file" and 131072 or 32)
             local raw = '{"a":{"b":{"c":{"d":{"e":"selected"}}}},"items":[0,1,2,3,4,{"x":false}],"n":null,"big":9007199254740993,"ignored":"' .. ignored .. '"}'
             local body, headers = raw
@@ -85,8 +86,12 @@ for _, eager in ipairs { false, true } do
                 body = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
                 headers = { ["Transfer-Encoding"] = "chunked" }
             end
-            local status, result = request(endpoint .. "?eager=" .. (eager and "1" or "0"), body, nil, headers)
+            local status, result = request(endpoint .. "?proxy_mode=" .. proxy_mode .. "&eager=" .. (eager and "1" or "0"), body, nil, headers)
             assert(status == 200, cjson.encode(result))
+            local actual_type = eager and "table" or proxy_mode
+            assert(result.lua_type == actual_type and result.child_lua_type == actual_type and result.array_lua_type == actual_type,
+                cjson.encode(result))
+            assert(result.rawget_rejected == (not eager and proxy_mode == "userdata"), cjson.encode(result))
             assert(result.ordinary == eager, cjson.encode(result))
             assert(result.before == result.after, "selected reads performed source I/O")
             if eager then
@@ -104,6 +109,32 @@ for _, eager in ipairs { false, true } do
             if input == "incremental" or input == "fallback" then assert(result.session_observes_edits) end
         end)
     end
+end
+end
+
+for _, input in ipairs { "memory", "file", "incremental", "fallback" } do
+    check("userdata business edits and complete bounded HTTP output from " .. input, function()
+        local prompt = ("utf8-☃/\127"):rep(input == "file" and 32768 or 256)
+        local raw = cjson.encode { model = "original", prompt = prompt, nested = { flag = true }, remove_me = "delete" }
+        local endpoint = (input == "incremental" or input == "fallback") and "/incremental" or "/completed"
+        local body, headers = raw, { ["x-capture-id"] = "strict-" .. input }
+        if input == "fallback" then
+            body = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
+            headers["Transfer-Encoding"] = "chunked"
+        end
+        local status, result = request(endpoint .. "?proxy_mode=userdata&mixed=1", body, nil, headers)
+        assert(status == 200, cjson.encode(result))
+        assert(result.lua_type == "userdata" and result.branch_lua_type == "userdata" and result.child_lua_type == "userdata",
+            cjson.encode(result))
+        local decoded = capture(result)
+        assert(decoded.model == "rewritten" and decoded.prompt == prompt and decoded.nested.flag == false)
+        assert(decoded.remove_me == nil and decoded.added.enabled and decoded.added.value == cjson.null)
+        assert(result.original_model == "original" and result.sibling_model == "independent")
+        assert(result.transfer.reader_closed and result.transfer.delivered_bytes == result.sink.bytes)
+        assert(result.sink.bytes == result.sink.length and result.transfer.max_chunk <= 16384 and result.sink.max_chunk <= 16384)
+        assert(result.input.mode == (input == "file" and "completed-file" or input == "incremental" and "incremental" or "completed-memory"))
+        if input == "fallback" then assert(result.input.fallback == "transfer-encoding") end
+    end)
 end
 check("HTTP eager scalar roots preserve false and null", function()
     for _, endpoint in ipairs { "/loading/completed", "/loading/incremental" } do

@@ -10,7 +10,8 @@ if method == "cjson" then
         "cjson benchmark requires a fresh process without LeanJSON")
 end
 local access = arg[5] or "model"
-local options = { chunk_size = 65536 }
+local options = { chunk_size = 65536, proxy_mode = arg[10] or "table" }
+assert(options.proxy_mode == "table" or options.proxy_mode == "userdata")
 if arg[6] then options.index_budget_bytes = assert(tonumber(arg[6])) end
 local branches_count = tonumber(arg[7]) or 0
 if arg[8] then options.index_depth = assert(tonumber(arg[8])) end
@@ -53,12 +54,15 @@ else
     decoder:close()
 end
 assert(file:close())
+local carrier_type = type(body)
+if json then assert(carrier_type == options.proxy_mode, "requested proxy carrier was not used") end
 sample("parsed")
 assert(body.model == "original")
 local visited = 0
 if access == "scan" or access == "scan-auto" then
     for _, value in (method == "cjson" and pairs or json.pairs)(body) do
-        if type(value) == "table" then
+        local kind = json and json.type(value) or type(value)
+        if kind == "table" or kind == "object" or kind == "array" then
             local id = value.id
             assert(type(id) == "number")
             if method == "leanjson" and access == "scan" then json.close(value) end
@@ -122,6 +126,7 @@ sample("closed")
 local peak, lua_peak = 0, 0
 for _, row in ipairs(phases) do peak = math.max(peak, row.hwm_kib); lua_peak = math.max(lua_peak, row.lua_kib) end
 print(cjson.encode({method=method,source=source,access=access,visited=visited,branches=branches_count,
+    proxy_mode=options.proxy_mode,lua_type=carrier_type,
     source_bytes=source_bytes,output_bytes=output_bytes,max_chunk=max_chunk,
     index_budget_bytes=options.index_budget_bytes or 1048576,
     index_depth=options.index_depth or 3,index_array_limit=options.index_array_limit or 3,

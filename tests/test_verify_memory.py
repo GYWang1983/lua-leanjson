@@ -85,13 +85,13 @@ class FakeDocker:
 
 
 class MemoryRunnerProvenanceTests(unittest.TestCase):
-    def run_case(self, runtime_image=True, enforce_pin=True, mutate_lua=False):
+    def run_case(self, runtime_image=True, enforce_pin=True, mutate_lua=False, proxy_mode="table"):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "evidence"
             args = SimpleNamespace(image=IMAGE_TAG, runtime_image=runtime_image, target_volume=None,
                                    output_dir=output, bytes=128, branches=0, sources=["file"], cases=["prompt"],
                                    index_budget_bytes=0, index_depth=0, index_array_limit=0,
-                                   timeout=10, report_only=False)
+                                   timeout=10, report_only=False, proxy_mode=proxy_mode)
             docker = FakeDocker(self, output, enforce_pin, mutate_lua)
             with mock.patch.object(RUNNER, "arguments", return_value=args), \
                     mock.patch.object(RUNNER.subprocess, "check_output", side_effect=docker.check_output), \
@@ -100,6 +100,17 @@ class MemoryRunnerProvenanceTests(unittest.TestCase):
                 self.assertEqual(0, RUNNER.main())
             environment = json.loads((output / "results.jsonl").read_text().splitlines()[0])
             return environment, docker
+
+    def test_proxy_mode_is_recorded_and_forwarded_to_every_measured_worker(self):
+        for mode in ("table", "userdata"):
+            with self.subTest(proxy_mode=mode):
+                environment, docker = self.run_case(proxy_mode=mode)
+                self.assertEqual(mode, environment.get("proxy_mode"))
+                workers = [command for command in docker.commands
+                           if any(part.endswith("/memory-phases.lua") for part in command)]
+                self.assertEqual(2, len(workers))
+                for command in workers:
+                    self.assertEqual(mode, command[-1])
 
     def test_mutable_tag_is_resolved_once_and_every_container_executes_its_id(self):
         for runtime_image in (False, True):

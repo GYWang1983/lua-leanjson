@@ -20,6 +20,36 @@ TEST_OUTPUT = Path(os.environ.get("CJSON_COMPAT_TEST_OUTPUT", ROOT / ".superpowe
 
 
 class RunnerControls(unittest.TestCase):
+    def test_userdata_observation_retains_types_and_native_exact_failure(self):
+        runner = self.runner()
+        scratch = TEST_OUTPUT / "userdata-types"
+        case = {"id": "userdata-types", "suite": "negative-control", "line": 1,
+                "name": "userdata-types", "category": "direct_decode", "source": "negative-control:userdata-types",
+                "declared_apis": ["cjson.decode"]}
+        code = ('util.run_test_group({{"userdata-types",json.decode,{[[{"child":[false]}]]},'
+                'true,{{child={false}}}}})')
+        with runner.Environment(ROOT, scratch, proxy_mode="userdata") as environment:
+            reference, _ = environment.worker(scratch / "reference", "reference", "native", "memory",
+                                               [case], kind="control", code=code)
+            for mode in ("lazy", "preload", "eager"):
+                for source in ("memory", "file", "feed"):
+                    with self.subTest(mode=mode, source=source):
+                        target, runtimes = environment.worker(scratch / (mode + "-" + source), "target", mode, source,
+                                                              [case], kind="control", code=code)
+                        row = target[0]
+                        actual_type = "table" if mode == "eager" else "userdata"
+                        self.assertEqual("userdata", row["proxy_mode"])
+                        self.assertEqual("userdata", row["dispatch"][0]["options"]["proxy_mode"])
+                        self.assertEqual("userdata", runtimes[0]["proxy_mode"])
+                        result = row["result"]["values"][0]
+                        self.assertEqual(actual_type, result["type"])
+                        self.assertEqual(actual_type, result["entries"][0]["value"]["type"])
+                        self.assertTrue(row["logical_pass"], row)
+                        self.assertEqual(mode == "eager", row["upstream_exact_pass"])
+                        verdict = runner.classify(reference[0], row)
+                        self.assertEqual("pass" if mode == "eager" else "behavioral_difference", verdict)
+                        self.assertEqual(mode == "eager", row["matches_reference_result"])
+
     def test_safe_module_and_factory_preserve_pairs_in_all_source_modes(self):
         runner = self.runner()
         scratch = TEST_OUTPUT / "safe-dispatch-control"
@@ -192,7 +222,7 @@ class RunnerControls(unittest.TestCase):
                 self.assertEqual(reference[0]["result"]["values"][1], rows[0]["encoded_output"])
 
     def test_reusing_output_keeps_only_the_current_invocation_status(self):
-        scratch = ROOT / ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts/status-reuse-controls"
+        scratch = TEST_OUTPUT / "status-reuse-controls"
         scratch.mkdir(parents=True, exist_ok=True)
         for transition in (("success", "failure"), ("failure", "success")):
             with self.subTest(transition=" -> ".join(transition)):

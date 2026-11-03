@@ -214,7 +214,7 @@ function Decoder:finish()
         local was_finished = self.finished
         if not was_finished then self.node = finish_backend(self.backend) end
         local completed
-        if self.backend.opts.lazyload then completed = path.from_node(self.node, {}, self.scope, self.codec)
+        if self.backend.opts.lazyload then completed = path.from_node(self.node, {}, self.scope, self.codec, self.backend.opts.proxy_mode)
         elseif was_finished then completed = loading.rebuild(self.backend, self.node.handle, self.scope)
         else completed = self.backend.loading:take() end
         self.finished = true
@@ -234,7 +234,9 @@ function Decoder:get(query)
     if not usable then return nil, "ERROR", tostring(source_error) end
     if not self.finished then return nil, "NEED_INPUT" end
     local found, value = pcall(function()
-        if self.backend.opts.lazyload then return path.from_node(self.node, segments, self.scope, self.codec) end
+        if self.backend.opts.lazyload then
+            return path.from_node(self.node, segments, self.scope, self.codec, self.backend.opts.proxy_mode)
+        end
         local node = self.node
         for _, segment in ipairs(segments) do
             if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end

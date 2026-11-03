@@ -52,6 +52,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--image", required=True)
     parser.add_argument("--target-volume", required=True)
+    parser.add_argument("--proxy-mode", choices=("table", "userdata"), default="table")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--cases", nargs="+", choices=("wide", "selected", "wildcards"),
                         default=["wide", "selected", "wildcards"])
@@ -83,6 +84,7 @@ def main():
         "revision": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip(),
         "status": subprocess.check_output(["git", "status", "--porcelain"], cwd=repo, text=True),
         "cases": args.cases, "sources": args.sources,
+        "proxy_mode": args.proxy_mode,
         "index_depth": 0, "index_array_limit": 0, "index_budget_bytes": 0,
         "methodology": "one fresh native OpenResty process per cell; no concurrent workloads; no forced GC during phases",
         "comparison": "cjson decodes retained raw input with decode_array_with_array_mt(true); eager returns plain values; both use full encode; preload retains selected immutable values and uses bounded reader output"}
@@ -101,12 +103,14 @@ def main():
                     command = base + ["--entrypoint", "/usr/local/openresty/bin/resty", image_id,
                         "-I", "/workspace/lua", "-I", "/workspace/tests/openresty",
                         "/workspace/tests/openresty/loading-modes.lua", mode, source, name,
-                        "/measurement/" + input_name, "/measurement/" + result_name]
+                        "/measurement/" + input_name, "/measurement/" + result_name, args.proxy_mode]
                     completed = subprocess.run(command, capture_output=True, text=True, timeout=300)
                     (output / (cell + ".log")).write_text(completed.stdout + completed.stderr)
                     if completed.returncode:
                         raise RuntimeError(f"{cell} failed; see {output / (cell + '.log')}")
                     row = json.loads(completed.stdout)
+                    assert row["proxy_mode"] == args.proxy_mode, f"carrier provenance: {cell}"
+                    assert row["lua_type"] == (args.proxy_mode if mode == "preload" else "table"), f"actual carrier: {cell}"
                     untouched = (output / (result_name + ".untouched")).read_bytes()
                     assert same_json(json.loads(untouched), expected), f"untouched oracle: {cell}"
                     if mode == "preload":

@@ -1,5 +1,5 @@
 -- Immutable logical nodes and mutable proxy cells. Only this weak side table
--- associates a public (always empty) Lua table with its private state.
+-- associates a public table/userdata carrier with its private state.
 local M = {}
 local ffi = require("ffi")
 local leases = require("leanjson.leases")
@@ -7,7 +7,17 @@ local nodes = require("leanjson.nodes")
 local raw_metatable = debug and debug.getmetatable or getmetatable
 local META = setmetatable({}, { __mode = "k" })
 local GC_TOKENS = setmetatable({}, { __mode = "k" })
-local Object, Array, MarkedArray = {}, {}, {}
+local userdata_factory = newproxy
+local function carrier()
+    if type(userdata_factory) ~= "function" then return {}, nil end
+    local prototype = userdata_factory(true)
+    return getmetatable(prototype), prototype
+end
+-- A prototype shares its metatable with every userdata of the same shape.
+-- Table carriers use these same methods, including late codec configuration.
+local Object, ObjectPrototype = carrier()
+local Array, ArrayPrototype = carrier()
+local MarkedArray, MarkedArrayPrototype = carrier()
 local config
 local function live_holder(cell)
     local value = cell.public and cell.public[1]
@@ -53,17 +63,24 @@ end
 
 local changed = nodes.changed
 
-local function new_cell(node, parent, key, lexical, codec)
+local function new_cell(node, parent, key, lexical, codec, mode)
     return { node = node, parent = parent, key = key, children = setmetatable({}, { __mode = "v" }), version = 0,
-        lexical = lexical, codec = codec or (parent and parent.codec) or config }
+        lexical = lexical, codec = codec or (parent and parent.codec) or config,
+        proxy_mode = mode or (parent and parent.proxy_mode) or "table" }
 end
 
 local function wrap(cell, prepared)
     local holder, value = live_holder(cell)
     if holder then return value end
-    local mt = Object
-    if cell.node.kind == "array" then mt = M.array_marked(cell.node) and MarkedArray or Array end
-    value = setmetatable({}, mt)
+    local mt, prototype = Object, ObjectPrototype
+    if cell.node.kind == "array" then
+        if M.array_marked(cell.node) then mt, prototype = MarkedArray, MarkedArrayPrototype
+        else mt, prototype = Array, ArrayPrototype end
+    end
+    if cell.proxy_mode == "userdata" then
+        if not prototype then error("leanjson: userdata proxy_mode requires the newproxy factory", 0) end
+        value = userdata_factory(prototype)
+    else value = setmetatable({}, mt) end
     local scope
     if prepared then
         scope = leases.acquire()
@@ -75,10 +92,12 @@ local function wrap(cell, prepared)
     return value
 end
 
-local function child_cell(node, parent, key, lexical, scope, expected, codec)
+local function child_cell(node, parent, key, lexical, scope, expected, codec, mode)
     if parent and not lexical then
         leases.check(scope)
-        if parent.closed or parent.node ~= expected then return new_cell(node, nil, nil, nil, parent.codec) end
+        if parent.closed or parent.node ~= expected then
+            return new_cell(node, nil, nil, nil, parent.codec, parent.proxy_mode)
+        end
         local cached = parent.children[key]
         if cached and nodes.same(cached.node, node) and not cached.closed then return cached end
         if cached then cached.parent = nil end
@@ -86,13 +105,13 @@ local function child_cell(node, parent, key, lexical, scope, expected, codec)
         parent.children[key] = cell
         return cell
     end
-    return new_cell(node, parent, key, lexical, codec)
+    return new_cell(node, parent, key, lexical, codec, mode)
 end
 
-local function expose(node, parent, key, lexical, scope, expected, codec)
+local function expose(node, parent, key, lexical, scope, expected, codec, mode)
     if node == nil then return nil end
     if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, scope) end
-    return wrap(child_cell(node, parent, key, lexical, scope, expected, codec))
+    return wrap(child_cell(node, parent, key, lexical, scope, expected, codec, mode))
 end
 local array_length = nodes.length
 
@@ -160,15 +179,19 @@ function M.node(value)
 end
 function M.scope(value) return META[value] and META[value].scope end
 function M.codec(value) return (META[value] and META[value].cell.codec) or config end
-function M.from_backend(backend, handle, codec) return expose(raw_node(backend, handle), nil, nil, nil, nil, nil, codec) end
-function M.from_node(node, codec) return expose(node, nil, nil, nil, nil, nil, codec) end
+function M.from_backend(backend, handle, codec)
+    return expose(raw_node(backend, handle), nil, nil, nil, nil, nil, codec, backend.opts and backend.opts.proxy_mode)
+end
+function M.from_node(node, codec, mode) return expose(node, nil, nil, nil, nil, nil, codec, mode) end
 function M.fork(value, codec)
     codec = codec or M.codec(value)
+    local holder = META[value]
+    local mode = holder and holder.cell.proxy_mode or "table"
     local captured = leases.acquire()
     local ok, result = pcall(function()
         local node = M.snapshot(value, codec.classify, codec.key,
             codec.encode_max_depth and codec.encode_max_depth() or 1000, function(child) leases.pin(captured, child) end)
-        return M.from_node(node, codec)
+        return M.from_node(node, codec, mode)
     end)
     leases.release(captured)
     if not ok then error(result, 0) end
@@ -475,7 +498,9 @@ function M.array_remove(value, index)
             end
             cell.children = setmetatable(moved, { __mode = "v" })
         end, function()
-            if container then return wrap(removed_cell or new_cell(removed_node, nil, nil, nil, cell.codec), prepared) end
+            if container then
+                return wrap(removed_cell or new_cell(removed_node, nil, nil, nil, cell.codec, cell.proxy_mode), prepared)
+            end
             return removed
         end
     end)

@@ -8,7 +8,8 @@ if ngx.var.uri == "/gc" then
     return
 end
 local started = ngx.now()
-local opts = { chunk_size = 16384, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder" }
+local opts = { chunk_size = 16384, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder",
+    decode = { proxy_mode = ngx.var.arg_proxy_mode or "table" } }
 local output_phase = "input"
 if ngx.var.arg_prepare_delay == "1" then
     local delayed = false
@@ -40,6 +41,7 @@ if ngx.var.uri == "/abort-output-length" or ngx.var.uri == "/output-hook-failure
     end
 end
 local body, session, branch, sibling, nested, httpc, unregister
+local body_type, branch_type, child_type
 local model_view, other_view, original_view
 local function phase(name)
     local records = package.loaded["leanjson.test_state"]
@@ -137,6 +139,7 @@ local function run()
         return
     end
     -- Own every subsequent holder before its first mutation/read can yield.
+    body_type = type(body)
     if not unregister then unregister = assert(adapter.on_abort(cleanup)) end
     if ngx.var.uri == "/abort-callbacks" then
         assert(adapter.on_abort(function() error("intentional abort callback failure") end))
@@ -164,12 +167,14 @@ local function run()
         return
     end
     branch = leanjson.fork(body)
+    branch_type = type(branch)
     phase("forked")
     branch.model = "rewritten"
     if ngx.var.arg_mixed == "1" then
         branch.remove_me = nil
         branch.added = { enabled = true, value = leanjson.null }
         nested = branch.nested
+        child_type = type(nested)
         nested.flag = false
         leanjson.close(nested)
         nested = nil
@@ -218,6 +223,7 @@ local function run()
     phase("cleaned")
     if err then ngx.status = 502 end
     ngx.say(cjson.encode { error = err and tostring(err), sink = result, transfer = transfer,
+        lua_type = body_type, branch_lua_type = branch_type, child_lua_type = child_type,
         input = info, original_model = original_model, sibling_model = sibling_model,
         lua_kib = collectgarbage("count"), elapsed_ms = (ngx.now() - started) * 1000 })
 end

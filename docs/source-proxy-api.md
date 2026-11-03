@@ -1,6 +1,24 @@
 # Mutable JSON views and bounded output
 
-`leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types. With `decode_array_with_array_mt(true)`, array views expose the public `array_mt` marker through a private metatable; their proxy mechanics remain active. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility. Direct `next`, `rawget`, `rawset`, and metatable replacement bypass the proxy API.
+`leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types. With `decode_array_with_array_mt(true)`, array views expose the public `array_mt` marker through a private metatable; their proxy mechanics remain active. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility.
+
+The per-decode `proxy_mode` option accepts `"table"` (default) or `"userdata"`.
+It applies to `decode`, `decode_file`, and `new_decoder`, including normal/safe
+modules and independent codecs. Lazy object/array roots, nested and preloaded
+containers, decoder get/finish views, detached children and array-remove results
+use the selected carrier. Native `type()` really returns `"userdata"` in strict
+mode; `leanjson.type()` still returns the logical object/array kind. Scalars,
+null and empty-array sentinels retain their existing contracts. Invalid mode
+values throw before I/O, including safe calls and eager decoding. A runtime
+without `newproxy` rejects strict mode rather than falling back to table proxies.
+
+Direct `next`, `rawget`, `rawset`, metatable replacement and `table.getn` do not
+observe logical proxy data. On the table carrier they operate on raw empty
+storage; on userdata they reject the type, as do table-only operations such as
+`table.insert`, `table.remove`, `table.sort` and `table.concat`. No Lua builtin is
+patched. Use the helpers and dense-array edits below, or materialize at an
+interface requiring ordinary tables. Third-party libraries may reject, skip or
+otherwise handle userdata according to their own rules.
 
 `lazyload` defaults to `true`. Set `lazyload=false` to build the complete value
 as ordinary Lua tables/scalars during validation, without proxy descendants or
@@ -71,9 +89,9 @@ first.unwanted = nil
 first.optional = leanjson.null
 ```
 
-A fork captures the current logical value. Later writes to the original or either fork are independent. The immutable source and untouched structural nodes are shared; large sibling strings are not decoded by a write or a fork.
+A fork captures the current logical value and preserves a proxy's carrier, even when called through another codec. Forking an ordinary table uses the default table carrier. Later writes to the original or either fork are independent. The immutable source and untouched structural nodes are shared; large sibling strings are not decoded by a write or a fork.
 
-Proxy assignment captures a snapshot too. Assigning a plain Lua table or another proxy copies its logical ownership, so later external edits do not change the assigned value. Repeated reads of a particular attached child still return the same proxy. Replacing or deleting the parent field detaches an already returned child: edits through that old reference affect the old value only. A cyclic plain table cannot be snapshotted.
+Proxy assignment captures a snapshot too. Assigning a plain Lua table or another proxy copies its logical ownership, so later external edits do not change the assigned value. Assignment and array insertion expose containers with the destination parent's carrier, independent of the source carrier. Repeated reads of a particular attached child still return the same proxy. Replacing or deleting the parent field detaches an already returned child: edits through that old reference affect the old value only. A cyclic plain table cannot be snapshotted.
 
 External Lua arrays are also accepted by `encode`, `reader`, `fork` and proxy
 assignment/insertion. Except for the raw `array_mt` marker, a raw `__len` field
@@ -149,7 +167,9 @@ non-whitespace strings are accepted. The empty/default getter safely returns
 `encode_skip_unsupported_value_types([value])` defaults to false and accepts
 booleans and native on/off options. True omits unsupported values, compacts
 arrays and emits an empty string for an unsupported root. Nil/null and supported
-64-bit integer cdata remain encodable. Invalid keys, numeric policy, sparse
+64-bit integer cdata remain encodable. LeanJSON's own userdata proxies remain
+encodable at the root or inside mixed trees; foreign userdata remains unsupported.
+Invalid keys, numeric policy, sparse
 arrays, cycles and depth limits still apply. A container with only skipped
 values retains the native closing newline when indentation is enabled, while
 truly empty containers have no newline. These settings belong to the calling

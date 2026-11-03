@@ -16,7 +16,7 @@ elseif mode == "eager" then
     json.decode_array_with_array_mt(true)
 end
 local reads = 0
-local options = { chunk_size = 65536, index_depth = 0,
+local options = { chunk_size = 65536, proxy_mode = arg[6] or "table", index_depth = 0,
     index_array_limit = 0, index_budget_bytes = 0,
     on_chunk = function() reads = reads + 1 end }
 if mode == "eager" then options.lazyload = false end
@@ -56,6 +56,8 @@ else
     decoder:close()
 end
 assert(file:close())
+local carrier_type = type(body)
+assert(carrier_type == (mode == "preload" and options.proxy_mode or "table"), "requested proxy carrier was not used")
 sample("decoded")
 local before = reads
 assert(body.model == "original")
@@ -117,6 +119,7 @@ local peak = 0
 for _, phase in ipairs(phases) do peak = math.max(peak, phase.hwm_kib) end
 if json then json.close(body) end
 print(cjson.encode({ mode = mode, source = source, scenario = scenario,
+    proxy_mode = options.proxy_mode, lua_type = carrier_type,
     input_bytes = input_bytes, output_bytes = output_bytes, untouched_bytes = untouched_bytes,
     peak_rss_kib = peak, phases = phases,
     decode_cpu_s = phases[2].cpu_s - phases[1].cpu_s,

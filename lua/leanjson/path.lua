@@ -32,13 +32,13 @@ function M.parse(path)
     return segments
 end
 
-function M.from_node(node, segments, scope, codec)
+function M.from_node(node, segments, scope, codec, mode)
     for _, segment in ipairs(segments) do
         if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
         node = proxy.lookup(node, segment.key, scope)
         if node == nil then return nil end
     end
-    if node.kind == "array" or node.kind == "object" then return proxy.from_node(node, codec) end
+    if node.kind == "array" or node.kind == "object" then return proxy.from_node(node, codec, mode) end
     return proxy.scalar(node, scope)
 end
 

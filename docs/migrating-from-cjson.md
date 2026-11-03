@@ -20,13 +20,13 @@ Use this guide when replacing `lua-cjson` in existing LuaJIT or OpenResty code.
 | `cjson.empty_array_mt` | `leanjson.empty_array_mt` | Aliases lua-cjson's empty-array metatable when available. |
 | `pairs(t)` / `ipairs(t)` on decoded data | `leanjson.pairs(t)` / `leanjson.ipairs(t)` | Works on all LuaJIT builds. Plain `pairs` / `ipairs` need LuaJIT 5.2-compat support. |
 | `next(t)` on decoded data | No direct lazy-proxy equivalent | Use `leanjson.pairs`, `leanjson.ipairs`, or `leanjson.len`; materialize first if a library requires native `next`. |
-| `#t` on decoded data | `leanjson.len(t)` | Works on all LuaJIT builds. Plain `#t` needs LuaJIT 5.2-compat support. |
+| `#t` / `table.getn(t)` on decoded data | `leanjson.len(t)` | Portable helper. `#` dispatch on table proxies needs LuaJIT 5.2 compatibility; userdata uses `__len`. `table.getn` sees empty raw table storage or rejects userdata. |
 | Field reads after decode | `t.key`, `t[1]`, or `leanjson.parse(json):get_*("path")` | Use `leanjson.parse` and cursors for parse-once, extract-a-few-fields hot paths. |
 
 ## Pick the migration path
 
 For code that already does `decode -> read or mutate -> encode`, start with the
-lazy table API:
+lazy API with its default table carrier:
 
 ```lua
 local leanjson = require("leanjson")
@@ -77,7 +77,11 @@ emits them as decimal JSON integers without `LL` or `ULL` suffixes.
 
 ### Decoded values are lazy proxies
 
-`leanjson.decode` returns a lazy object or array proxy. Field and index reads decode
+`leanjson.decode` returns a lazy object or array proxy. Set the per-decode option
+`proxy_mode="userdata"` for strict userdata views, or keep the default `"table"`.
+Only these two values are accepted, including on safe calls; options remain
+ordinary tables and there is no global carrier setting. Strict mode requires
+`newproxy` and fails clearly if it is unavailable. Field and index reads decode
 only the requested value. Nested containers are also proxies and keep stable Lua
 identity when read repeatedly.
 
@@ -86,6 +90,12 @@ the modified path without decoding sibling scalars. `leanjson.type(value)` repor
 `"array"`, `"object"`, `"null"`, or the scalar type; an array proxy does not use
 `leanjson.empty_array_mt`. `leanjson.decode` returns ordinary scalar values for scalar
 JSON roots.
+
+In strict mode, native `type(proxy)` is `"userdata"` while `leanjson.type(proxy)`
+reports `"object"` or `"array"`. Nested/preloaded views and decoder get/finish
+results have the same carrier. Forks preserve the source carrier across codecs;
+assignment/insertion snapshots use the destination parent's carrier. Explicit
+`lazyload=false` and `materialize()` always produce ordinary Lua values.
 
 `leanjson.fork(value)` freezes the current logical value into an independent branch.
 Proxy assignment snapshots ordinary Lua tables and other proxies too; it does
@@ -117,7 +127,8 @@ reader, ownership and lifecycle contract.
 ### Iteration and length helpers
 
 OpenResty LuaJIT enables Lua 5.2 compatibility, so plain `pairs`, `ipairs`, and
-`#` dispatch to the proxy metamethods there. Stock LuaJIT 5.1 often does not.
+`#` dispatch to the proxy metamethods there. Stock LuaJIT 5.1 often does not
+dispatch table metamethods; userdata supports its length metamethod.
 Portable code should use:
 
 ```lua
@@ -140,7 +151,10 @@ lua-cjson callers usually observe.
 
 Lua's native `next(t)` walks the raw table storage directly; it does not call
 `__pairs`, `__ipairs`, `__index`, or any leanjson helper. On a leanjson lazy proxy,
-that raw storage is empty, not the decoded JSON object or array. Private state
+the default table carrier has empty raw storage, rather than the decoded JSON
+object or array. With `proxy_mode="userdata"`, native `next`, `rawget`, `rawset`,
+`table.getn`, metatable replacement and table-only edits reject the type.
+Private state
 and child caches are stored outside the proxy table. This means `next(proxy)` is
 not a valid way to iterate JSON fields, fetch the first entry, or test whether a
 decoded object is empty.
@@ -169,6 +183,10 @@ end
 
 If code you do not control calls `next`, `rawget`, `rawset`, or otherwise expects
 ordinary table storage, pass `leanjson.materialize(proxy)` instead of the proxy.
+Third-party encoders and other libraries may reject or skip userdata, or apply
+another policy. This option does not guarantee a universal third-party error.
+LeanJSON's own encoder and reader recognize both carriers, including mixed plain
+tables and proxies with skip-unsupported enabled. No global builtin is patched.
 
 ### Validation mode
 

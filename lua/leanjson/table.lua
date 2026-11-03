@@ -494,7 +494,7 @@ local function new_codec()
         end
         local function skip(v)
             return ENCODE_SKIP_UNSUPPORTED and not rawequal(v, _M.null) and not rawequal(v, _M.empty_array)
-                and unsupported(type(v), v)
+                and not proxy.is_proxy(v) and unsupported(type(v), v)
         end
         while #stack > 0 do
             local frame = stack[#stack]
@@ -526,10 +526,10 @@ local function new_codec()
                 elseif tv == "string" then emit(encode_string(v)); stack[#stack] = nil
                 elseif tv == "number" then emit(encode_number(v)); stack[#stack] = nil
                 elseif tv == "boolean" then emit(v and "true" or "false"); stack[#stack] = nil
+                elseif proxy.is_proxy(v) then emit(encode_proxy(v, depth)); stack[#stack] = nil
                 elseif skip(v) then stack[#stack] = nil
                 elseif tv == "cdata" then emit(encode_cdata(v)); stack[#stack] = nil
                 elseif tv ~= "table" then error("Cannot serialise " .. tv .. ": type not supported", 0)
-                elseif proxy.is_proxy(v) then emit(encode_proxy(v, depth)); stack[#stack] = nil
                 else
                     if active[v] then depth_error(ENCODE_MAX_DEPTH + 1) end
                     if depth > ENCODE_MAX_DEPTH then depth_error(depth) end

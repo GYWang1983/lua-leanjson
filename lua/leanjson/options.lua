@@ -18,6 +18,12 @@ function M.normalize(opts)
     if opts.lazy ~= nil and type(opts.lazy) ~= "boolean" then error("leanjson: opts.lazy must be a boolean", 0) end
     if opts.lazy then error("leanjson: source v1 supports eager validation only", 0) end
     if opts.lazyload ~= nil and type(opts.lazyload) ~= "boolean" then error("leanjson: lazyload must be a boolean", 0) end
+    if opts.proxy_mode ~= nil and opts.proxy_mode ~= "table" and opts.proxy_mode ~= "userdata" then
+        error('leanjson: proxy_mode must be "table" or "userdata"', 0)
+    end
+    if opts.proxy_mode == "userdata" and type(newproxy) ~= "function" then
+        error("leanjson: userdata proxy_mode requires the newproxy factory", 0)
+    end
     if opts.on_chunk ~= nil and type(opts.on_chunk) ~= "function" then error("leanjson: opts.on_chunk must be a function", 0) end
     if opts.temp_dir ~= nil and (type(opts.temp_dir) ~= "string" or opts.temp_dir == "" or opts.temp_dir:find("\0", 1, true)) then
         error("leanjson: opts.temp_dir must be a nonempty path", 0)
@@ -29,6 +35,7 @@ function M.normalize(opts)
         index_array_limit = integer(opts.index_array_limit, "index_array_limit", 3, 0, 4294967295),
         index_budget_bytes = integer(opts.index_budget_bytes, "index_budget_bytes", 1048576, 0, 4294967295),
         lazyload = opts.lazyload ~= false,
+        proxy_mode = opts.proxy_mode or "table",
         selector = require("leanjson.loading").compile(opts.preload_paths),
         on_chunk = opts.on_chunk,
         temp_dir = opts.temp_dir or os.getenv("TMPDIR") or "/tmp",

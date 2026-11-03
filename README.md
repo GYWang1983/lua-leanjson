@@ -59,6 +59,7 @@ zero: selected values and the paths needed to reach them have separate storage.
 | Bounded metadata | Configure indexing depth, array prefix and a per-source index budget; access deferred content without retaining a complete node tree. |
 | Explicit path preloading | Load routing fields during scanning while preserving lazy access to the rest of the document and complete output. |
 | Eager decoding | Set `lazyload=false` to return ordinary Lua tables and scalars for consumers that need them. |
+| Optional strict proxies | Set `proxy_mode="userdata"` to reject native raw/table-only operations while retaining lazy access, snapshots and bounded output. |
 | Native OpenResty adapter | Receive memory/file/request-socket input and send readers through lua-resty-http, with explicit cancellation and error handling. |
 | Explicit resource ownership | Close holders deterministically; independently held children, forks and readers keep their source alive. |
 
@@ -167,7 +168,27 @@ Use `encode` for these ordinary values. A `reader` also accepts them, but takes
 an immutable snapshot of the table tree; this has additional memory cost compared
 with reading a source-backed lazy proxy.
 
-Both options apply to `decode`, `decode_file`, `new_decoder`, and OpenResty
+To reject accidental native raw access, select the optional userdata carrier:
+
+```lua
+local body = json.decode(raw, { proxy_mode = "userdata" })
+assert(type(body) == "userdata") -- object/array roots and all nested views
+assert(json.type(body) == "object")
+body.model = "provider-model"
+local plain = json.materialize(body) -- ordinary Lua tables at table-only interfaces
+json.close(body)
+```
+
+`proxy_mode` defaults to `"table"`; the only other accepted value is `"userdata"`.
+It applies per decode, independently of codec configuration. Strict mode requires
+LuaJIT's `newproxy` factory and errors clearly if it is unavailable. `new()` and
+options remain ordinary tables; scalar/null/sentinel contracts stay the same.
+`lazyload=false` and `materialize()` return ordinary values. Forks preserve the
+source carrier across codecs; assignment and insertion snapshot the source value
+and expose descendants using the destination parent's carrier. Held children and
+removed array values retain their carrier after their parent closes.
+
+These options apply to `decode`, `decode_file`, `new_decoder`, and OpenResty
 adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
 option concerns validation and does not disable source validation. See the
 [source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
@@ -628,9 +649,13 @@ Additional boundaries:
   asynchronous; storage latency can still delay an OpenResty worker.
 - This is not a transparent drop-in replacement for lua-cjson. Use
   `leanjson.encode` for proxies, or explicitly materialize for other encoders.
-- In lazy mode, native `next`, `rawget` and `rawset` bypass proxy behavior. Use
+- With the default table carrier, native `next`, `rawget` and `rawset` bypass
+  proxy behavior and `table.getn` sees raw empty storage. With the userdata carrier,
+  these operations and native table-only functions reject the type. Use
   `json.pairs`, `json.ipairs` and `json.len`; these also work on stock LuaJIT
   without Lua 5.2 compatibility support.
+- Third-party libraries may reject or skip userdata, or apply their own policy.
+  Use eager decoding or `materialize()` where a library requires ordinary tables.
 - Proxy arrays stay dense. Use `array_insert` / `array_remove` for structural
   changes. `nil` deletes a field; `json.null` represents JSON null.
 - Concurrent mutations on the same branch may report a stale-mutation conflict
@@ -651,6 +676,9 @@ values; it does not implement every cjson API. The report separates unsupported
 setup dependencies from actual value/output differences and links the raw evidence.
 The [F01/F02/F05 report](docs/verification/f01-f02-f05-config-arrays.md) records
 the repaired settings, current array rules, and the remaining lazy differences.
+The [F18 report](docs/verification/f18-userdata-proxies.md) records both carriers'
+actual Lua types, exact upstream differences, HTTP acceptance and paired memory
+observations. Strict proxies do not make native table operations transparent.
 
 All current public names use the new namespace:
 

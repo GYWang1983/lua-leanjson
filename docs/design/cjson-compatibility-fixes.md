@@ -35,7 +35,7 @@
 | F15 | 编码缓冲区保留配置 | 已验证／兼容占位 | 兼容配置，不改变缓冲区行为 |
 | F16 | 模块身份与版本字段 | 待实现／策略已确认 | 使用 LeanJSON 自己的名称与版本 |
 | F17 | 异常类型、消息与位置格式 | 已验证／明确边界 | 支持功能对齐；严格扩展及未实现功能保持边界 |
-| F18 | lazy 代理与普通 Lua table 的操作边界 | 待确认策略 | 与 F05、F06 区分 |
+| F18 | lazy 代理与普通 Lua table 的操作边界 | 已实现／验证记录见报告 | 可选严格 userdata；默认 table 保留 |
 
 ## 逐项说明
 
@@ -169,10 +169,10 @@
 
 ### F18：lazy 代理与普通 Lua table 的操作边界
 
-- **现状：** 原生 `next`、`rawget`、`rawset` 绕过代理；第三方编码器可能不识别代理。项目提供访问／遍历辅助函数和 `materialize`；`lazyload=false` 返回普通值。此项来自已有 API 设计边界，不是主矩阵中的 14 项独立失败之一。
-- **证据：** [迁移文档](../migrating-from-cjson.md)、[proxy API](../source-proxy-api.md)；与 F06“由 LeanJSON 编码外部代理”是不同方向的问题。
-- **待确认：** 哪些调用要求在 lazy 模式保持透明，哪些通过 eager/materialize 作为适配边界。原生 raw 操作不触发元方法，不能承诺仅改 Lua proxy 即可完全兼容。
-- **修复目标／验收：** 对批准的兼容边界分别测试原生操作、辅助 API、第三方编码、修改后的输出与资源生命周期；不得全局替换 Lua 内置函数或悄悄全量物化来获得表面兼容。
+- **已实现：** `decode`、`decode_file`、`new_decoder` 接受 `proxy_mode="table"|"userdata"`，默认 table。严格模式的实际 Lua 类型为 userdata，原生 raw/table-only 操作拒绝该类型；逻辑访问、修改、遍历、fork、reader 与原有 lease/GC 保留。使用共享 metatable，不增加原生 ABI。
+- **载体规则：** nested/preload、decoder get/finish、脱离子视图和 array-remove 返回值保留载体；跨 codec fork 保留源载体，赋值／插入使用目标父视图载体。`lazyload=false`、`materialize` 返回普通值；非法选项在 safe/eager 也抛错。自有 userdata 优先于 unsupported/skip 判断，外来 userdata 保留原规则。
+- **边界：** 默认 table 的 `next`／raw 操作仍绕过代理，`table.getn` 看到空原始存储；严格模式会拒绝。第三方库可能拒绝、跳过或按自身策略处理 userdata，不能承诺统一报错。需普通 table 的接口使用 eager/materialize；不替换 Lua 内置函数，不隐式物化。F16 身份字段仍待实现。
+- **证据：** [F18 报告](../verification/f18-userdata-proxies.md)、[迁移文档](../migrating-from-cjson.md)、[proxy API](../source-proxy-api.md)。两种载体分别保留原生 exact verdict 与真实类型，内存门槛不调整；与 F06“由 LeanJSON 编码外部代理”是不同方向的问题。
 
 ## 修复次序建议
 

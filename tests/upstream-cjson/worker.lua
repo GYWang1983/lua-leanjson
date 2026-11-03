@@ -116,16 +116,17 @@ local function describe(value, seen, depth, input)
         else repr = ("%.17g"):format(value) end
         return { type = "number", repr = repr }
     end
-    if kind ~= "table" then return { type = kind } end
+    local own_proxy = lean and proxy.is_proxy(value)
+    if kind ~= "table" and not own_proxy then return { type = kind } end
     seen, depth = seen or {}, depth or 0
-    if seen[value] then return { type = "table_reference", ref = seen[value] } end
-    if input and depth >= 48 then return { type = "table", input_depth_summary = true } end
+    if seen[value] then return { type = kind .. "_reference", lua_type = kind, ref = seen[value] } end
+    if input and depth >= 48 then return { type = kind, input_depth_summary = true } end
     local count = 0
     for _ in pairs(seen) do count = count + 1 end
     seen[value] = count + 1
     track(value)
-    local out = { type = "table", entries = array(), storage = lean and proxy.is_proxy(value) and "proxy" or "plain" }
-    if lean and proxy.is_proxy(value) then out.container = lean.type(value)
+    local out = { type = kind, lua_type = kind, entries = array(), storage = own_proxy and "proxy" or "plain" }
+    if own_proxy then out.container = lean.type(value)
     elseif expected_one_of[value] then out.container = "one_of"
     else out.container = "Lua table (empty shape ambiguous upstream)" end
     local keys = {}
@@ -173,7 +174,7 @@ local function dependencies(domain, setting)
 end
 
 local function options(raw)
-    local out = { chunk_size = config.feed_one_byte and 1 or 16384 }
+    local out = { chunk_size = config.feed_one_byte and 1 or 16384, proxy_mode = config.proxy_mode or "table" }
     if config.mode == "eager" then out.lazyload = false end
     if config.mode == "preload" or config.mode == "selective" then
         out.index_depth, out.index_array_limit, out.index_budget_bytes = 0, 0, 0
@@ -329,9 +330,12 @@ local function logical_equal(a, b)
         return false
     end
     if rawequal(a, null) or rawequal(b, null) then return rawequal(a, b) end
-    if type(a) ~= type(b) then return false end
+    local a_container = type(a) == "table" or lean and proxy.is_proxy(a)
+    local b_container = type(b) == "table" or lean and proxy.is_proxy(b)
+    if a_container ~= b_container then return false end
+    if not a_container and type(a) ~= type(b) then return false end
     if type(a) == "number" and a ~= a and b ~= b then return true end
-    if type(a) ~= "table" then return a == b end
+    if not a_container then return a == b end
     track(a); track(b)
     local checked = {}
     for key, value in iteration(a) do
@@ -374,6 +378,7 @@ local function begin_case(meta, name)
     current = { record_type = "case", id = meta.id, suite = meta.suite, line = meta.line,
                 source_location = meta.source, name = name or meta.name, category = meta.category,
                 cell = config.cell, implementation = config.implementation, mode = config.mode, requested_source = config.source,
+                proxy_mode = config.proxy_mode or "table",
                 declared_apis = array(meta.declared_apis or {}), called_apis = array(), dispatch = array(),
                 required_modules = array(meta.required_modules or {}),
                 unsupported = array(), dependencies = array(), helper = meta.category == "helper" }
@@ -479,6 +484,7 @@ for line in mapped:gmatch("[^\n]+") do
 end
 if lean then assert(not mapped:match("/[^\n]*cjson%.so"), "native cjson mapped into target process") end
 emit({ record_type = "runtime", implementation = config.implementation, cell = config.cell,
+       proxy_mode = config.proxy_mode or "table",
        lua_version = _VERSION, jit_version = jit.version, mapped_libraries = libraries,
        native_module_version = native and native._VERSION or nil, native_module_name = native and native._NAME or nil,
        native_library_requested = native and config.native .. "/cjson.so" or nil,

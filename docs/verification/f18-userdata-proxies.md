@@ -30,12 +30,13 @@ reject or skip userdata; materialize at interfaces requiring ordinary tables.
 | --- | --- |
 | Initial focused RED | 19 passes, 37 expected failures, zero errors: mode validation/carrier missing |
 | Initial affected GREEN | 148 passes across strict, overlay, lease, loading and skip suites |
-| Final canonical `make test` | Rust 444 passes; Lua 789 passes, including 59 new regressions |
+| Object native `ipairs` follow-up | RED 61 passes / 4 expected failures; final focused GREEN 65 passes |
+| Final canonical `make test` | Rust 444 passes; Lua 795 passes, including 65 new regressions |
 | `make lua-lint` | Zero warnings/errors across 88 files |
 | Python runner controls | 16 passes, including real native/target workers and strict actual-type/exact-verdict checks |
 | Real OpenResty HTTP acceptance | 72 passes; initial 20 expected failures retained |
 | Independent loading acceptance | 18 cells per carrier, 36 total, with external typed output/duplicate/byte-count oracles |
-| Parent's standalone integration probe | 1,481 assertions pass; its initial pre-finish READY assumption was corrected in scratch, without a runtime change |
+| Parent's standalone integration probe | Initial 1,481 assertions; final-source refresh 1,489 assertions passes, including object native `ipairs`/close; initial pre-finish READY assumption corrected in scratch without a runtime change |
 
 Coverage includes normal/new/safe/safe.new, lazy/eager/preload across memory,
 file and feed input, invalid modes before I/O, no-factory failure, shared/marked
@@ -54,7 +55,7 @@ The vendor tree and upstream expectations were not changed. Default table-mode
 classifications and raw native exact verdicts match F15 at every stable ID in
 all nine cells: no missing IDs, additional IDs or changed verdicts.
 
-| Carrier/loading | Exact passes | Behavioral differences | Other records per cell |
+| Carrier/loading | `pass` records | Behavioral differences | Other records per cell |
 | --- | ---: | ---: | --- |
 | table lazy/preload | 156 | 3 | 1 F16 unsupported, 3 helper successes, 1 inapplicable |
 | userdata lazy/preload | 130 | 29 | 1 F16 unsupported, 3 helper successes, 1 inapplicable |
@@ -84,11 +85,13 @@ container counts and runtime fingerprints are checked.
 
 | Carrier | Passing pairs | Failures | Largest LeanJSON/native-cjson peak-RSS ratio |
 | --- | ---: | ---: | ---: |
-| table | 33/33 | 0 | 0.980387 |
-| userdata | 33/33 | 0 | 0.995819 |
+| table | 33/33 | 0 | 0.998524 |
+| userdata | 33/33 | 0 | 0.995337 |
 
-Both largest ratios were wide-scalars/memory. The userdata cell measured
-16,196 KiB versus native cjson's 16,264 KiB, only 68 KiB of headroom. These are
+Both largest ratios were wide-scalars/memory. Final table mode measured
+16,232 KiB versus native cjson's 16,256 KiB, only 24 KiB of headroom; userdata
+measured 16,224 KiB versus 16,300 KiB, with 76 KiB of headroom. The initial
+pre-`ipairs`-fix userdata run had 68 KiB of headroom and is retained separately. These are
 single-run observations, not a worst-case bound or a general userdata memory or
 latency improvement. The gate still requires LeanJSON peak RSS to be no greater
 than the paired native process in every cell; no threshold was changed.
@@ -99,6 +102,16 @@ it was fixed. Independent loading observations also show that eager decoding
 can use more memory and CPU than native cjson; eager mode remains a compatibility
 choice rather than a performance promise.
 
+## Independent review
+
+Task review approved the implementation and identified one minor native object
+`ipairs` inconsistency. Commit `9c79e41` addresses it with the shared existing
+iterator and six regressions; scoped re-review found no new breakage. A fresh
+whole-branch review found no remaining Critical, Important or Minor issues and
+approved the reviewed implementation. Both reports are included in the archive.
+Archive construction and per-file checksum verification were performed by the
+parent after that review; the reviewer did not certify the sealing operation.
+
 ## Provenance and reproduction
 
 Image: `lua-qjson-dev:task3-repro`, immutable ID
@@ -107,14 +120,14 @@ OpenResty 1.29.2.4, LuaJIT 2.1.ROLLING, Rust 1.90.0. The same tested runtime
 fingerprints are retained in both matrices and memory/loading environments:
 
 - Native LeanJSON SHA256: `8bf0d9f2eedf09c39e8f1aa023c58851ae486ef0172dbdfd442096c01ec38c0b`.
-- Aggregate Lua SHA256: `3e9435580e3daf5bc42cb2a9eced905f70abb5b4715979c364f080c4ed08ec8e` (sorted relative path, NUL, file bytes, NUL).
+- Aggregate Lua SHA256: `9b05041af08e3c562b1232ef5291aeceef0cf4afddc25129cbd2bb0be469ab2d` (sorted relative path, NUL, file bytes, NUL).
 
 The upstream matrices rebuild vendored lua-cjson commit
 `617164a0fe3bb647128178f9caefb304b8573bb6` and load that reference with
 `package.loadlib`. Their reference binaries have SHA256
-`3ed3fceb8093080d8de0d84ca44073067970402425fa63f267a873d02f0cfa58`
+`740bcce5bce5a29f85dbd779d2302e04bcd40b20285f30d97bb6f241252f5037`
 (table run) and
-`002b88b7751ce69ee526d2b7480969a358974e9fa2dc994119ae94d63ad8cd5f`
+`b4774823b6734fcc9287170d33793a59a04fe5003241e5713f9df5cf1434f026`
 (userdata run); each build's source/compiler/path provenance is retained.
 All twelve Czech locale categories were restored from the committed F15 archive.
 Targets explicitly deny native cjson during bootstrap.
@@ -136,17 +149,39 @@ and `make openresty-test`. Host runners, once per carrier, are:
 ```sh
 task=.superpowers/sdd/2026-11-02-cjson-f18
 python3 scripts/verify-cjson-compat.py --docker --strict --proxy-mode table \
-  --output "$task/matrix-table" --locale-dir "$task/locale"
+  --output "$task/final-matrix-table" --locale-dir "$task/locale"
 python3 scripts/verify-memory.py --image lua-qjson-dev:task3-repro \
-  --target-volume leanjson-bounded-target --proxy-mode table --output-dir "$task/memory-table"
+  --target-volume leanjson-bounded-target --proxy-mode table --output-dir "$task/final-memory-table"
 python3 scripts/verify-loading.py --image lua-qjson-dev:task3-repro \
-  --target-volume leanjson-bounded-target --proxy-mode table --output-dir "$task/loading-table"
+  --target-volume leanjson-bounded-target --proxy-mode table --output-dir "$task/final-loading-table"
 # Repeat with --proxy-mode userdata and distinct userdata output directories.
 ```
 
-Raw evidence, first RED/setup failures, complete typed/exact matrix records,
-stable-ID comparisons, phase measurements, commands and fingerprints are retained
-under `.superpowers/sdd/2026-11-02-cjson-f18/`. The controller seals the source and
-provenance archive after independent review; the implementation review snapshot
-does not claim that sealing is complete. Native macOS and installed LuaRocks
-distribution acceptance were not rerun.
+The final runtime is commit `9c79e4169f34922c81fc5bddd84f3a3f59c3c878` after
+implementation commit `0afb1fa6640f12cb678458fe7628b82effbb9ddc`. The object
+`ipairs` follow-up reuses the existing iterator; six regression cases cover both
+carriers and closed holders. Initial evidence is retained at its original paths;
+`final-*` directories/logs are the fresh HTTP, matrix, memory, loading and parent
+probe receipts for this amended runtime. All 18 Lua runtime files and matrix
+source fingerprints were checked against the final checkout. Final stable-ID
+classifications and raw exact verdicts match the initial F18 matrices for both
+carriers; the default table comparison against F15 therefore remains unchanged.
+The final HTTP run retains all 72 TAP successes and server captures under
+`final-http/leanjson-openresty.5bm2B9/`.
+
+One first focused GREEN attempt failed during module bootstrap with
+`table.lua:18: attempt to index local 'proxy' (a boolean value)` (zero tests,
+one error). Its full log is retained as `review-fix-ipairs-green.log`. The cause
+is unproven; no production amendment occurred before the following 65-case and
+795-case successful runs and the final process matrices. This report does not
+label that observation fixed. An earlier parent concern about incomplete HTTP
+output was a stale read: both the completed original log and final log contain
+72 successes and `1..72`; the ledger records that correction separately.
+
+Raw evidence, initial failures, typed/exact matrix records, measurements, review
+reports, source snapshots and checksums are retained in the
+[F18 evidence archive](f18-userdata-proxies-logs.tar.gz). Its `SHA256SUMS` covers
+every archived file except itself. The archive preserves the task-owned
+`.superpowers/sdd/2026-11-02-cjson-f18/` structure without including sibling tasks.
+Native macOS, installed LuaRocks distribution acceptance and additional Rust
+feature combinations were not rerun.

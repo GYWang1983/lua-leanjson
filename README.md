@@ -66,6 +66,12 @@ zero: selected values and the paths needed to reach them have separate storage.
 The JSON core does not depend on `ngx`. OpenResty integration is isolated in
 `leanjson.openresty`.
 
+The module exposes `_NAME = "leanjson"` and `_VERSION = "0.1.0"`, matching
+the package version in `Cargo.toml`. Independent codecs from `new()`,
+`leanjson.safe` and its instances expose the same identity. These fields identify
+LeanJSON, rather than the reference lua-cjson implementation; the LuaRocks
+`scm-1` value describes the development rock revision.
+
 ## Install from source
 
 The renamed package has **not yet been published to LuaRocks**. From a checkout

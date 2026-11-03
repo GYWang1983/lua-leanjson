@@ -5,6 +5,7 @@ use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
 mod diagnostic;
+mod comment;
 mod window;
 pub mod loading;
 pub(crate) mod duplicates;
@@ -24,11 +25,13 @@ pub const SPAN_CLEAN: u32 = 1;
 pub const SPAN_DUPLICATES: u32 = 2;
 pub const SPAN_STRING_ESCAPE: u32 = 4;
 pub const SPAN_NONFINITE: u32 = 8;
+pub const SPAN_COMMENTS: u32 = 16;
 pub const MODE_INVALID_NUMBERS: u32 = 1;
 pub const MODE_RAW_BYTES: u32 = 2;
+pub const MODE_COMMENTS: u32 = 4;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool, pub max_depth: u32 }
+pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool, pub comments: bool, pub max_depth: u32 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceError { pub code: leanjson_err, pub detail: u32, pub offset: u64 }
@@ -75,6 +78,7 @@ struct Frame {
     duplicates: Option<KeyMap>, flags: u32,
 }
 enum Token {
+    Comment { start: u64, state: comment::Comment },
     PendingNull { start: u64 },
     String { start: u64, value: Option<Value>, state: StringState, key: Option<Vec<u8>>, key_hash: u64, key_limit: usize },
     Number { value: Value, state: NumberState },
@@ -112,7 +116,7 @@ impl Source {
     }
     pub(crate) fn with_policy(mut self, mut policy: SourcePolicy) -> Self {
         policy.max_depth = self.max_depth;
-        self.diagnostic = Some(diagnostic::Diagnostics::new(self.max_depth, policy.invalid_numbers));
+        self.diagnostic = Some(diagnostic::Diagnostics::new(self.max_depth, policy.invalid_numbers, policy.comments));
         self.policy = policy; self
     }
     pub(crate) fn public_error(&self) -> Option<String> { self.diagnostic.as_ref().and_then(|diagnostic| diagnostic.message()) }
@@ -236,6 +240,8 @@ impl Source {
         if let Some(diagnostic) = &mut self.diagnostic { diagnostic.finish(total_len); }
         if let Some(error) = self.pending_failure.take() { return self.fail(error); }
         let eof_error = match self.token.take() {
+            Some(Token::Comment { start, state }) => state.eof_error().map(|_| SourceError::json(
+                leanjson_err::LEANJSON_PARSE_ERROR, if matches!(state, comment::Comment::Start) { start } else { total_len })),
             Some(Token::Number { value, state }) => match state.finish() {
                 Ok(nonfinite) => { self.complete(value, total_len, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); None },
                 Err(code) => Some(SourceError::json(code, value.start)),
@@ -366,6 +372,10 @@ impl Source {
         Ok(())
     }
     fn structural_byte(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
+        if self.policy.comments && byte == b'/' {
+            self.token = Some(Token::Comment { start: offset, state: comment::Comment::Start });
+            return Ok(());
+        }
         use FrameState::*;
         match self.frames.last().map(|f| f.state) {
             None if self.nodes.is_empty() => self.start_value(byte, offset),
@@ -396,6 +406,18 @@ impl Source {
     }
     fn token_byte(&mut self, token: Token, byte: u8, offset: u64) -> Result<bool, SourceError> {
         match token {
+            Token::Comment { start, mut state } => {
+                let opening = matches!(state, comment::Comment::Start);
+                match state.feed(byte) {
+                    comment::Step::More => {
+                        if opening { if let Some(frame) = self.frames.last_mut() { frame.flags |= SPAN_COMMENTS; } }
+                        self.token = Some(Token::Comment { start, state });
+                    },
+                    comment::Step::End => {},
+                    comment::Step::EndInput | comment::Step::Unclosed => return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
+                    comment::Step::Invalid => return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, start)),
+                }
+            },
             Token::PendingNull { start } => {
                 if byte == b'u' {
                     let value = self.allocate(leanjson_type::LEANJSON_T_NULL, start);
@@ -439,7 +461,7 @@ impl Source {
                 }
             },
             Token::Number { value, mut state } => {
-                if is_delimiter(byte) {
+                if is_delimiter(byte) || self.policy.comments && byte == b'/' {
                     let nonfinite = state.finish().map_err(|code| SourceError::json(code, value.start))?;
                     self.complete(value, offset, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); return Ok(false);
                 }

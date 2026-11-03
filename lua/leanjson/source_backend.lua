@@ -37,6 +37,7 @@ function M.require_status(status, expected, result, source)
 end
 function M.native_options(opts)
     local mode = (opts.decode_invalid_numbers and 1 or 0) + (not opts.decode_validate_utf8 and 2 or 0)
+        + (opts.decode_allow_comment and 4 or 0)
     return ffi.new("leanjson_source_v2_options[1]", { { 2, mode, opts.max_depth, opts.chunk_size,
         opts.index_depth, opts.index_array_limit, opts.index_budget_bytes, 0, opts.temp_dir, #opts.temp_dir } })
 end

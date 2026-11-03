@@ -238,13 +238,13 @@ fn overflow_flags_distinguish_finite_boundaries_and_huge_cancelled_exponents() {
 #[test]
 fn v2_mode_rejects_unknown_bits_and_v1_does_not_admit_v2_flags() {
     unsafe {
-        for mode in [4, 5, 8, u32::MAX] {
+        for mode in [8, 9, 12, u32::MAX] {
             let mut result = leanjson_source_v1_result::default();
             let source = leanjson_source_v2_new(&leanjson_source_v2_options { mode, ..Default::default() }, &mut result);
             assert!(source.is_null());
             assert_eq!((result.code, result.detail), (E::LEANJSON_INVALID_ARG as i32, DETAIL_BAD_OPTIONS));
         }
-        for mode in [1, 2, 3] {
+        for mode in [1, 2, 3, 4, 7] {
             let mut result = leanjson_source_v1_result::default();
             let source = leanjson_source_v1_new(&leanjson_source_v1_options { mode, ..Default::default() }, &mut result);
             assert!(source.is_null());
@@ -336,6 +336,76 @@ fn v1_operation_on_v2_root_uses_its_source_byte_policy() {
         }
         assert_eq!(output, b"\xff\xc3\xa9");
         leanjson_source_v1_op_release(op);
+        leanjson_source_v1_release(source);
+    }
+}
+
+// A comment policy must survive initial feed splits and unindexed late walkers,
+// mark only affected spans, and leave strict C zero/v1 modes unchanged.
+#[test]
+fn comments_are_bounded_trivia_with_precise_span_flags_and_late_policy() {
+    const COMMENTS: u32 = 16;
+    let bytes = b"/*lead*/{\"a\":{/*empty*/},\"clean\":{ \"n\" : 1.00 },\"list\":[//x\r\n1/*end*/,true],\"s\":\"/*text*/\"}//tail";
+    unsafe {
+        for prefix in [0, 3] {
+            for split in 0..=bytes.len() {
+                let source = parse(bytes, 7, split, prefix).unwrap_or_else(|error| panic!("split {split}: {error:?}"));
+                let parent = root(source);
+                assert_eq!((parent.raw_start, parent.raw_end), (8, bytes.len() as u64 - 6));
+                assert_ne!(parent.flags & COMMENTS, 0);
+                let children = members(parent, bytes, 0);
+                assert_eq!(children.len(), 4);
+                assert_ne!(children[0].1.flags & COMMENTS, 0);
+                assert_eq!(children[0].1.child_count, 0);
+                assert_eq!(children[1].1.flags & COMMENTS, 0);
+                assert_ne!(children[2].1.flags & COMMENTS, 0);
+                let list = members(children[2].1, bytes, 0);
+                assert_eq!(scalar(list[0].1, bytes), b"1");
+                assert_eq!(scalar(list[1].1, bytes), b"true");
+                assert_eq!(scalar(children[3].1, bytes), b"/*text*/");
+                leanjson_source_v1_release(source);
+            }
+        }
+        assert!(parse(bytes, 0, 3, 0).is_err());
+        for bytes in [b"/*\xff*/1".as_slice(), b"[/*\xfe*/1]", b"true//\xff\r", b"1/*x*//*y*/"] {
+            for split in 0..=bytes.len() {
+                let source = parse(bytes, 4, split, 0).unwrap_or_else(|error| panic!("{bytes:?} split {split}: {error:?}"));
+                leanjson_source_v1_release(source);
+            }
+        }
+        let mut result = leanjson_source_v1_result::default();
+        let source = leanjson_source_v1_new(ptr::null(), &mut result);
+        assert_eq!(leanjson_source_v1_feed(source, 0, bytes.as_ptr(), bytes.len(), &mut result), 5);
+        leanjson_source_v1_release(source);
+        for bytes in [b"[1/*x*/0]".as_slice(), b"[tru/*x*/e]", b"[1e/*x*/2]", b"/*unclosed", b"/"] {
+            for split in 0..=bytes.len() { assert!(parse(bytes, 7, split, 0).is_err(), "{bytes:?} split {split}"); }
+        }
+    }
+}
+
+#[test]
+fn comments_do_not_generate_loading_payload_or_bracket_depth() {
+    unsafe {
+        let options = leanjson_source_v2_options { mode: 4, max_depth: 1, window_size: 17, index_depth: 0, index_budget_bytes: 0, ..Default::default() };
+        let mut result = leanjson_source_v1_result::default();
+        let source = leanjson_source_v2_new(&options, &mut result);
+        assert!(!source.is_null(), "{result:?}");
+        assert_eq!(leanjson_source_v2_set_loading(source, ptr::null(), 1, &mut result), 0);
+        let bytes = format!("[/*{}*/1]", "\\\"[{{]\u{ff}".repeat(200000)).into_bytes();
+        let mut payload = Vec::new();
+        for (index, bytes) in bytes.chunks(17).enumerate() {
+            assert_eq!(leanjson_source_v1_feed(source, (index*17) as u64, bytes.as_ptr(), bytes.len(), &mut result), 2, "{result:?}");
+            loop {
+                let mut event = leanjson_source_v2_loading_event::default();
+                match leanjson_source_v2_next_loading_event(source, &mut event, &mut result) {
+                    0 if event.event == 2 => payload.extend_from_slice(std::slice::from_raw_parts(event.bytes, event.bytes_len)),
+                    0 => {}, 1 => break, status => panic!("event status {status}: {result:?}"),
+                }
+            }
+        }
+        assert_eq!(leanjson_source_v1_finish(source, bytes.len() as u64, &mut result), 0, "{result:?}");
+        assert_eq!(payload, b"1");
+        assert_eq!(root(source).flags & 16, 16);
         leanjson_source_v1_release(source);
     }
 }

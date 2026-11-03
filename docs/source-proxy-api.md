@@ -17,6 +17,10 @@ numbers and raw byte strings. `decode_invalid_numbers(false)` enables RFC
 number grammar; `decode_validate_utf8(true)` additionally requires valid UTF-8.
 Unicode escapes remain validated in both policies. Settings are fixed per
 source, including late child access and eager get/finish rebuilds.
+`decode_allow_comment(true)` optionally accepts native comment trivia; it is
+also fixed per source. Output rebuilds comment-bearing containers through bounded
+iterators, so actual comments never survive encode/reader or keep_origin reuse.
+Unaffected child spans and string contents retain their existing semantics.
 
 ```lua
 local plain = leanjson.decode(raw, { lazyload = false })

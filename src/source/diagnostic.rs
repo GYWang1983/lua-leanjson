@@ -17,6 +17,7 @@ impl Kind {
 #[derive(Clone, Copy)]
 enum StringPhase { Plain, Escape(u64), Hex { slash: u64, unit: u16, digits: u8, low: bool }, LowSlash(u64), LowU(u64) }
 enum Lex {
+    Comment { start: u64, state: super::comment::Comment },
     String { start: u64, phase: StringPhase },
     Word { start: u64, bytes: [u8; 5], len: usize },
     Number { start: u64, state: NumberState, accepted: Option<u64>, tail: [u8; 16], tail_len: usize, float: bool, strict_bad: bool, first_zero: bool, digits: usize },
@@ -35,12 +36,12 @@ impl Diagnostic {
     } }
 }
 pub(super) struct Diagnostics {
-    frames: Vec<Context>, lex: Option<Lex>, root: bool, ended: bool, max_depth: u32, invalid_numbers: bool,
+    frames: Vec<Context>, lex: Option<Lex>, root: bool, ended: bool, max_depth: u32, invalid_numbers: bool, comments: bool,
     first: Option<u8>, seen: u64, error: Option<Diagnostic>,
 }
 impl Diagnostics {
-    pub(super) fn new(max_depth: u32, invalid_numbers: bool) -> Self {
-        Self { frames: Vec::new(), lex: None, root: false, ended: false, max_depth, invalid_numbers, first: None, seen: 0, error: None }
+    pub(super) fn new(max_depth: u32, invalid_numbers: bool, comments: bool) -> Self {
+        Self { frames: Vec::new(), lex: None, root: false, ended: false, max_depth, invalid_numbers, comments, first: None, seen: 0, error: None }
     }
     pub(super) fn error(&self) -> Option<&Diagnostic> { if self.seen >= 2 { self.error.as_ref() } else { None } }
     fn expected(&self) -> &'static str { use Context::*; match self.frames.last() {
@@ -88,6 +89,7 @@ impl Diagnostics {
             None => {
                 let kind = match byte {
                     b' ' | b'\n' | b'\r' | b'\t' => return,
+                    b'/' if self.comments => { self.lex = Some(Lex::Comment { start: offset, state: super::comment::Comment::Start }); return; },
                     b'{' => Kind::Object, b'}' => Kind::ObjectEnd, b'[' => Kind::Array, b']' => Kind::ArrayEnd,
                     b':' => Kind::Colon, b',' => Kind::Comma, 0 => Kind::End,
                     b'"' => { self.lex = Some(Lex::String { start: offset, phase: StringPhase::Plain }); return; },
@@ -97,6 +99,16 @@ impl Diagnostics {
                     _ => { self.fail("invalid token", offset); return; },
                 };
                 self.token(kind, offset);
+            },
+            Some(Lex::Comment { start, mut state }) => {
+                use super::comment::Step;
+                match state.feed(byte) {
+                    Step::More => self.lex = Some(Lex::Comment { start, state }),
+                    Step::End => {},
+                    Step::EndInput => self.token(Kind::End, offset),
+                    Step::Invalid => self.fail("invalid token", start),
+                    Step::Unclosed => self.fail("unclosed multi-line comment", offset),
+                }
             },
             Some(Lex::String { start, mut phase }) => {
                 use StringPhase::*;
@@ -169,6 +181,9 @@ impl Diagnostics {
     pub(super) fn finish(&mut self, offset: u64) {
         if self.error.is_some() { return; }
         match self.lex.take() {
+            Some(Lex::Comment { start, state }) => { if let Some(found) = state.eof_error() {
+                self.fail(found, if matches!(state, super::comment::Comment::Start) { start } else { offset });
+            } },
             Some(Lex::String { phase, .. }) => { match phase {
                 StringPhase::Escape(slash) => self.fail("invalid escape code", slash),
                 StringPhase::Hex { slash, .. } | StringPhase::LowSlash(slash) | StringPhase::LowU(slash) => self.fail("invalid unicode escape code", slash),

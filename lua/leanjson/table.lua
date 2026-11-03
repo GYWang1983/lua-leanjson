@@ -4,6 +4,7 @@ local proxy = require("leanjson.proxy")
 local bounded_reader = require("leanjson.reader")
 local leases = require("leanjson.leases")
 local settings = require("leanjson.settings")
+local bit = require("bit")
 local raw_metatable = debug and debug.getmetatable or getmetatable
 local raw_length = rawget(_G, "rawlen") or table.getn
 local has_cjson, cjson = pcall(require, "cjson")
@@ -62,7 +63,8 @@ local function materialize_node(root, keep_origin, scope, backends)
         if node.backend then backends[node.backend] = true end
         if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, scope), true end
         keep = keep and node.backend ~= nil
-        stack[#stack + 1] = { node = node, keep = keep, out = {}, records = {}, keys = {}, complete = true,
+        local flags = node.backend and node.backend.flags and node.backend:flags(node.handle) or 0
+        stack[#stack + 1] = { node = node, keep = keep, out = {}, records = {}, keys = {}, complete = bit.band(flags, 16) == 0,
             count = 0, iterator = proxy.iter(node, scope, true) }
         return nil, false
     end
@@ -146,6 +148,7 @@ local function new_codec()
     local DECODE_ARRAY_WITH_MT = false
     local DECODE_INVALID_NUMBERS = true
     local DECODE_VALIDATE_UTF8 = false
+    local DECODE_ALLOW_COMMENT = false
     local DECODE_MAX_DEPTH = 1000
     local ENCODE_INVALID_NUMBERS = false
     local ENCODE_ESCAPE_FORWARD_SLASH = true
@@ -166,6 +169,12 @@ local function new_codec()
         settings.arity(select("#", ...), 1)
         DECODE_VALIDATE_UTF8 = settings.boolean((...), DECODE_VALIDATE_UTF8, 1)
         return DECODE_VALIDATE_UTF8
+    end
+
+    function codec.decode_allow_comment(...)
+        settings.arity(select("#", ...), 1)
+        DECODE_ALLOW_COMMENT = settings.boolean((...), DECODE_ALLOW_COMMENT, 1)
+        return DECODE_ALLOW_COMMENT
     end
 
     function codec.encode_invalid_numbers(...)
@@ -522,7 +531,7 @@ end
 local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
-    "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8",
+    "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",
     "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get" }
 local function methods(codec)
     local out = {}

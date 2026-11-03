@@ -19,6 +19,9 @@ end
 local function raw_span(node, normalize, scope)
     if node.backend then
         local flags = node.backend.flags and node.backend:flags(node.handle) or 0
+        -- Rebuild affected containers through bounded member iterators. Child
+        -- spans without comments remain eligible for their original spelling.
+        if bit.band(flags, 16) ~= 0 then return end
         -- Special source strings and numbers must obey the calling codec even
         -- when their surrounding original bytes could otherwise be reused.
         if bit.band(flags, 4) ~= 0 then return end

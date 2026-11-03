@@ -103,7 +103,10 @@ void leanjson_source_v1_op_release(leanjson_source_v1_op *);
  * finish, abort, retain and release use v1 source functions. All new exports
  * catch panics. Source spans borrow their source; iterator/op handles retain it.
  * flags: 0=unknown duplicate status, 1=proven no duplicate in subtree,
- * 2=duplicates in subtree. Unknown must never be interpreted as clean.
+ * 2=duplicates in subtree, 4=string/key needing output escapes,
+ * 8=nonfinite numeric value, 16=actual comments inside a raw container.
+ * Mode bits: 1=native numbers, 2=raw byte strings, 4=comment trivia.
+ * Unknown duplicate status must never be interpreted as clean.
  * Only rebuildable native capacity is budgeted. Root/validation stack, active
  * bounded I/O and duplicate work, input, edits, returned values and output are
  * separate semantic/working storage, not a total RSS bound. Wide duplicate

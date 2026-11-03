@@ -45,6 +45,7 @@ function M.for_codec(opts, codec)
     out.decode_array_with_array_mt = codec and codec.decode_array_with_array_mt() or false
     out.decode_invalid_numbers = not codec or codec.decode_invalid_numbers()
     out.decode_validate_utf8 = codec and codec.decode_validate_utf8() or false
+    out.decode_allow_comment = codec and codec.decode_allow_comment() or false
     normalized[out] = true
     return out
 end

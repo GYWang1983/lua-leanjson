@@ -1,6 +1,6 @@
 //! Additive v2 sparse ABI. v1 layouts and functions remain unchanged.
 use super::*;
-use crate::source::{IndexOptions, Span, SpanMember, SourcePolicy, MODE_INVALID_NUMBERS, MODE_RAW_BYTES};
+use crate::source::{IndexOptions, Span, SpanMember, SourcePolicy, MODE_INVALID_NUMBERS, MODE_RAW_BYTES, MODE_COMMENTS};
 use crate::source::sparse::{Walker, WalkStep, Lookup};
 
 #[repr(C)]
@@ -66,7 +66,7 @@ pub struct leanjson_source_v2_iter {
 pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_options, out: *mut leanjson_source_v1_result) -> *mut leanjson_source_v1 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let opts = if opts.is_null() { leanjson_source_v2_options::default() } else { *opts };
-        if opts.api_version != 2 || opts.mode & !(MODE_INVALID_NUMBERS | MODE_RAW_BYTES) != 0 || opts.reserved != 0 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
+        if opts.api_version != 2 || opts.mode & !(MODE_INVALID_NUMBERS | MODE_RAW_BYTES | MODE_COMMENTS) != 0 || opts.reserved != 0 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
         let directory = if opts.spill_directory_len == 0 { std::env::temp_dir() } else {
             let bytes = input(opts.spill_directory, opts.spill_directory_len)?;
             if bytes.contains(&0) { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_
             #[cfg(not(unix))] { std::path::PathBuf::from(std::str::from_utf8(bytes).map_err(|_| invalid_arg())?) }
         };
         let indexes = IndexOptions { depth: opts.index_depth, array_limit: opts.index_array_limit, budget_bytes: opts.index_budget_bytes as usize };
-        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0, max_depth: 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
+        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0, comments: opts.mode & MODE_COMMENTS != 0, max_depth: 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
     }));
     match result {
         Ok(Ok(handle)) => { write_result(out, leanjson_source_v1_result::pending(0)); handle },

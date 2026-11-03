@@ -60,3 +60,29 @@ fn original_legacy_source_depth_clamp_remains_separate() {
         leanjson_source_v1_release(source);
     }
 }
+
+#[test]
+fn comment_errors_match_native_diagnostics_at_every_split() {
+    unsafe {
+        for (bytes, expected, code, offset) in [
+            (b"{}/*Unclosed".as_slice(), "Expected the end but found unclosed multi-line comment at character 13", 1, 12),
+            (b"[1/*x*/0]", "Expected comma or array end but found T_INTEGER at character 8", 1, 7),
+            (b"[tru/*x*/e]", "Expected value but found invalid token at character 2", 1, 4),
+            (b"/", "Expected value but found invalid token at character 1", 1, 0),
+        ] {
+            for split in 0..=bytes.len() {
+                let mut result = leanjson_source_v1_result::default();
+                let options = leanjson_source_v2_options { mode: 7, ..Default::default() };
+                let source = leanjson_source_v2_new(&options, &mut result);
+                assert!(!source.is_null(), "{result:?}");
+                let mut status = leanjson_source_v1_feed(source, 0, bytes.as_ptr(), split, &mut result);
+                if status == 2 { status = leanjson_source_v1_feed(source, split as u64, bytes.as_ptr().add(split), bytes.len()-split, &mut result); }
+                if status == 2 { status = leanjson_source_v1_finish(source, bytes.len() as u64, &mut result); }
+                assert_eq!(status, 5, "{bytes:?} split {split}");
+                assert_eq!((result.code, result.detail, result.offset), (code, 0, offset), "{bytes:?} split {split}");
+                assert_eq!(formatted(source), expected, "{bytes:?} split {split}");
+                leanjson_source_v1_release(source);
+            }
+        }
+    }
+}

@@ -268,6 +268,7 @@ _M.encode_number_precision = _lazy.encode_number_precision
 _M.encode_sparse_array = _lazy.encode_sparse_array
 _M.decode_invalid_numbers = _lazy.decode_invalid_numbers
 _M.decode_validate_utf8 = _lazy.decode_validate_utf8
+_M.decode_allow_comment = _lazy.decode_allow_comment
 _M.decode_max_depth = _lazy.decode_max_depth
 _M.encode_max_depth = _lazy.encode_max_depth
 _M.encode_invalid_numbers = _lazy.encode_invalid_numbers

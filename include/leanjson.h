@@ -211,11 +211,15 @@ void leanjson_source_v1_op_release(leanjson_source_v1_op *);
  * finish, abort, retain and release use v1 source functions. All new exports
  * catch panics. Source spans borrow their source; iterator/op handles retain it.
  * v2 mode bits: 1=allow native nonstandard numbers, 2=allow raw non-UTF8
- * string/key bytes. Zero retains strict RFC number/UTF-8 validation. Unknown
+ * string/key bytes, 4=allow native line and non-nested block comment trivia.
+ * Zero retains strict RFC number/UTF-8 validation and rejects comments. Unknown
  * bits are rejected. Unicode escapes and surrogate pairs are always validated.
  * flags are independent bits: 1=proven no duplicate in subtree,
  * 2=duplicates in subtree, 4=decoded slash or DEL in any string/key,
- * 8=nonfinite decoded number (NaN, infinity or floating overflow) in subtree.
+ * 8=nonfinite decoded number (NaN, infinity or floating overflow) in subtree,
+ * 16=actual comment trivia inside the raw container (including descendants).
+ * Comment-bearing containers must be reconstructed for comment-free output;
+ * comments outside the root span require no output transformation.
  * Plain decimal integers use native signed-64 saturation and stay finite.
  * No duplicate bits means unknown; never interpret it as proven clean.
  * Only rebuildable native capacity is budgeted. Root/validation stack, active
@@ -226,10 +230,12 @@ void leanjson_source_v1_op_release(leanjson_source_v1_op *);
 enum {
     LEANJSON_SOURCE_V2_ALLOW_INVALID_NUMBERS = 1,
     LEANJSON_SOURCE_V2_ALLOW_RAW_BYTES = 2,
+    LEANJSON_SOURCE_V2_ALLOW_COMMENTS = 4,
     LEANJSON_SOURCE_V2_SPAN_CLEAN = 1,
     LEANJSON_SOURCE_V2_SPAN_DUPLICATES = 2,
     LEANJSON_SOURCE_V2_SPAN_STRING_ESCAPE = 4,
-    LEANJSON_SOURCE_V2_SPAN_NONFINITE = 8
+    LEANJSON_SOURCE_V2_SPAN_NONFINITE = 8,
+    LEANJSON_SOURCE_V2_SPAN_COMMENTS = 16
 };
 typedef struct {
     uint32_t api_version, mode, max_depth, window_size;

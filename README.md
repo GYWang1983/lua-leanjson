@@ -329,6 +329,34 @@ locale. Unchanged finite source tokens retain their original spelling, so
 encoding is not a general JSON canonicalizer. The legacy low-level `parse` ABI
 and zero-mode C source constructors retain their strict defaults.
 
+## Optional JSON comments
+
+`decode_allow_comment([value])` defaults to `false`. Use `true` or `"on"` to
+accept `//` line comments and non-nested `/* ... */` block comments between JSON
+tokens. A line comment ends at LF or EOF; CR alone does not end it. Comment-like
+text inside strings/keys stays literal. Comments cannot join number or keyword
+fragments: `1/*x*/0` is still invalid.
+
+```lua
+local codec = require("leanjson").new()
+codec.decode_allow_comment(true)
+local body = codec.decode('/* input */ {"model": /* route */ "seedance"}')
+assert(body.model == "seedance")
+assert(codec.encode(body) == '{"model":"seedance"}')
+codec.close(body)
+```
+
+The setting is independent per normal/safe instance and frozen when each source
+or incremental decoder starts, including later reads, preload and eager rebuild.
+Disabling it afterwards does not invalidate an already accepted source. Encoding
+always removes actual comments, including through `reader`, forks, edits and
+`materialize(..., {keep_origin=true})`. Affected containers stream through bounded
+member iterators; unaffected child spans can retain their original spelling.
+There is no full-document materialization just to strip comments, and no comment
+body is retained in parser metadata. Strings containing `//` or `/* */` keep
+their content, subject to the normal string escape policy. Legacy `parse` and
+zero-mode C source APIs remain strict.
+
 ## Safe conversions
 
 `require "leanjson.safe"` provides a separate codec whose conversion failures

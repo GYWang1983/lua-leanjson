@@ -426,7 +426,8 @@ function M.pairs(value)
     if not META[value] then return pairs(value) end
     return iterate(value, META[value].cell.node.kind == "array")
 end
-Object.__pairs, Array.__pairs, Array.__ipairs = M.pairs, M.pairs, M.ipairs
+Object.__pairs, Array.__pairs = M.pairs, M.pairs
+Object.__ipairs, Array.__ipairs = M.ipairs, M.ipairs
 
 local function check_index(index, n, inserting)
     if type(index) ~= "number" or index ~= math.floor(index) or index < 1

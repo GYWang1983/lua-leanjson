@@ -144,6 +144,33 @@ describe("strict userdata carriers", function()
         assert.are.equal('[{"x":1}]', json.encode(value))
     end)
 
+    for _, mode in ipairs({ "table", "userdata" }) do
+        for _, raw in ipairs({ "{}", '{"1":"string-key"}' }) do
+            it("keeps native ipairs empty for " .. mode .. " object " .. raw, function()
+                local value = keep(json.decode(raw, { proxy_mode = mode }))
+                local count = 0
+                local ok, err = pcall(function()
+                    for _ in ipairs(value) do count = count + 1 end
+                end)
+                assert.is_true(ok, tostring(err))
+                assert.are.equal(0, count)
+                assert.are.equal("object", json.type(value))
+            end)
+        end
+        it("checks closed " .. mode .. " object ownership in native ipairs", function()
+            local value = keep(json.decode('{"1":"string-key"}', { proxy_mode = mode }))
+            local ok, iterator, state, initial = pcall(ipairs, value)
+            assert.is_true(ok, tostring(iterator))
+            json.close(value)
+            local resumed, err = pcall(iterator, state, initial)
+            assert.is_false(resumed)
+            assert.matches("closed", tostring(err), 1, true)
+            local started, start_error = pcall(ipairs, value)
+            assert.is_false(started)
+            assert.matches("closed", tostring(start_error), 1, true)
+        end)
+    end
+
     it("shares carrier metatables and preserves array marker exposure", function()
         local codec = json.new()
         codec.decode_array_with_array_mt(true)

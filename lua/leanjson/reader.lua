@@ -46,7 +46,7 @@ local function token(node, codec, scope)
     if kind == "boolean" then return node.value and "true" or "false" end
     if kind == "number" then return codec.number(proxy.scalar(node, scope)) end
     if kind == "cdata" then return codec.cdata(node.value) end
-    error("leanjson.encode: unsupported value type: " .. kind, 0)
+    error("Cannot serialise " .. kind .. ": type not supported", 0)
 end
 
 local function output_members(node, scope)
@@ -62,6 +62,40 @@ local function output_members(node, scope)
         end
     end
     return proxy.iter(node, scope, true)
+end
+
+-- Depth is validated before raw reuse, using one input window and two
+-- lexical bits. The accepted source limit is a conservative fast bound.
+local function check_depth(node, depth, codec, backend, first, last, scope)
+    -- The native empty-array sentinel is emitted as a scalar token; real
+    -- source arrays and ordinary empty tables still consume container depth.
+    if node.empty_array_sentinel or node.kind ~= "object" and node.kind ~= "array" then return end
+    local maximum = codec.max_depth or 1000
+    local function excessive() error("Cannot serialise, excessive nesting (" .. (maximum + 1) .. ")", 0) end
+    if depth > maximum then excessive() end
+    if not backend then return end
+    local accepted = backend.opts and backend.opts.max_depth
+    if type(accepted) == "number" and accepted > 0 and accepted <= maximum - depth + 1 then return end
+    local nested, quoted, escaped = depth - 1, false, false
+    while first < last do
+        leases.check(scope)
+        local bytes = backend:read(first, math.min(last - first, backend.opts and backend.opts.chunk_size or 65536, codec.scan_window or 65536), scope)
+        leases.check(scope)
+        if #bytes == 0 then error("leanjson.reader: unexpected source EOF", 0) end
+        for i = 1, #bytes do
+            local byte = bytes:byte(i)
+            if quoted then
+                if escaped then escaped = false
+                elseif byte == 92 then escaped = true
+                elseif byte == 34 then quoted = false end
+            elseif byte == 34 then quoted = true
+            elseif byte == 91 or byte == 123 then
+                nested = nested + 1
+                if nested > maximum then excessive() end
+            elseif byte == 93 or byte == 125 then nested = nested - 1 end
+        end
+        first = first + #bytes
+    end
 end
 
 local function count_length(root, normalize, codec, scope)
@@ -82,11 +116,11 @@ local function count_length(root, normalize, codec, scope)
         else
             local backend, first, last = raw_span(node, normalize, scope)
             leases.check(scope)
+            check_depth(node, frame.depth, codec, backend, first, last, scope)
             if backend then
                 length = length + last - first
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
-                if frame.depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
                 frame.iterator = output_members(node, scope)
                 leases.check(scope)
                 frame.index = 0
@@ -128,11 +162,12 @@ local function next_chunk(self)
             local backend, first, last = raw_span(node, self.normalize, self.scope)
             if self.closed then return nil end
             if backend then
+                if self.closed then return nil end
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
                 local iterator = output_members(node, self.scope)
                 if self.closed then return nil end
-                stack[#stack] = { tag = "container", node = node, iterator = iterator, index = 0, open = true }
+                stack[#stack] = { tag = "container", node = node, iterator = iterator, index = 0, open = true, depth = frame.depth }
             elseif node.kind == "string" then
                 stack[#stack] = string_frame(node.value, source_string(node, self.scope))
             else
@@ -192,7 +227,7 @@ local function next_chunk(self)
                     fragment = frame.node.kind == "array" and "]" or "}"
                     stack[#stack] = nil
                 else
-                    stack[#stack + 1] = { tag = "value", node = child }
+                    stack[#stack + 1] = { tag = "value", node = child, depth = frame.depth + 1 }
                     if frame.node.kind == "object" then
                         stack[#stack + 1] = literal(":")
                         stack[#stack + 1] = string_frame(key)
@@ -264,12 +299,13 @@ function M.new(value, options, codec)
     if options.normalize_duplicates ~= nil and type(options.normalize_duplicates) ~= "boolean" then
         error("leanjson.reader: normalize_duplicates must be a boolean", 0)
     end
+    codec.scan_window = size
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local ok, result = pcall(function()
-        local root = proxy.snapshot(value, codec.classify, codec.key)
+        local root = proxy.snapshot(value, codec.classify, codec.key, codec.max_depth)
         self.scope = leases.acquire(root)
         self.root = root
-        self.stack = { { tag = "value", node = root } }
+        self.stack = { { tag = "value", node = root, depth = codec.depth or 1 } }
         return true
     end)
     if not ok then

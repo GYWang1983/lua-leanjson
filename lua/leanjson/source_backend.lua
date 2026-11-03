@@ -14,16 +14,24 @@ function M.exact(value)
     if value > MAX_EXACT then error("leanjson: source offset exceeds Lua exact integer range", 0) end
     return tonumber(value)
 end
-function M.result_error(result)
+function M.result_error(result, source)
+    if source ~= nil then
+        local n = tonumber(C.leanjson_source_v2_format_error(source, nil, 0))
+        if n > 0 then
+            local out = ffi.new("uint8_t[?]", n + 1)
+            C.leanjson_source_v2_format_error(source, out, n + 1)
+            return ffi.string(out, n)
+        end
+    end
     local r = result[0]
     local message = r.detail ~= 0 and (details[tonumber(r.detail)] or "source error")
         or ffi.string(C.leanjson_strerror(r.code))
     if r.offset ~= U64_MAX then message = message .. " at byte " .. tostring(M.exact(r.offset)) end
     return "leanjson: " .. message
 end
-function M.require_status(status, expected, result)
+function M.require_status(status, expected, result, source)
     if status ~= expected then
-        if status == ERROR then error(M.result_error(result), 0) end
+        if status == ERROR then error(M.result_error(result, source), 0) end
         error("leanjson: unexpected source status " .. status, 0)
     end
 end

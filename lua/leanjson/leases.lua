@@ -5,8 +5,12 @@ local M = {}
 local nodes = require("leanjson.nodes")
 
 local function dependencies(node, found)
-    if node.backend then found[node.backend] = true
-    else nodes.dependencies(node, function(child) dependencies(child, found) end) end
+    local stack = { node }
+    while #stack > 0 do
+        local current = table.remove(stack)
+        if current.backend then found[current.backend] = true
+        else nodes.dependencies(current, function(child) stack[#stack + 1] = child end) end
+    end
 end
 
 local function release_entries(entries)

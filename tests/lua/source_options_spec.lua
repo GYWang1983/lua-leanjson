@@ -49,13 +49,14 @@ describe("consistent source decode policy", function()
             assert.is_true(verdict(mode, '{"a":{}}', { max_depth = 2, temp_dir = directory }))
         end)
 
-        it("uses the default and clamped depth limits in " .. mode, function()
-            for _, limit in ipairs({ 0, 4097, 4294967295 }) do
-                local effective = limit == 0 and 1024 or 4096
+        it("uses the codec default and honors unclamped source depth limits in " .. mode, function()
+            for _, limit in ipairs({ 0, 4097 }) do
+                local effective = limit == 0 and 1000 or limit
                 local opts = { max_depth = limit, temp_dir = directory }
                 assert.is_true(verdict(mode, nested(effective), opts))
                 assert.is_false(verdict(mode, nested(effective + 1), opts))
             end
+            assert.is_true(verdict(mode, nested(5000), {max_depth=4294967295, temp_dir=directory}))
         end)
 
         it("propagates metadata bounds and defaults to " .. mode, function()

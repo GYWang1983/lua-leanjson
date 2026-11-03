@@ -29,7 +29,7 @@ describe("leanjson Lua encode property coverage", function()
                 assert.is_true(ok, string.format("depth=%d err=%s", depth, tostring(err)))
             else
                 assert.is_false(ok, string.format("depth=%d unexpectedly encoded", depth))
-                assert.matches("leanjson.encode: max depth exceeded", tostring(err), 1, true)
+                assert.matches("Cannot serialise, excessive nesting (1001)", tostring(err), 1, true)
             end
         end
     end)

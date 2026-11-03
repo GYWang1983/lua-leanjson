@@ -74,7 +74,7 @@ pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_
             #[cfg(not(unix))] { std::path::PathBuf::from(std::str::from_utf8(bytes).map_err(|_| invalid_arg())?) }
         };
         let indexes = IndexOptions { depth: opts.index_depth, array_limit: opts.index_array_limit, budget_bytes: opts.index_budget_bytes as usize };
-        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
+        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0, max_depth: 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
     }));
     match result {
         Ok(Ok(handle)) => { write_result(out, leanjson_source_v1_result::pending(0)); handle },
@@ -329,4 +329,21 @@ pub unsafe extern "C" fn leanjson_source_v2_node_scalar_begin(node: leanjson_sou
         let result = leanjson_source_v1_result::step(reader.step()?);
         *op_out = Box::into_raw(Box::new(leanjson_source_v1_op { source: clone_source(node.source), reader })); Ok(result)
     })
+}
+
+/// Format the optional native public diagnostic. Original result code, detail
+/// and offset remain unchanged. Returns bytes required, excluding the NUL.
+/// # Safety
+/// Handle is live; output is writable for capacity bytes when non-NULL.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_format_error(handle: *const leanjson_source_v1, output: *mut u8, capacity: usize) -> usize {
+    catch_unwind(AssertUnwindSafe(|| {
+        let message = source(handle).ok().and_then(|handle| handle.inner.borrow().public_error());
+        let Some(message) = message else { return 0; };
+        if !output.is_null() && capacity > 0 {
+            let size = message.len().min(capacity - 1);
+            ptr::copy_nonoverlapping(message.as_ptr(), output, size); *output.add(size) = 0;
+        }
+        message.len()
+    })).unwrap_or(0)
 }

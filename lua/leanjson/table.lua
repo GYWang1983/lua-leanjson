@@ -56,48 +56,61 @@ local function string_needs_escape_policy(value)
         and (value:find("/", 1, true) or value:find("\127", 1, true))
 end
 
-local materialize_node
-materialize_node = function(node, keep_origin, scope, backends)
-    if node.backend then backends[node.backend] = true end
-    if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, scope) end
-    local out, records, keys = {}, {}, {}
-    local complete = true
-    keep_origin = keep_origin and node.backend ~= nil
-    local n = 0
-    for key, child in proxy.iter(node, scope, true) do
-        n = n + 1
-        if keep_origin then keys[n] = key end
-        local value = materialize_node(child, keep_origin, scope, backends)
-        out[key] = value
-        if keep_origin then
-            local backend, first, last = proxy.span(child)
-            local record
-            if backend and child.kind == "string" and last - first > 24
-                and not string_needs_escape_policy(value) then
-                record = { tag = "string", value = value, raw = read_all(backend, first, last, scope) }
-            elseif backend and (child.kind == "object" or child.kind == "array") then
-                local origin = TABLE_ORIGIN[value]
-                if origin and origin.complete and last - first > 64 then
-                    record = { tag = "table", origin = origin }
-                end
+local function materialize_node(root, keep_origin, scope, backends)
+    local stack, result = {}, nil
+    local function begin(node, keep)
+        if node.backend then backends[node.backend] = true end
+        if node.kind ~= "array" and node.kind ~= "object" then return proxy.scalar(node, scope), true end
+        keep = keep and node.backend ~= nil
+        stack[#stack + 1] = { node = node, keep = keep, out = {}, records = {}, keys = {}, complete = true,
+            count = 0, iterator = proxy.iter(node, scope, true) }
+        return nil, false
+    end
+    local function attach(frame, key, child, value)
+        frame.count = frame.count + 1
+        frame.out[key] = value
+        if not frame.keep then return end
+        frame.keys[frame.count] = key
+        local backend, first, last = proxy.span(child)
+        local record
+        if backend and child.kind == "string" and last - first > 24 and not string_needs_escape_policy(value) then
+            record = { tag = "string", value = value, raw = read_all(backend, first, last, scope) }
+        elseif backend and (child.kind == "object" or child.kind == "array") then
+            local origin = TABLE_ORIGIN[value]
+            if origin and origin.complete and last - first > 64 then record = { tag = "table", origin = origin } end
+        end
+        frame.records[key] = record
+        if not record or string_needs_escape_policy(key) then frame.complete = false end
+    end
+    local scalar, done = begin(root, keep_origin)
+    if done then return scalar end
+    while #stack > 0 do
+        local frame = stack[#stack]
+        local key, child = frame.iterator()
+        if key == nil then
+            local node, out = frame.node, frame.out
+            if node.kind == "array" then
+                if proxy.array_marked(node) then setmetatable(out, _M.array_mt)
+                elseif frame.count == 0 then setmetatable(out, _M.empty_array_mt) end
             end
-            records[key] = record
-            if not record or string_needs_escape_policy(key) then complete = false end
+            TABLE_TYPE_HINT[out] = node.kind
+            if frame.keep then
+                local backend, first, last = proxy.span(node)
+                TABLE_ORIGIN[out] = { kind = node.kind, complete = frame.complete, backend = backend,
+                    bs = first, be = last, keys = frame.keys, len = frame.count, records = frame.records,
+                    had_duplicates = node.kind == "object" and node.backend.lexical_length
+                        and node.backend:lexical_length(node.handle) ~= frame.count or false }
+            end
+            stack[#stack] = nil
+            local parent = stack[#stack]
+            if parent then attach(parent, frame.parent_key, node, out) else result = out end
+        else
+            local value, complete = begin(child, frame.keep)
+            if complete then attach(frame, key, child, value)
+            else stack[#stack].parent_key = key end
         end
     end
-    if node.kind == "array" then
-        if proxy.array_marked(node) then setmetatable(out, _M.array_mt)
-        elseif n == 0 then setmetatable(out, _M.empty_array_mt) end
-    end
-    TABLE_TYPE_HINT[out] = node.kind
-    if keep_origin then
-        local backend, first, last = proxy.span(node)
-        TABLE_ORIGIN[out] = { kind = node.kind, complete = complete, backend = backend,
-            bs = first, be = last, keys = keys, len = n, records = records,
-            had_duplicates = node.kind == "object" and node.backend.lexical_length
-                and node.backend:lexical_length(node.handle) ~= n or false }
-    end
-    return out
+    return result
 end
 
 function _M.materialize(value, options)
@@ -109,13 +122,13 @@ function _M.materialize(value, options)
         if keep and leases.managed(node) then
             error("leanjson.materialize: keep_origin is unsupported for file and incremental sources", 0)
         end
-        return leases.guard(proxy.scope(value), node, function()
+        return (leases.guard(proxy.scope(value), node, function()
             local backends = {}
             local plain = materialize_node(node, keep == true, proxy.scope(value), backends)
             -- Explicit full values no longer need duplicate source indexes.
             for backend in pairs(backends) do if backend.clear_indexes then backend:clear_indexes() end end
             return plain
-        end)
+        end))
     end
     return value
 end
@@ -133,8 +146,15 @@ local function new_codec()
     local DECODE_ARRAY_WITH_MT = false
     local DECODE_INVALID_NUMBERS = true
     local DECODE_VALIDATE_UTF8 = false
+    local DECODE_MAX_DEPTH = 1000
     local ENCODE_INVALID_NUMBERS = false
     local ENCODE_ESCAPE_FORWARD_SLASH = true
+
+    function codec.decode_max_depth(...)
+        settings.arity(select("#", ...), 1)
+        DECODE_MAX_DEPTH = settings.integer((...), DECODE_MAX_DEPTH, 1, 2147483647, 1)
+        return DECODE_MAX_DEPTH
+    end
 
     function codec.decode_invalid_numbers(...)
         settings.arity(select("#", ...), 1)
@@ -257,7 +277,7 @@ local function new_codec()
                 if n ~= n then return "NaN" end
                 return n < 0 and "-Infinity" or "Infinity"
             end
-            error("leanjson.encode: cannot encode non-finite number")
+            error("Cannot serialise number: must not be NaN or Infinity", 0)
         end
         return string_format(fmt or _ENCODE_NUMBER_FMT, n)
     end
@@ -266,7 +286,10 @@ local function new_codec()
         local kind = type(key)
         if kind == "string" then return key end
         if kind == "number" then return encode_number(key, fmt, invalid_mode) end
-        error("leanjson.encode: object key must be a string or number, got " .. kind)
+        -- Standalone sentinels are private Lua tables, but their public native
+        -- key diagnostic retains the lightuserdata type used by cjson.
+        if rawequal(key, _M.null) or rawequal(key, _M.empty_array) then kind = "userdata" end
+        error("Cannot serialise " .. kind .. ": table key must be a number or string", 0)
     end
 
     codec.key = function(key) return encode_key(key) end
@@ -276,20 +299,19 @@ local function new_codec()
             local s = tostring(v):gsub("[UuLl]+$", "")
             return s
         end
-        error("leanjson.encode: unsupported value type: cdata")
+        error("Cannot serialise cdata: type not supported", 0)
     end
-
-    -- Forward declaration so encode_lazy_object_walking, encode_lazy_array_walking,
-    -- and encode_array/encode_object can reference encode before its definition is
-    -- complete (Lua resolves upvalues at call time, but the slot must be declared first).
-    local encode
 
     local ENCODE_MAX_DEPTH = 1000
     local ENCODE_SPARSE_CONVERT = false
     local ENCODE_SPARSE_RATIO = 2
     local ENCODE_SPARSE_SAFE = 10
-    local ENCODE_DEPTH_ERROR = "leanjson.encode: max depth exceeded"
-    local ENCODE_CYCLE_ERROR = "leanjson.encode: circular reference"
+    local function depth_error(depth) error("Cannot serialise, excessive nesting (" .. depth .. ")", 0) end
+    function codec.encode_max_depth(...)
+        settings.arity(select("#", ...), 1)
+        ENCODE_MAX_DEPTH = settings.integer((...), ENCODE_MAX_DEPTH, 1, 2147483647, 1)
+        return ENCODE_MAX_DEPTH
+    end
 
     function codec.encode_sparse_array(convert, ratio, safe, ...)
         settings.arity(3 + select("#", ...), 3)
@@ -341,241 +363,120 @@ local function new_codec()
             if ENCODE_SPARSE_CONVERT then
                 return "object"
             end
-            error("Cannot serialise table: excessively sparse array")
+            error("Cannot serialise table: excessively sparse array", 0)
         end
         return "array", max
     end
 
-    local function encode_array(t, depth, active, n, raw)
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        local parts = {}
-        n = n or #t
-        for i = 1, n do
-            local value
-            if raw then value = rawget(t, i) else value = t[i] end
-            parts[i] = encode(value, depth + 1, active)
-        end
-        return "[" .. table.concat(parts, ",") .. "]"
-    end
-
-    local function encode_object(t, depth, active)
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        local parts = {}
-        for k, v in pairs(t) do
-            parts[#parts+1] = encode_string(codec.key(k)) .. ":" .. encode(v, depth + 1, active)
-        end
-        return "{" .. table.concat(parts, ",") .. "}"
-    end
-
-    local origin_object_fully_matches
-    local origin_array_fully_matches
-
-    local function origin_record_matches(record, value, depth, active)
-        if record == nil then
-            return false
-        end
-        local tag = record.tag
-        if tag == "string" then
-            return type(value) == "string" and value == record.value
-        elseif tag == "table" then
-            if type(value) ~= "table" then
-                return false
-            end
-            if active[value] then
-                error(ENCODE_CYCLE_ERROR)
-            end
-            local origin = TABLE_ORIGIN[value]
-            if origin == nil or origin ~= record.origin then
-                return false
-            end
-            if classify_table(value) ~= origin.kind then
-                return false
-            end
-            if depth > ENCODE_MAX_DEPTH then
-                error(ENCODE_DEPTH_ERROR)
-            end
-            active[value] = true
-            local ok
-            if origin.kind == "object" then
-                ok = origin_object_fully_matches(value, origin, depth, active)
-            elseif origin.kind == "array" then
-                ok = origin_array_fully_matches(value, origin, depth, active)
+    local function origin_fully_matches(value, origin, depth, ancestors)
+        local stack, active = { { value = value, origin = origin, depth = depth } }, {}
+        while #stack > 0 do
+            local frame = stack[#stack]
+            if frame.iterator then
+                local key, child = frame.iterator(frame.value, frame.previous)
+                frame.previous = key
+                if key == nil then active[frame.value] = nil; stack[#stack] = nil
+                else
+                    local record = frame.origin.records[key]
+                    if not record then return false end
+                    if record.tag == "string" then
+                        if type(child) ~= "string" or child ~= record.value then return false end
+                    elseif record.tag == "table" then
+                        if type(child) ~= "table" or TABLE_ORIGIN[child] ~= record.origin then return false end
+                        stack[#stack + 1] = { value = child, origin = record.origin, depth = frame.depth + 1 }
+                    else return false end
+                end
             else
-                ok = false
-            end
-            active[value] = nil
-            return ok
-        end
-        return false
-    end
-
-    local function origin_table_slice(origin)
-        return read_all(origin.backend, origin.bs, origin.be)
-    end
-
-    origin_object_fully_matches = function(t, origin, depth, active)
-        if origin.complete ~= true then
-            return false
-        end
-        if origin.had_duplicates then
-            return false
-        end
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        for k, v in pairs(t) do
-            local record = origin.records[k]
-            if not origin_record_matches(record, v, depth + 1, active) then
-                return false
-            end
-        end
-        for _, k in ipairs(origin.keys) do
-            if rawget(t, k) == nil then
-                return false
+                local t, o = frame.value, frame.origin
+                if active[t] or ancestors[t] and t ~= value then depth_error(ENCODE_MAX_DEPTH + 1) end
+                if frame.depth > ENCODE_MAX_DEPTH then depth_error(frame.depth) end
+                if not o.complete or o.had_duplicates then return false end
+                local kind, length = classify_table(t)
+                if kind ~= o.kind or kind == "array" and length ~= o.len then return false end
+                for _, key in ipairs(o.keys) do if rawget(t, key) == nil then return false end end
+                active[t] = true
+                frame.iterator = next
             end
         end
         return true
     end
 
-    origin_array_fully_matches = function(t, origin, depth, active)
-        if origin.complete ~= true then
-            return false
-        end
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        local kind, length = classify_table(t)
-        if kind ~= "array" or length ~= origin.len then
-            return false
-        end
-        for i = 1, origin.len do
-            if not origin_record_matches(origin.records[i], rawget(t, i), depth + 1, active) then
-                return false
-            end
-        end
-        for k, _ in pairs(t) do
-            if type(k) ~= "number"
-                or k ~= math.floor(k)
-                or k < 1
-                or k > origin.len
-            then
-                return false
-            end
-        end
-        return true
-    end
-
-    local function encode_origin_child(value, depth, active, record)
-        if record ~= nil then
-            if record.tag == "string"
-                and type(value) == "string"
-                and value == record.value
-            then
-                return record.raw
-            end
-        end
-        -- Small scalars and incomplete child tables are re-encoded.
-        return encode(value, depth + 1, active)
-    end
-
-    local function encode_object_with_origin(t, depth, active, origin)
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        if origin.complete == true and origin_object_fully_matches(t, origin, depth, active) then
-            return origin_table_slice(origin)
-        end
-
-        local parts = {}
-        local emitted = {}
-        local records = origin.records
-
-        for _, key in ipairs(origin.keys) do
-            local value = rawget(t, key)
-            if value ~= nil then
-                emitted[key] = true
-                parts[#parts + 1] = encode_string(key) .. ":" .. encode_origin_child(value, depth, active, records[key])
-            end
-        end
-
-        for key, value in pairs(t) do
-            if not emitted[key] then
-                parts[#parts + 1] = encode_string(codec.key(key)) .. ":" .. encode(value, depth + 1, active)
-            end
-        end
-
-        return "{" .. table.concat(parts, ",") .. "}"
-    end
-
-    local function encode_array_with_origin(t, depth, active, origin)
-        if depth > ENCODE_MAX_DEPTH then
-            error(ENCODE_DEPTH_ERROR)
-        end
-        if origin.complete == true and origin_array_fully_matches(t, origin, depth, active) then
-            return origin_table_slice(origin)
-        end
-        local kind, max, raw = classify_table(t)
-        if kind == "array" then
-            return encode_array(t, depth, active, max, raw)
-        end
-        return encode_object(t, depth, active)
-    end
-
-    -- Dispatch for plain (non-lazy) tables. Separated from the main encode
-    -- function to keep the lazy-proxy fast path narrow for LuaJIT traces.
-    local function encode_plain_table(v, depth, active)
-        local kind, max, raw = classify_table(v)
-        local origin = TABLE_ORIGIN[v]
-        if origin ~= nil and origin.kind == kind then
-            if origin.kind == "object" then
-                return encode_object_with_origin(v, depth, active, origin)
-            end
-            if origin.kind == "array" then
-                return encode_array_with_origin(v, depth, active, origin)
-            end
-        end
-
-        if kind == "array" then
-            return encode_array(v, depth, active, max, raw)
-        end
-        return encode_object(v, depth, active)
-    end
-
-    encode = function(v, depth, active)
-        if rawequal(v, _M.null) then
-            return "null"
-        end
-        if rawequal(v, _M.empty_array) then return "[]" end
-        local tv = type(v)
-        if tv == "string" then
-            return encode_string(v)
-        elseif tv == "number" then
-            return encode_number(v)
-        elseif tv == "boolean" then
-            return v and "true" or "false"
-        elseif tv == "nil" then
-            return "null"
-        elseif tv == "cdata" then
-            return encode_cdata(v)
-        elseif tv == "table" then
-            if active[v] then
-                error(ENCODE_CYCLE_ERROR)
-            end
-            active[v] = true
-            local encoded
-            if proxy.is_proxy(v) then
-                encoded = encode_proxy(v, depth, active)
+    -- Explicit traversal keeps the public upper depth range real on LuaJIT.
+    -- Complete encoding already owns its output, but never recurses on Lua's
+    -- call stack or constructs a second snapshot of an ordinary table.
+    local function encode_iterative(value)
+        local parts, active, stack = {}, {}, { { value = value, depth = 1 } }
+        local function emit(text) parts[#parts + 1] = text end
+        while #stack > 0 do
+            local frame = stack[#stack]
+            if frame.iterator then
+                local key, child = frame.iterator()
+                if key == nil then
+                    emit(frame.kind == "array" and "]" or "}")
+                    active[frame.value] = nil; stack[#stack] = nil
+                else
+                    if frame.count > 0 then emit(",") end
+                    frame.count = frame.count + 1
+                    if frame.kind == "object" then emit(encode_string(codec.key(key))); emit(":") end
+                    local record = frame.origin and frame.origin.records[key]
+                    if record and record.tag == "string" and type(child) == "string" and child == record.value then emit(record.raw)
+                    else stack[#stack + 1] = { value = child, depth = frame.depth + 1 } end
+                end
             else
-                encoded = encode_plain_table(v, depth, active)
+                local v, depth = frame.value, frame.depth
+                local tv = type(v)
+                if rawequal(v, _M.null) or tv == "nil" then emit("null"); stack[#stack] = nil
+                elseif rawequal(v, _M.empty_array) then emit("[]"); stack[#stack] = nil
+                elseif tv == "string" then emit(encode_string(v)); stack[#stack] = nil
+                elseif tv == "number" then emit(encode_number(v)); stack[#stack] = nil
+                elseif tv == "boolean" then emit(v and "true" or "false"); stack[#stack] = nil
+                elseif tv == "cdata" then emit(encode_cdata(v)); stack[#stack] = nil
+                elseif tv ~= "table" then error("Cannot serialise " .. tv .. ": type not supported", 0)
+                elseif proxy.is_proxy(v) then emit(encode_proxy(v, depth)); stack[#stack] = nil
+                else
+                    if active[v] then depth_error(ENCODE_MAX_DEPTH + 1) end
+                    if depth > ENCODE_MAX_DEPTH then depth_error(depth) end
+                    local kind, length, raw = classify_table(v)
+                    local origin = TABLE_ORIGIN[v]
+                    if origin and origin.kind ~= kind then origin = nil end
+                    if origin and origin_fully_matches(v, origin, depth, active) then
+                        emit(read_all(origin.backend, origin.bs, origin.be)); stack[#stack] = nil
+                    else
+                        active[v] = true
+                        frame.kind, frame.count, frame.origin = kind, 0, origin
+                        if kind == "array" then
+                            local index = 0
+                            frame.iterator = function()
+                                index = index + 1
+                                if index <= length then
+                                    if raw then return index, rawget(v, index) end
+                                    return index, v[index]
+                                end
+                            end
+                        elseif origin then
+                            local index, previous, emitted = 0, nil, {}
+                            frame.iterator = function()
+                                while index < #origin.keys do
+                                    index = index + 1
+                                    local key = origin.keys[index]
+                                    local child = rawget(v, key)
+                                    if child ~= nil then emitted[key] = true; return key, child end
+                                end
+                                while true do
+                                    local key, child = next(v, previous); previous = key
+                                    if key == nil or not emitted[key] then return key, child end
+                                end
+                            end
+                        else
+                            local previous
+                            frame.iterator = function() local key, child = next(v, previous); previous = key; return key, child end
+                        end
+                        emit(kind == "array" and "[" or "{")
+                    end
+                end
             end
-            active[v] = nil
-            return encoded
         end
-        error("leanjson.encode: unsupported value type: " .. tv)
+        return table.concat(parts)
     end
 
     function codec._new_reader(value, options, depth)
@@ -588,20 +489,28 @@ local function new_codec()
             escape = function(byte) return escape_byte(byte, escape_slash) end,
             cdata = encode_cdata,
             classify = classify_table,
-            depth = depth,
+            depth = depth, max_depth = ENCODE_MAX_DEPTH,
         })
     end
 
     function codec.reader(value, options) return codec._new_reader(value, options, 1) end
 
-    codec.encode = function(v)
-        return encode(v, 1, {})
+    codec.encode = function(...)
+        if select("#", ...) ~= 1 then error("bad argument #1 to '?' (expected 1 argument)", 0) end
+        return encode_iterative((...))
     end
 
 
     codec.classify = classify_table
     codec.tostring = function(value) return encode_proxy(value, 1) end
-    codec.decode = function(raw, opts) return decode(raw, opts, codec) end
+    codec.decode = function(...)
+        local count = select("#", ...)
+        if count < 1 or count > 2 then error("bad argument #1 to '?' (expected 1 argument)", 0) end
+        local raw, opts = ...
+        if type(raw) == "number" then raw = tostring(raw) end
+        if type(raw) ~= "string" then error("bad argument #1 to '?' (string expected, got " .. type(raw) .. ")", 0) end
+        return decode(raw, opts, codec)
+    end
     codec.decode_file = function(filename, opts) return require("leanjson.source").decode_file(filename, opts, codec) end
     codec.new_decoder = function(opts) return require("leanjson.source").new_decoder(opts, codec) end
     codec.fork = function(value) return proxy.fork(value, codec) end
@@ -614,7 +523,7 @@ local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8",
-    "encode_invalid_numbers", "encode_escape_forward_slash", "fork", "type", "get" }
+    "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get" }
 local function methods(codec)
     local out = {}
     for _, key in ipairs(public_methods) do out[key] = codec[key] end

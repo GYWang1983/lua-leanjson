@@ -198,11 +198,11 @@ function M.rebuild(backend, handle, scope)
             local bytes = backend:read(first, math.min(last - first, backend.opts.chunk_size), scope)
             leases.check(scope)
             if not fallback or not source then error("leanjson: source operation closed", 0) end
-            shared.require_status(C.leanjson_source_v1_feed(source, offset, bytes, #bytes, result), 2, result)
+            shared.require_status(C.leanjson_source_v1_feed(source, offset, bytes, #bytes, result), 2, result, source)
             builder:drain()
             first, offset = first + #bytes, offset + #bytes
         end
-        shared.require_status(C.leanjson_source_v1_finish(source, offset, result), 0, result)
+        shared.require_status(C.leanjson_source_v1_finish(source, offset, result), 0, result, source)
         builder:finish()
         leases.check(scope)
         return builder:take()

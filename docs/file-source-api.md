@@ -19,12 +19,12 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 
 ## Options and callbacks
 
-`decode(raw, opts)`, `decode_file` and `new_decoder` validate the same parsing options. Calling `decode(raw)` without options retains strict eager validation and lazy value loading; the legacy `parse` API keeps its separate option contract. File/spool controls are validated in all modes but apply only where specified below:
+`decode(raw, opts)`, `decode_file` and `new_decoder` validate the same parsing options. Calling `decode(raw)` without options retains eager validation with the native-compatible numeric/byte policy and lazy value loading; the legacy `parse` API keeps its separate option contract. File/spool controls are validated in all modes but apply only where specified below:
 
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `chunk_size` | `65536` | Positive uint32 integer; bounds file reads, feed steps and native scalar windows. |
-| `max_depth` | `1024` | Nonnegative uint32 integer; zero selects the default, values above 4096 are clamped. |
+| `max_depth` | codec `decode_max_depth()` (`1000`) | Nonnegative uint32 integer; zero inherits the codec default, nonzero overrides it. Source v2 does not clamp at 4096; the legacy parse/v1 limits remain separate. |
 | `index_depth` | `3` | Nonnegative uint32 integer; root depth is 0 and `a.b.c` is the default span frontier. Zero retains no optional children. |
 | `index_array_limit` | `3` | Nonnegative uint32 integer; optional retained prefix per array, with exact full length and scanning for farther elements. Zero disables the prefix. |
 | `index_budget_bytes` | `1048576` | Nonnegative uint32 integer; shared native index-capacity budget per source across parse and later operations. Zero disables optional cached indexes. |

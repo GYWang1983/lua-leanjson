@@ -4,6 +4,7 @@ use crate::error::{leanjson_err, leanjson_type};
 use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
+mod diagnostic;
 mod window;
 pub mod loading;
 pub(crate) mod duplicates;
@@ -27,7 +28,7 @@ pub const MODE_INVALID_NUMBERS: u32 = 1;
 pub const MODE_RAW_BYTES: u32 = 2;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool }
+pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool, pub max_depth: u32 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceError { pub code: leanjson_err, pub detail: u32, pub offset: u64 }
@@ -89,6 +90,7 @@ pub struct Source {
     indexes: Option<IndexOptions>, index_bytes: usize, indexed_depth: u32,
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
     loading: Option<loading::Loading>, policy: SourcePolicy,
+    diagnostic: Option<diagnostic::Diagnostics>, pending_failure: Option<SourceError>,
 }
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
@@ -99,19 +101,26 @@ impl Source {
             window_size: if window_size == 0 { 65536 } else { window_size },
             indexes: None, index_bytes: 0, indexed_depth: 0, events: false,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
-            loading: None, policy: SourcePolicy::default(),
+            loading: None, policy: SourcePolicy::default(), diagnostic: None, pending_failure: None,
         }
     }
     pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
         let mut source = Self::new(max_depth, window_size);
+        source.max_depth = if max_depth == 0 { LEANJSON_DEFAULT_MAX_DEPTH } else { max_depth };
         source.indexes = Some(indexes);
         source
     }
-    pub(crate) fn with_policy(mut self, policy: SourcePolicy) -> Self { self.policy = policy; self }
+    pub(crate) fn with_policy(mut self, mut policy: SourcePolicy) -> Self {
+        policy.max_depth = self.max_depth;
+        self.diagnostic = Some(diagnostic::Diagnostics::new(self.max_depth, policy.invalid_numbers));
+        self.policy = policy; self
+    }
+    pub(crate) fn public_error(&self) -> Option<String> { self.diagnostic.as_ref().and_then(|diagnostic| diagnostic.message()) }
     pub(crate) fn policy(&self) -> SourcePolicy { self.policy }
     pub(crate) fn walker(start: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool, policy: SourcePolicy) -> Self {
         let mut source = Self::new_sparse(LEANJSON_MAX_MAX_DEPTH, window_size,
             IndexOptions { depth: 0, array_limit: 0, budget_bytes: 0 });
+        source.max_depth = if policy.max_depth == 0 { LEANJSON_MAX_MAX_DEPTH } else { policy.max_depth };
         source.policy = policy;
         source.next_offset = start;
         source.events = true;
@@ -185,6 +194,14 @@ impl Source {
         if base != self.next_offset || base.checked_add(bytes.len() as u64).is_none() {
             return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, base));
         }
+        if let Some(diagnostic) = &mut self.diagnostic {
+            for (index, &byte) in bytes.iter().enumerate() { diagnostic.feed(byte, base + index as u64); }
+        }
+        if let Some(error) = self.pending_failure {
+            self.next_offset = base + bytes.len() as u64;
+            if self.diagnostic.as_ref().is_some_and(|diagnostic| diagnostic.error().is_some()) { return self.fail(error); }
+            return Ok(bytes.len());
+        }
         let mut i = 0;
         while i < bytes.len() {
             let offset = base + i as u64;
@@ -200,7 +217,12 @@ impl Source {
             match result {
                 Ok(true) => i += 1,
                 Ok(false) => {},
-                Err(error) => { self.next_offset = offset; return self.fail(error); }
+                Err(error) => {
+                    if self.diagnostic.as_ref().is_some_and(|diagnostic| diagnostic.error().is_none()) {
+                        self.pending_failure = Some(error); self.next_offset = base + bytes.len() as u64; return Ok(bytes.len());
+                    }
+                    self.next_offset = offset; return self.fail(error);
+                }
             }
             if stop && self.member.is_some() { break; }
         }
@@ -211,6 +233,8 @@ impl Source {
         self.ready()?;
         if total_len != self.next_offset { return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, total_len)); }
         if self.finished { return Ok(()); }
+        if let Some(diagnostic) = &mut self.diagnostic { diagnostic.finish(total_len); }
+        if let Some(error) = self.pending_failure.take() { return self.fail(error); }
         let eof_error = match self.token.take() {
             Some(Token::Number { value, state }) => match state.finish() {
                 Ok(nonfinite) => { self.complete(value, total_len, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); None },
@@ -229,6 +253,7 @@ impl Source {
         }
         self.finished = true;
         self.frames = Vec::new();
+        self.diagnostic = None;
         Ok(())
     }
     pub fn root(&self) -> Result<Option<usize>, SourceError> { self.ready().map(|ready| if ready { Some(0) } else { None }) }

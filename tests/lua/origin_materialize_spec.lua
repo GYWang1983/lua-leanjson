@@ -147,7 +147,7 @@ describe("leanjson.materialize keep_origin", function()
 
         assert.has_error(function()
             leanjson.encode(t)
-        end, "leanjson.encode: circular reference")
+        end, "Cannot serialise, excessive nesting (1001)")
     end)
 
     it("still reports circular references through origin child tables", function()
@@ -156,7 +156,7 @@ describe("leanjson.materialize keep_origin", function()
 
         assert.has_error(function()
             leanjson.encode(t)
-        end, "leanjson.encode: circular reference")
+        end, "Cannot serialise, excessive nesting (1001)")
     end)
 
     it("still reports max-depth errors for unchanged origin trees", function()
@@ -168,11 +168,11 @@ describe("leanjson.materialize keep_origin", function()
         for _ = 1, 1001 do
             parts[#parts + 1] = '}'
         end
-        local t = leanjson.materialize(leanjson.decode(table.concat(parts)), { keep_origin = true })
+        local t = leanjson.materialize(leanjson.decode(table.concat(parts), { max_depth = 2000 }), { keep_origin = true })
 
         assert.has_error(function()
             leanjson.encode(t)
-        end, "leanjson.encode: max depth exceeded")
+        end, "Cannot serialise, excessive nesting (1001)")
     end)
 
     it("preserves lazy mutations made before keep_origin materialization", function()

@@ -128,7 +128,7 @@ local function feed_bytes(backend, chunk, spool, scope)
             if not written then error(backend:fail(err), 0) end
         end
         require_status(C.leanjson_source_v1_feed(backend.state.source, backend.total,
-            ffi.cast("const uint8_t *", chunk) + position, count, result), NEED_INPUT, result)
+            ffi.cast("const uint8_t *", chunk) + position, count, result), NEED_INPUT, result, backend.state.source)
         if backend.loading then backend.loading:drain() end
         backend.total, position = backend.total + count, position + count
         backend:notify(scope)
@@ -137,7 +137,7 @@ end
 
 local function finish_backend(backend)
     local result, root = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v2_node[1]")
-    require_status(C.leanjson_source_v1_finish(backend.state.source, backend.total, result), READY, result)
+    require_status(C.leanjson_source_v1_finish(backend.state.source, backend.total, result), READY, result, backend.state.source)
     if backend.loading then backend.loading:finish() end
     require_status(C.leanjson_source_v2_root(backend.state.source, root, result), READY, result)
     return require("leanjson.nodes").raw(backend, ffi.new("leanjson_source_v2_node", root[0]))

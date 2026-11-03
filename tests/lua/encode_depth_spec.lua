@@ -1,12 +1,12 @@
 local leanjson = require("leanjson")
 
 describe("leanjson encode depth guard", function()
-    it("raises a circular reference error before reaching the max-depth guard", function()
+    it("reports native excessive-nesting errors for cycles", function()
         local t = {}
         t.self = t
         assert.has_error(function()
             leanjson.encode(t)
-        end, "leanjson.encode: circular reference")
+        end, "Cannot serialise, excessive nesting (1001)")
     end)
 
     it("allows shared table references that are not recursive cycles", function()
@@ -30,7 +30,7 @@ describe("leanjson encode depth guard", function()
         end
         assert.has_error(function()
             leanjson.encode(root)
-        end, "leanjson.encode: max depth exceeded")
+        end, "Cannot serialise, excessive nesting (1001)")
     end)
 
     it("succeeds when nesting depth is exactly 1000", function()

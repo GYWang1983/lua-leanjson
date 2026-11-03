@@ -14,7 +14,8 @@ Use this guide when replacing `lua-cjson` in existing LuaJIT or OpenResty code.
 | `cjson.decode(json)` | `leanjson.decode(json)` | Returns a lazy object or array proxy, not a plain Lua table. |
 | `cjson.decode(json)` when a plain table is required | `leanjson.materialize(leanjson.decode(json))` | Use before passing decoded data to libraries that use raw table access or C encoders. |
 | `cjson.encode(value)` | `leanjson.encode(value)` | Encodes lazy proxies, plain Lua tables, and mixed trees. |
-| `cjson.encode_number_precision(precision)` | `leanjson.encode_number_precision(precision)` | Shared module-level encode setting in the Lua VM. leanjson accepts integers from 1 to 14 and returns the previous setting when updated. |
+| `cjson.encode_number_precision(precision)` | `leanjson.encode_number_precision(precision)` | Independent per codec; accepts 1–16 and returns the current/new setting. |
+| `cjson.decode_max_depth(n)` / `encode_max_depth(n)` | `leanjson.decode_max_depth(n)` / `encode_max_depth(n)` | Independent settings; default 1000, range 1–2147483647. Reader/source policies are snapshotted. |
 | `cjson.null` | `leanjson.null` | Aliases `cjson.null` when lua-cjson is available; otherwise leanjson provides its own sentinel. |
 | `cjson.empty_array_mt` | `leanjson.empty_array_mt` | Aliases lua-cjson's empty-array metatable when available. |
 | `pairs(t)` / `ipairs(t)` on decoded data | `leanjson.pairs(t)` / `leanjson.ipairs(t)` | Works on all LuaJIT builds. Plain `pairs` / `ipairs` need LuaJIT 5.2-compat support. |

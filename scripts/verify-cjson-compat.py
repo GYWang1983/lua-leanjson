@@ -535,8 +535,12 @@ def run_negative_controls(root, output):
 
         _, different = control("different", [case("different")],
                                'util.run_test_group({{"different",json.decode,{"1"},true,{1}}})', fault_return=True)
+        # These are deliberate control faults, independent of which public APIs
+        # or syntax diagnostics the target has already implemented.
         _, missing = control("missing", [case("missing", "settings", ["cjson.decode_max_depth"])],
-                             'util.run_test_group({{"missing",json.decode_max_depth,{5},true,{5}}})')
+                             'util.run_test_group({{"missing",function(value) '
+                             'return json[CONTROL_TARGET and "control_missing_api" or "decode_max_depth"](value) '
+                             'end,{5},true,{5}}})')
         _, safe_constant = control("safe-constant", [case("safe-constant", "settings", ["cjson.safe.empty_array_mt"])],
                              'util.run_test_group({{"safe-constant",function() return require("cjson.safe").empty_array_mt end,{},true,{json.empty_array_mt}}})', fault_missing_safe=True)
         _, reset_getter = control("reset-getter", [case("reset", "helper", ["cjson.new"]), case("getter", "settings", ["cjson.encode_sparse_array"])],
@@ -546,7 +550,10 @@ def run_negative_controls(root, output):
                            'util.run_test_group({{"setup",function() if CONTROL_TARGET then error("intentional setup failure",0) end end},'
                            '{"dependent",json.decode,{"true"},true,{true}}})')
         _, malformed = control("malformed", [case("malformed")],
-                               'util.run_test_group({{"malformed",json.decode,{"{bad"},false,{"Expected object key string but found invalid token at character 2"}}})')
+                               'util.run_test_group({{"malformed",function(raw) '
+                               'if CONTROL_TARGET then local ok=pcall(json.decode,raw); assert(not ok); '
+                               'error("intentional malformed error divergence",0) end return json.decode(raw) '
+                               'end,{"{bad"},false,{"Expected object key string but found invalid token at character 2"}}})')
         _, arity = control("arity", [case("arity", "settings", [])],
                            'util.run_test_group({{"arity",function() return nil,false,json.null,"\\000\\255",0/0,math.huge,-math.huge end,{},true,{nil,false,json.null,"\\000\\255",0/0,math.huge,-math.huge}}})')
         _, boundary = control("boundary", [case("boundary")],

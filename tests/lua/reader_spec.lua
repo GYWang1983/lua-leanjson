@@ -314,7 +314,7 @@ describe("bounded snapshot reader", function()
     end)
 
     it("does not start a source read after close during yielding span metadata", function()
-        local backend, spans, reads = {}, 0, 0
+        local backend, spans, reads = {opts={max_depth=1000, chunk_size=3}}, 0, 0
         function backend:type() return "object" end
         function backend:span()
             spans = spans + 1

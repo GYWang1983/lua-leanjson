@@ -253,6 +253,12 @@ typedef struct {
     uint64_t budget_bytes, index_bytes, indexed_nodes, indexed_depth;
     uint64_t index_depth, index_array_limit;
 } leanjson_source_v2_stats;
+/* Optional cjson-shaped public diagnostic for a failed v2 source. Returns
+ * required byte count excluding NUL, or zero when unavailable. A non-NULL
+ * output with nonzero capacity receives a truncated NUL-terminated message.
+ * Source result code/detail/offset remain unchanged. Valid completed sources
+ * release diagnostic workspace. Same live-handle contract as v2_root. */
+size_t leanjson_source_v2_format_error(const leanjson_source_v1 *, uint8_t *, size_t);
 leanjson_source_v1 *leanjson_source_v2_new(const leanjson_source_v2_options *, leanjson_source_v1_result *);
 int leanjson_source_v2_root(const leanjson_source_v1 *, leanjson_source_v2_node *, leanjson_source_v1_result *);
 int leanjson_source_v2_get_stats(const leanjson_source_v1 *, leanjson_source_v2_stats *, leanjson_source_v1_result *);

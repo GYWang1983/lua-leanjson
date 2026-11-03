@@ -64,6 +64,11 @@ separate run; it must remain inside the checkout for the Docker bind mount.
   actual decode API directly, since they cannot represent file/feed bytes.
   The missing-safe negative control explicitly injects module unavailability;
   normal matrix runs load the implementation and its shared marker constants.
+  The missing-API control deliberately looks up a nonexistent control symbol,
+  and the malformed-input control deliberately raises a divergent error after
+  confirming real target decode rejection. They remain negative controls as
+  depth APIs and native syntax messages become supported; ordinary matrix
+  workers have no such injections.
 - The original `util.compare_values` runs before the separate logical comparison.
   Upstream operators, iteration, metatable access, mutation, and encoding are
   unchanged. No eager materialization or global `pairs` patch precedes them.
@@ -88,8 +93,10 @@ output, and an encode/decode logical roundtrip diagnostic. Lossless roundtrip
 results are reported separately in `encoded_roundtrip_diagnostics` and do not
 change compatibility classification or strict status: native cjson's default
 precision can lose the same numeric information. Supplemental comparisons use
-decode results, unselected access and index checks; they do not emulate the
-reference's unsupported decode settings. Original encoding evidence is retained.
+decode results, unselected access and index checks; they currently use the default normal codec and only record the reference
+configuration metadata. They do not reapply captured settings or preserve a
+captured safe-call route; use the complete configured normal/safe matrix and
+focused regressions for those contracts. Original encoding evidence is retained.
 
 ## Evidence schema and limits
 

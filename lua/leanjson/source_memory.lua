@@ -24,19 +24,25 @@ function M.open(raw, opts, codec)
     backend.loading = require("leanjson.loading").new(backend)
     -- Construction events are drained per bounded feed; unselected bytes and
     -- native input pointers are never retained by the validator.
+    local ok, value = pcall(function()
     local first = 0
     repeat
         local count = math.min(#raw - first, opts.chunk_size)
         shared.require_status(C.leanjson_source_v1_feed(source, first,
-            ffi.cast("const uint8_t *", raw) + first, count, result), 2, result)
+            ffi.cast("const uint8_t *", raw) + first, count, result), 2, result, source)
         if backend.loading then backend.loading:drain() end
         first = first + count
     until first == #raw
-    shared.require_status(C.leanjson_source_v1_finish(source, #raw, result), 0, result)
+    shared.require_status(C.leanjson_source_v1_finish(source, #raw, result), 0, result, source)
     if backend.loading then backend.loading:finish() end
     local root = ffi.new("leanjson_source_v2_node[1]")
     shared.require_status(C.leanjson_source_v2_root(source, root, result), 0, result)
-    return backend,
-        ffi.new("leanjson_source_v2_node", root[0])
+    return ffi.new("leanjson_source_v2_node", root[0])
+    end)
+    if not ok then
+        ffi.gc(source, nil); C.leanjson_source_v1_release(source); backend.state.source = nil
+        error(value, 0)
+    end
+    return backend, value
 end
 return M

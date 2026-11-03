@@ -283,13 +283,13 @@ describe("source proxy overlays", function()
         local body = leanjson.decode('{}')
         body.unsupported = ffi.cast("void *", 0)
         assert.are.equal("cdata", type(body.unsupported))
-        assert.has_error(function() leanjson.encode(body) end, "leanjson.encode: unsupported value type: cdata")
+        assert.has_error(function() leanjson.encode(body) end, "Cannot serialise cdata: type not supported")
     end)
 
     it("rejects cyclic plain tables when snapshotting an assignment", function()
         local body, cycle = leanjson.decode('{}'), {}
         cycle.self = cycle
-        assert.has_error(function() body.cycle = cycle end, "leanjson.encode: circular reference")
+        assert.has_error(function() body.cycle = cycle end, "Cannot serialise, excessive nesting (1001)")
         assert.are.equal('{}', leanjson.encode(body))
     end)
 

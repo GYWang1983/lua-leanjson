@@ -96,55 +96,55 @@ local function expose(node, parent, key, lexical, scope, expected, codec)
 end
 local array_length = nodes.length
 
-local snapshot
-snapshot = function(value, active, depth, classify, encode_key)
-    if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
-    if rawequal(value, config.empty_array) then return { kind = "array", keys = {}, values = {}, marked_array = true } end
-    local holder = META[value]
-    if holder then leases.check(holder.scope); return holder.cell.node end
-    local tv = type(value)
-    if tv ~= "table" then return { kind = tv, value = value } end
-    if active[value] then error("leanjson.encode: circular reference", 0) end
-    if depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
-    active[value] = true
-    local kind, n, raw = classify(value)
-    local node = { kind = kind, keys = {}, values = {} }
-    if kind == "array" then
-        local mt = raw_metatable(value)
-        node.marked_array = rawequal(mt, config.array_mt)
-        for i = 1, n do
-            node.keys[i] = i
-            local item
-            if raw then item = rawget(value, i) else item = value[i] end
-            node.values[i] = snapshot(item, active, depth + 1, classify, encode_key)
+-- Snapshot plain assignments iteratively: high configured depths must not
+-- consume the Lua call stack. Only active ancestors detect genuine cycles.
+function M.snapshot(value, classify, encode_key, maximum)
+    classify, encode_key = classify or config.classify, encode_key or config.key or tostring
+    maximum = maximum or 1000
+    local active, stack = {}, {}
+    local function accept(value, depth)
+        if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
+        if rawequal(value, config.empty_array) then return { kind = "array", keys = {}, values = {}, marked_array = true, empty_array_sentinel = true } end
+        local holder = META[value]
+        if holder then leases.check(holder.scope); return holder.cell.node end
+        local tv = type(value)
+        if tv ~= "table" then return { kind = tv, value = value } end
+        if active[value] or depth > maximum then
+            error("Cannot serialise, excessive nesting (" .. (maximum + 1) .. ")", 0)
         end
-    else
-        for key, child in pairs(value) do
-            local kt = type(key)
-            if kt ~= "string" and kt ~= "number" then
-                error("leanjson.encode: object key must be a string or number, got " .. kt, 0)
+        local kind, length, raw = classify(value)
+        local node = { kind = kind, keys = {}, values = {} }
+        if kind == "array" then node.marked_array = rawequal(raw_metatable(value), config.array_mt) end
+        active[value] = true
+        stack[#stack + 1] = { value = value, node = node, depth = depth, length = length, raw = raw, index = 0 }
+        return node
+    end
+    local result = accept(value, 1)
+    while #stack > 0 do
+        local frame = stack[#stack]
+        local key, child
+        if frame.node.kind == "array" then
+            frame.index = frame.index + 1
+            if frame.index <= frame.length then
+                key = frame.index
+                if frame.raw then child = rawget(frame.value, key) else child = frame.value[key] end
             end
-            key = encode_key(key)
-            local member = snapshot(child, active, depth + 1, classify, encode_key)
+        else key, child = next(frame.value, frame.previous); frame.previous = key end
+        if key == nil then active[frame.value] = nil; stack[#stack] = nil
+        else
+            if frame.node.kind == "object" then key = encode_key(key) end
+            local member = accept(child, frame.depth + 1)
+            local node = frame.node
             if node.values[key] ~= nil and not node.serialized_entries then
                 node.serialized_entries = {}
-                for _, name in ipairs(node.keys) do
-                    node.serialized_entries[#node.serialized_entries + 1] = { name, node.values[name] }
-                end
+                for _, name in ipairs(node.keys) do node.serialized_entries[#node.serialized_entries + 1] = { name, node.values[name] } end
             end
-            if node.serialized_entries then
-                node.serialized_entries[#node.serialized_entries + 1] = { key, member }
-            end
+            if node.serialized_entries then node.serialized_entries[#node.serialized_entries + 1] = { key, member } end
             if node.values[key] == nil then node.keys[#node.keys + 1] = key end
             node.values[key] = member
         end
     end
-    active[value] = nil
-    return node
-end
-
-function M.snapshot(value, classify, encode_key)
-    return snapshot(value, {}, 1, classify or config.classify, encode_key or config.key or tostring)
+    return result
 end
 function M.is_proxy(value) return META[value] ~= nil end
 function M.node(value)
@@ -157,7 +157,7 @@ function M.from_backend(backend, handle, codec) return expose(raw_node(backend, 
 function M.from_node(node, codec) return expose(node, nil, nil, nil, nil, nil, codec) end
 function M.fork(value, codec)
     codec = codec or M.codec(value)
-    return M.from_node(M.snapshot(value, codec.classify, codec.key), codec)
+    return M.from_node(M.snapshot(value, codec.classify, codec.key, codec.encode_max_depth and codec.encode_max_depth() or 1000), codec)
 end
 
 function M.get_path(value, segments)
@@ -321,7 +321,7 @@ local function write(proxy, key, value)
                 error("leanjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
-        local node = present and M.snapshot(value, cell.codec.classify, cell.codec.key) or nil
+        local node = present and M.snapshot(value, cell.codec.classify, cell.codec.key, cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000) or nil
         if node then dependencies(node) end
         return changed(original, key, node, scope), function()
             local cached = cell.children[key]
@@ -419,7 +419,7 @@ function M.array_insert(value, index, child)
         if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, true)
-        local inserted = M.snapshot(child, cell.codec.classify, cell.codec.key)
+        local inserted = M.snapshot(child, cell.codec.classify, cell.codec.key, cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000)
         dependencies(inserted)
         return nodes.array_edit(original, index, 0, inserted, scope), function()
             local moved = {}

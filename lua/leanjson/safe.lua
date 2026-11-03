@@ -5,9 +5,9 @@ local normalize = require("leanjson.options").normalize
 
 local function arity(name, count, minimum, maximum)
     if count < minimum or count > maximum then
-        local expected = minimum == maximum and ("expected " .. minimum .. " argument")
+        local expected = (name == "decode" or minimum == maximum) and ("expected " .. minimum .. " argument")
             or ("expected " .. minimum .. " to " .. maximum .. " arguments")
-        error("bad argument #1 to 'leanjson.safe." .. name .. "' (" .. expected .. ")", 3)
+        error("bad argument #1 to '?' (" .. expected .. ")", 0)
     end
 end
 

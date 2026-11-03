@@ -41,6 +41,7 @@ function M.for_codec(opts, codec)
     local source = M.normalize(opts)
     local out = {}
     for key, value in pairs(source) do out[key] = value end
+    if source.max_depth == 0 then out.max_depth = codec and codec.decode_max_depth() or 1000 end
     out.decode_array_with_array_mt = codec and codec.decode_array_with_array_mt() or false
     out.decode_invalid_numbers = not codec or codec.decode_invalid_numbers()
     out.decode_validate_utf8 = codec and codec.decode_validate_utf8() or false

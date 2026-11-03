@@ -219,6 +219,36 @@ input decoder; it is distinct from `new()`.
   safely across instances. A codec itself needs no `close()`; file/feed views
   and readers retain their existing cleanup requirements.
 
+## Depth limits and diagnostics
+
+`decode_max_depth([value])` and `encode_max_depth([value])` default to `1000`.
+They use independent codec settings, accept `1` through `2147483647`, and return
+the current/new value. Numeric strings and fractional values follow the same
+integer coercion as the other cjson-shaped settings. Only nested containers
+count; scalar children do not add depth. Cyclic tables fail with an excessive
+nesting error. The explicit `empty_array` sentinel follows native cjson's
+scalar-token exception; real source arrays and Lua tables still count.
+
+Decode limits are frozen when a source or incremental decoder is created.
+A nonzero per-call `max_depth` overrides that codec default; `0` inherits it.
+`index_depth` and the other metadata bounds never change legal nesting.
+High-level source v2 accepts configured depths above 4096; legacy `parse` and
+source v1 retain their separate native limits. Large limits still require
+memory for the active validation/traversal stack and any requested full values.
+
+Encoding checks ordinary tables, edits and unchanged source spans at their
+actual output depth. Readers freeze the encode limit when constructed; their
+`length()` validates it before raw output. A source whose accepted limit fits
+uses that bound directly; otherwise raw spans receive a bounded byte scan.
+Deep ordinary encoding, snapshots and materialization use explicit stacks.
+
+Public syntax, Unicode and depth errors use native cjson wording and byte-based
+`character` positions, including across feed boundaries. The companion native
+tokenizer retains fixed token payloads and a nesting stack, not a decoded tree.
+The additive C formatter leaves internal result code/detail/offset available.
+Strict-number/UTF-8 extensions, stricter embedded-NUL handling and unsupported
+features keep their documented boundaries; this is not complete cjson parity.
+
 ## Precision, sparse arrays and array markers
 
 `encode_number_precision([value])` defaults to 14 and accepts 1–16. Setting it

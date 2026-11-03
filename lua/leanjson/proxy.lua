@@ -98,7 +98,7 @@ local array_length = nodes.length
 
 -- Snapshot plain assignments iteratively: high configured depths must not
 -- consume the Lua call stack. Only active ancestors detect genuine cycles.
-function M.snapshot(value, classify, encode_key, maximum)
+function M.snapshot(value, classify, encode_key, maximum, capture)
     classify, encode_key = classify or config.classify, encode_key or config.key or tostring
     maximum = maximum or 1000
     local active, stack = {}, {}
@@ -106,7 +106,14 @@ function M.snapshot(value, classify, encode_key, maximum)
         if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
         if rawequal(value, config.empty_array) then return { kind = "array", keys = {}, values = {}, marked_array = true, empty_array_sentinel = true } end
         local holder = META[value]
-        if holder then leases.check(holder.scope); return holder.cell.node end
+        if holder then
+            leases.check(holder.scope)
+            local node = holder.cell.node
+            -- A later virtual-array callback may close or collect this public
+            -- holder. Pin its immutable node before evaluating more callbacks.
+            if capture then capture(node) end
+            return node
+        end
         local tv = type(value)
         if tv ~= "table" then return { kind = tv, value = value } end
         if active[value] or depth > maximum then
@@ -157,7 +164,15 @@ function M.from_backend(backend, handle, codec) return expose(raw_node(backend, 
 function M.from_node(node, codec) return expose(node, nil, nil, nil, nil, nil, codec) end
 function M.fork(value, codec)
     codec = codec or M.codec(value)
-    return M.from_node(M.snapshot(value, codec.classify, codec.key, codec.encode_max_depth and codec.encode_max_depth() or 1000), codec)
+    local captured = leases.acquire()
+    local ok, result = pcall(function()
+        local node = M.snapshot(value, codec.classify, codec.key,
+            codec.encode_max_depth and codec.encode_max_depth() or 1000, function(child) leases.pin(captured, child) end)
+        return M.from_node(node, codec)
+    end)
+    leases.release(captured)
+    if not ok then error(result, 0) end
+    return result
 end
 
 function M.get_path(value, segments)
@@ -321,7 +336,8 @@ local function write(proxy, key, value)
                 error("leanjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
-        local node = present and M.snapshot(value, cell.codec.classify, cell.codec.key, cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000) or nil
+        local node = present and M.snapshot(value, cell.codec.classify, cell.codec.key,
+            cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000, dependencies) or nil
         if node then dependencies(node) end
         return changed(original, key, node, scope), function()
             local cached = cell.children[key]
@@ -419,7 +435,8 @@ function M.array_insert(value, index, child)
         if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, true)
-        local inserted = M.snapshot(child, cell.codec.classify, cell.codec.key, cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000)
+        local inserted = M.snapshot(child, cell.codec.classify, cell.codec.key,
+            cell.codec.encode_max_depth and cell.codec.encode_max_depth() or 1000, dependencies)
         dependencies(inserted)
         return nodes.array_edit(original, index, 0, inserted, scope), function()
             local moved = {}

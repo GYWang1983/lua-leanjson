@@ -275,18 +275,25 @@ local function next_chunk(self)
     return table.concat(parts)
 end
 
+local function fail(self, problem, terminal)
+    self.root, self.stack, self.codec = nil, nil, nil
+    if terminal then self.closed = true end
+    leases.release(self.scope)
+    -- Error objects may run user code from __tostring. Drop ownership first,
+    -- then protect both a thrown formatter error and an invalid return type.
+    self.failure = "leanjson.reader: error message unavailable"
+    local ok, message = pcall(tostring, problem)
+    if ok and type(message) == "string" then self.failure = message end
+    return nil, self.failure
+end
+
 function Reader:length()
     if self.failure then return nil, self.failure end
     if self.output_length ~= nil then return self.output_length end
     if self.closed then return nil, CLOSED end
     local ok, result = pcall(count_length, self.root, self.normalize, self.codec, self.scope)
     if self.closed then return nil, CLOSED end
-    if not ok then
-        self.failure = tostring(result)
-        self.root, self.stack, self.codec = nil, nil, nil
-        leases.release(self.scope)
-        return nil, self.failure
-    end
+    if not ok then return fail(self, result) end
     self.output_length = result
     return result
 end
@@ -309,11 +316,7 @@ function Reader:next()
     -- close() can run while a backend operation is suspended. Cancellation
     -- wins over late bytes/errors and no buffered prefix may be published.
     if self.closed then return nil, CLOSED end
-    if not ok then
-        self.failure = tostring(result)
-        self:close()
-        return nil, self.failure
-    end
+    if not ok then return fail(self, result, true) end
     if result == nil then self:close() end
     return result
 end
@@ -331,18 +334,18 @@ function M.new(value, options, codec)
     end
     codec.scan_window = size
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
+    local captured = leases.acquire()
+    self.scope = captured
     local ok, result = pcall(function()
-        local root = proxy.snapshot(value, codec.classify, codec.key, codec.max_depth)
+        local root = proxy.snapshot(value, codec.classify, codec.key, codec.max_depth,
+            function(node) leases.pin(captured, node) end)
         self.scope = leases.acquire(root)
+        leases.release(captured)
         self.root = root
         self.stack = { { tag = "value", node = root, depth = codec.depth or 1 } }
         return true
     end)
-    if not ok then
-        self.failure = tostring(result)
-        self.root, self.stack, self.codec = nil, nil, nil
-        leases.release(self.scope)
-    end
+    if not ok then fail(self, result) end
     return self
 end
 

@@ -235,10 +235,35 @@ local function new_codec()
         return DECODE_ARRAY_WITH_MT
     end
 
+    local function external_length_method(value, mt)
+        mt = mt or raw_metatable(value)
+        if mt and not rawequal(mt, _M.array_mt) then return rawget(mt, "__len") end
+    end
+
+    local function external_array_length(value, method)
+        -- pcall itself invokes callable metadata and gives native diagnostics
+        -- for non-callable values without adding a Lua source location.
+        local ok, result = pcall(method, value)
+        if not ok then error(result, 0) end
+        local kind = type(result)
+        local length = (kind == "number" or kind == "string") and tonumber(result) or 0
+        length = length or 0
+        if length ~= length or length == math.huge or length == -math.huge then
+            error("Cannot serialise table: external array length must be finite and fit a signed 32-bit integer", 0)
+        end
+        length = length < 0 and math.ceil(length) or math.floor(length)
+        if length < -2147483648 or length > 2147483647 then
+            error("Cannot serialise table: external array length must be finite and fit a signed 32-bit integer", 0)
+        end
+        return math.max(0, length)
+    end
+
     local function classify_table(value)
         local mt = raw_metatable(value)
         local hint = TABLE_TYPE_HINT[value]
         if rawequal(mt, _M.array_mt) then return "array", raw_length(value), true end
+        local method = external_length_method(value, mt)
+        if method ~= nil then return "array", external_array_length(value, method), false, true end
         if rawequal(mt, _M.empty_array_mt) and hint ~= "array" then
             -- Native empty_array_mt first checks ordinary sparse policy, then
             -- forces an array even when non-numeric/hash keys were present.
@@ -432,6 +457,9 @@ local function new_codec()
                 if active[t] or ancestors[t] and t ~= value then depth_error(ENCODE_MAX_DEPTH + 1) end
                 if frame.depth > ENCODE_MAX_DEPTH then depth_error(frame.depth) end
                 if not o.complete or o.had_duplicates then return false end
+                -- Recognition alone invalidates provenance. Calling __len here
+                -- would repeat callbacks when the ordinary traversal follows.
+                if external_length_method(t) ~= nil then return false end
                 local kind, length = classify_table(t)
                 if kind ~= o.kind or kind == "array" and length ~= o.len then return false end
                 for _, key in ipairs(o.keys) do if rawget(t, key) == nil then return false end end
@@ -492,8 +520,8 @@ local function new_codec()
                 else
                     if active[v] then depth_error(ENCODE_MAX_DEPTH + 1) end
                     if depth > ENCODE_MAX_DEPTH then depth_error(depth) end
-                    local kind, length, raw = classify_table(v)
-                    local origin = TABLE_ORIGIN[v]
+                    local kind, length, raw, external = classify_table(v)
+                    local origin = not external and TABLE_ORIGIN[v]
                     if origin and origin.kind ~= kind then origin = nil end
                     if ENCODE_INDENT == "" and origin and origin_fully_matches(v, origin, depth, active) then
                         emit(read_all(origin.backend, origin.bs, origin.be)); stack[#stack] = nil

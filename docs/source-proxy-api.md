@@ -75,6 +75,34 @@ A fork captures the current logical value. Later writes to the original or eithe
 
 Proxy assignment captures a snapshot too. Assigning a plain Lua table or another proxy copies its logical ownership, so later external edits do not change the assigned value. Repeated reads of a particular attached child still return the same proxy. Replacing or deleting the parent field detaches an already returned child: edits through that old reference affect the old value only. A cyclic plain table cannot be snapshotted.
 
+External Lua arrays are also accepted by `encode`, `reader`, `fork` and proxy
+assignment/insertion. Except for the raw `array_mt` marker, a raw `__len` field
+on the real metatable selects this behavior, including protected metatables and
+callable values. Inherited/public replacement metadata is ignored. The method
+receives the table once per occurrence; its result uses native number/string
+conversion and truncates toward zero. Nonnumeric/nil/boolean/table/cdata results
+mean zero, and finite negatives produce an empty array. Nonfinite or truncated
+lengths outside `-2147483648..2147483647` fail with `Cannot serialise table:
+external array length must be finite and fit a signed 32-bit integer`. This is
+an explicit boundary around nonportable native C conversions, without a smaller
+length cap. External arrays ignore hash keys and sparse settings, read each
+selected index through ordinary `__index` behavior and encode holes as null.
+
+Snapshots evaluate external callbacks during construction and retain the
+captured values; later length/count/output operations never call them again.
+Source proxies returned by callbacks are pinned immediately, before another
+callback can close or collect their public holders. Successful construction
+transfers source ownership to the reader/fork/assigned value; errors and
+initiating-holder cancellation release temporary pins. Capturing a proxy never
+closes its public holder on behalf of the caller. LeanJSON's own proxies bypass
+external classification, preserving source tokens, bounded reads and normal
+lease ownership. External callbacks override materialized `keep_origin` spans,
+including when nested inside an otherwise reusable parent. Encoding preserves
+callback error objects; the reader's established errors are strings.
+Reader failures release owned leases and snapshot references before invoking
+error-object formatting. A throwing or non-string `__tostring` result becomes
+`leanjson.reader: error message unavailable` without a secondary exception.
+
 Source callbacks can yield during mutation preparation. If another coroutine changes the same proxy or a linked ancestor before publication, the suspended mutation raises `leanjson: stale proxy mutation` without changing nodes, moving/detaching children or invalidating the source. The completed writer remains visible and the caller can retry the rejected operation against the current value. Disjoint keys on the same branch can conflict through a shared ancestor; independent forks do not conflict. Close cancels the initiating holder's preparation and releases its temporary dependencies immediately.
 
 ```lua
@@ -136,7 +164,7 @@ end
 reader:close()
 ```
 
-Reader construction freezes proxy and ordinary Lua values, including mixed trees, and acquires source leases without source I/O. `length()` validates/counts the actual encoded bytes without building output or advancing the output cursor. `next()` ensures that complete validation/count first when needed. Each nonempty chunk is at most `chunk_size` bytes. Original spans and newly assigned Lua strings are emitted with bounded buffers, including JSON escapes. The reader does not call the complete encoder for scalar strings or documents.
+Reader construction freezes proxy and ordinary Lua values, including mixed trees. It evaluates external array callbacks; acquiring captured proxy leases itself performs no source I/O. `length()` validates/counts the actual encoded bytes without building output or advancing the output cursor. `next()` ensures that complete validation/count first when needed. Each nonempty chunk is at most `chunk_size` bytes. Original spans and newly assigned Lua strings are emitted with bounded buffers, including JSON escapes. The reader does not call the complete encoder for scalar strings or documents.
 
 A successfully computed length remains available after EOF or `close()` without keeping the source alive. Construction/counting failures release snapshot references immediately; `length()` and the first `next()` report the original error.
 

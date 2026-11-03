@@ -278,10 +278,44 @@ assert(codec.encode(value.array) == "[]")
 
 `array_mt` and `empty_array_mt` are distinct shared markers. `array_mt` uses raw
 Lua table length/values, fills holes inside that length with null and ignores
-hash entries. `empty_array_mt` first applies ordinary sparse policy, then forces
-an array if ordinary classification would choose an object. Its ordinary array
+hash entries, taking precedence over `__len` and `__index`. Without a `__len`
+method, `empty_array_mt` first applies ordinary sparse policy, then forces an
+array if ordinary classification would choose an object. Its ordinary array
 path honors indexed reads (`__index`); its forced fallback uses raw values. The
 shared `empty_array` sentinel always encodes as `[]`.
+
+Other Lua tables with a raw `__len` field in their real metatable encode as
+external arrays. Protected metatables and callable length values work; inherited
+or fabricated public metadata does not select an array. The length callback
+receives the table once per occurrence. Hash keys and ordinary sparse settings
+are ignored, and positions `1..length` use ordinary indexing, including
+`__index`. Missing values encode as null.
+
+```lua
+local virtual = setmetatable({}, {
+    __len = function() return 3 end,
+    __index = { "foo", "bar", "baz" },
+})
+assert(codec.encode(virtual) == '["foo","bar","baz"]')
+```
+
+Length results use native Lua number/string conversion and truncate fractions
+toward zero. Nonnumeric results, nil, booleans, tables and cdata mean zero;
+finite negative lengths produce `[]`. LeanJSON rejects nonfinite or truncated
+out-of-signed-32-bit lengths with `Cannot serialise table: external array length
+must be finite and fit a signed 32-bit integer`, rather than reproducing
+nonportable native C conversions. No smaller length cap applies.
+
+Readers, forks and proxy assignments capture external callbacks and values when
+constructed, so later edits do not change the snapshot. Readers do not repeat
+these callbacks in `length()` or `next()`. External array semantics override
+`keep_origin` reuse. LeanJSON's own JSON proxies retain their source semantics
+and do not invoke external length callbacks. Normal/safe codecs and `new()`
+instances share these rules; normal/safe encoding preserves callback error
+objects, while readers retain their existing `nil, string_error` interface.
+Readers release owned resources before formatting errors. If an error object's
+`__tostring` throws or returns a non-string value, the reader reports
+`leanjson.reader: error message unavailable`.
 
 `encode_empty_table_as_object` defaults to true; false makes an ordinary empty
 table encode as `[]`. `decode_array_with_array_mt` defaults to false. Both accept

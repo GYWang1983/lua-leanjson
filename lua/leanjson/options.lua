@@ -37,4 +37,13 @@ function M.normalize(opts)
     return out
 end
 
+function M.for_codec(opts, codec)
+    local source = M.normalize(opts)
+    local out = {}
+    for key, value in pairs(source) do out[key] = value end
+    out.decode_array_with_array_mt = codec and codec.decode_array_with_array_mt() or false
+    normalized[out] = true
+    return out
+end
+
 return M

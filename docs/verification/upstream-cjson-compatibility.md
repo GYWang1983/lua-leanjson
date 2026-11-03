@@ -16,6 +16,9 @@ pre-F03 baseline.
 The subsequent [F04 safe-codec report](f04-safe-codecs.md) adds the real safe
 module, its factory and the next complete matrix run.
 
+The [F01/F02/F05 report](f01-f02-f05-config-arrays.md) records the settings and
+array-marker implementation, current matrix and deliberate lazy boundaries.
+
 The measured runtime is `b928a20505165fc3c0f3399b68500cd02050b42f`.
 Tests live in [tests/upstream-cjson](../../tests/upstream-cjson/README.md);
 the entrypoint is [verify-cjson-compat.py](../../scripts/verify-cjson-compat.py).

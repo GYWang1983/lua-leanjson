@@ -34,6 +34,7 @@ build = {
         cp lua/leanjson/lib.lua "$(LUADIR)/leanjson/lib.lua"
         cp lua/leanjson/table.lua "$(LUADIR)/leanjson/table.lua"
         cp lua/leanjson/safe.lua "$(LUADIR)/leanjson/safe.lua"
+        cp lua/leanjson/settings.lua "$(LUADIR)/leanjson/settings.lua"
         cp lua/leanjson/nodes.lua "$(LUADIR)/leanjson/nodes.lua"
         cp lua/leanjson/proxy.lua "$(LUADIR)/leanjson/proxy.lua"
         cp lua/leanjson/reader.lua "$(LUADIR)/leanjson/reader.lua"

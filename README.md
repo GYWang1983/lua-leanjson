@@ -200,9 +200,9 @@ Instances retain `decode`, `decode_file`, `new_decoder`, lazy/eager/preload
 options and the existing helpers. `new_decoder()` still creates an incremental
 input decoder; it is distinct from `new()`.
 
-- `encode_number_precision` and `encode_sparse_array` are isolated between
-  the default module and every instance. Their existing validation and return
-  values are unchanged; other cjson settings remain pending.
+- `encode_number_precision`, `encode_sparse_array`, `encode_empty_table_as_object`
+  and `decode_array_with_array_mt` are isolated between the default module and
+  every normal/safe instance. Each setter returns its current/new setting.
 - `codec.encode(value)` and `codec.reader(value)` use the called codec, including
   when `value` was created by another instance. A reader snapshots numeric
   formatting and table contents when created. Unchanged source spans retain
@@ -217,6 +217,55 @@ input decoder; it is distinct from `new()`.
   when encoding. Null/array markers and immutable source data can be shared
   safely across instances. A codec itself needs no `close()`; file/feed views
   and readers retain their existing cleanup requirements.
+
+## Precision, sparse arrays and array markers
+
+`encode_number_precision([value])` defaults to 14 and accepts 1–16. Setting it
+returns the **new** value. Numeric strings and fractional values use native
+integer coercion/truncation within the declared bounds. It applies to newly
+encoded numbers, including integer-valued doubles and negative zero. Unchanged
+source tokens keep their bytes; readers freeze formatting when constructed.
+
+`encode_sparse_array([convert[, ratio[, safe]]])` returns all three settings.
+`convert` accepts booleans or exactly `on`/`off`; ratio/safe accept truncated
+integers from 0 through 2147483647. Defaults are false, 2, 10. All arguments are
+validated before any change is published. Nonfinite/out-of-range values are
+rejected; native integer overflow/wrap and partial-update accidents are not
+reproduced.
+
+```lua
+local codec = require("leanjson").new()
+codec.encode_number_precision(16)
+assert(codec.encode(2^53) == "9007199254740992")
+assert(codec.encode(codec.empty_array) == "[]")
+assert(codec.encode(setmetatable({1, 2, tag = "ignored"}, codec.array_mt)) == "[1,2]")
+codec.decode_array_with_array_mt(true)
+local value = codec.decode('{"array":[]}', { lazyload = false })
+assert(getmetatable(value.array) == codec.array_mt)
+assert(codec.encode(value.array) == "[]")
+```
+
+`array_mt` and `empty_array_mt` are distinct shared markers. `array_mt` uses raw
+Lua table length/values, fills holes inside that length with null and ignores
+hash entries. `empty_array_mt` first applies ordinary sparse policy, then forces
+an array if ordinary classification would choose an object. Its ordinary array
+path honors indexed reads (`__index`); its forced fallback uses raw values. The
+shared `empty_array` sentinel always encodes as `[]`.
+
+`encode_empty_table_as_object` defaults to true; false makes an ordinary empty
+table encode as `[]`. `decode_array_with_array_mt` defaults to false. Both accept
+booleans and `on`/`off`, and reject excess arguments. With eager decoding, an
+unmarked empty JSON array becomes a plain empty Lua table and normally re-encodes
+as `{}`. **Migration:** enable `decode_array_with_array_mt(true)` to retain eager
+array identity; earlier LeanJSON versions retained it implicitly.
+
+Lazy/preload views always retain source container identity and unchanged bytes.
+With marking enabled, `getmetatable(array_view) == codec.array_mt` is observable
+without replacing proxy behavior. Decode settings are snapshotted when memory,
+file or incremental input starts; later children and repeated decoder results
+keep that policy. Lazy array edits still use the existing dense-array rules.
+Explicit `materialize` retains its shape-preserving helper contract and sparse
+reclassification after edits; `array_mt` explicitly overrides that shape.
 
 ## Safe conversions
 
@@ -421,10 +470,12 @@ Additional boundaries:
 The [complete pinned upstream cjson matrix](docs/verification/upstream-cjson-compatibility.md)
 has been executed for lazy, `lazyload=false`, and preload modes across memory,
 file, and incremental input. It **does not establish full cjson compatibility**:
-missing configuration APIs, exact error differences, precision settings, and
+missing configuration APIs, exact error differences, lazy container semantics, and
 foreign array-proxy encoding remain gaps. Eager loading returns ordinary Lua
 values; it does not implement every cjson API. The report separates unsupported
 setup dependencies from actual value/output differences and links the raw evidence.
+The [F01/F02/F05 report](docs/verification/f01-f02-f05-config-arrays.md) records
+the repaired settings, current array rules, and the remaining lazy differences.
 
 All current public names use the new namespace:
 

@@ -13,9 +13,9 @@ function Memory:read(offset, length)
     return ffi.string(ffi.cast("const uint8_t *", self.raw) + offset, math.min(length, self.opts.chunk_size))
 end
 local M = {}
-function M.open(raw, opts)
+function M.open(raw, opts, codec)
     if type(raw) ~= "string" then error("leanjson: input must be a string", 0) end
-    opts = require("leanjson.options").normalize(opts)
+    opts = require("leanjson.options").for_codec(opts, codec)
     local result = ffi.new("leanjson_source_v1_result[1]")
     local source = C.leanjson_source_v2_new(shared.native_options(opts), result)
     if source == nil then error(shared.result_error(result), 0) end

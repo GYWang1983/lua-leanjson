@@ -124,7 +124,7 @@ describe("leanjson.materialize keep_origin", function()
         local t = leanjson.materialize(leanjson.decode('{"n":1.0,"e":1e3,"z":-0,"x":1}'), { keep_origin = true })
         t.x = 2
 
-        assert.are.equal('{"n":1,"e":1000,"z":0,"x":2}', leanjson.encode(t))
+        assert.are.equal('{"n":1,"e":1000,"z":-0,"x":2}', leanjson.encode(t))
     end)
 
     it("partial origins do not hide nested table mutations behind a parent raw slice", function()

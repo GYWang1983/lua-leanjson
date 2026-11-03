@@ -87,8 +87,9 @@ function Builder:drain()
             if self.eager then
                 if container then
                     value = frame.values
-                    if frame.kind == "array" then config.hint(value, "array") end
-                    if frame.kind == "array" and next(value) == nil then setmetatable(value, config.empty_array_mt) end
+                    if frame.kind == "array" and self.backend.opts.decode_array_with_array_mt then
+                        setmetatable(value, config.array_mt)
+                    end
                 else value = scalar(frame.kind, frame.parts and table.concat(frame.parts) or frame.raw or "", frame.first) end
             elseif frame.selected or next(frame.values) ~= nil then
                 local handle = ffi.new("leanjson_source_v2_node", { self.backend.state.source,
@@ -193,7 +194,8 @@ function M.rebuild(backend, handle, scope)
     end)
     local fallback = leases.fallback(scope, record)
     local ok, value = pcall(function()
-        scratch = { state = { source = source }, opts = { lazyload = false } }
+        scratch = { state = { source = source }, opts = { lazyload = false,
+            decode_array_with_array_mt = backend.opts.decode_array_with_array_mt } }
         builder = M.new(scratch)
         local first, last, offset = shared.exact(handle.raw_start), shared.exact(handle.raw_end), 0
         while first < last do

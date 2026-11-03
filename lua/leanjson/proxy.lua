@@ -4,9 +4,10 @@ local M = {}
 local ffi = require("ffi")
 local leases = require("leanjson.leases")
 local nodes = require("leanjson.nodes")
+local raw_metatable = debug and debug.getmetatable or getmetatable
 local META = setmetatable({}, { __mode = "k" })
 local GC_TOKENS = setmetatable({}, { __mode = "k" })
-local Object, Array = {}, {}
+local Object, Array, MarkedArray = {}, {}, {}
 local config
 local function live_holder(cell)
     local value = cell.public and cell.public[1]
@@ -23,7 +24,12 @@ local function watch_resources(cell)
     end
 end
 
-function M.configure(options) config = options end
+function M.configure(options)
+    config = options
+    MarkedArray.__metatable = options.array_mt
+end
+
+M.array_marked = nodes.array_marked
 
 local raw_node = nodes.raw
 M.members, M.lookup, M.iter = nodes.members, nodes.lookup, nodes.iter
@@ -55,7 +61,9 @@ end
 local function wrap(cell, prepared)
     local holder, value = live_holder(cell)
     if holder then return value end
-    value = setmetatable({}, cell.node.kind == "array" and Array or Object)
+    local mt = Object
+    if cell.node.kind == "array" then mt = M.array_marked(cell.node) and MarkedArray or Array end
+    value = setmetatable({}, mt)
     local scope
     if prepared then
         scope = leases.acquire()
@@ -91,6 +99,7 @@ local array_length = nodes.length
 local snapshot
 snapshot = function(value, active, depth, classify)
     if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
+    if rawequal(value, config.empty_array) then return { kind = "array", keys = {}, values = {}, marked_array = true } end
     local holder = META[value]
     if holder then leases.check(holder.scope); return holder.cell.node end
     local tv = type(value)
@@ -98,12 +107,16 @@ snapshot = function(value, active, depth, classify)
     if active[value] then error("leanjson.encode: circular reference", 0) end
     if depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
     active[value] = true
-    local kind, n = classify(value)
+    local kind, n, raw = classify(value)
     local node = { kind = kind, keys = {}, values = {} }
     if kind == "array" then
+        local mt = raw_metatable(value)
+        node.marked_array = rawequal(mt, config.array_mt)
         for i = 1, n do
             node.keys[i] = i
-            node.values[i] = snapshot(value[i], active, depth + 1, classify)
+            local item
+            if raw then item = rawget(value, i) else item = value[i] end
+            node.values[i] = snapshot(item, active, depth + 1, classify)
         end
     else
         for key, child in pairs(value) do
@@ -180,6 +193,7 @@ end
 
 function M.type(value, classify)
     if rawequal(value, config.null) then return "null" end
+    if rawequal(value, config.empty_array) then return "array" end
     local holder = META[value]
     if holder then leases.check(holder.scope); return holder.cell.node.kind end
     if type(value) == "table" then
@@ -444,5 +458,6 @@ function M.stats(value)
     if not node or not node.backend or not node.backend.stats then error("leanjson: value has no source diagnostics", 0) end
     return node.backend:stats()
 end
-M.Object, M.Array = Object, Array
+for key, value in pairs(Array) do MarkedArray[key] = value end
+M.Object, M.Array, M.MarkedArray = Object, Array, MarkedArray
 return M

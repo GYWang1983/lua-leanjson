@@ -2,6 +2,16 @@
 -- sibling index; durable edits use small object patches or array range pieces.
 local M = {}
 local DELETE = {}
+function M.array_marked(node)
+    while node do
+        if node.marked_array ~= nil then return node.marked_array end
+        if not node.base then
+            return node.backend ~= nil and node.backend.opts.decode_array_with_array_mt == true
+        end
+        node = node.base
+    end
+    return false
+end
 function M.raw(backend, handle)
     local identity = backend.identity and backend:identity(handle) or handle
     if backend.preloaded and backend.preloaded[identity] then return backend.preloaded[identity] end
@@ -180,7 +190,8 @@ function M.array_edit(node, index, remove, value, scope)
     slice(index + remove, n)
     local uses_base = false
     for _, segment in ipairs(out) do if segment.first then uses_base = true; break end end
-    return { kind = "array", base = uses_base and base or nil, segments = out, length = n - remove + (value and 1 or 0) }
+    return { kind = "array", base = uses_base and base or nil, segments = out,
+        length = n - remove + (value and 1 or 0), marked_array = M.array_marked(node) }
 end
 function M.changed(node, key, value, scope)
     if node.kind == "array" then

@@ -1,13 +1,16 @@
 # Mutable JSON views and bounded output
 
-`leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types; proxy metatables are not array markers. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility. Direct `next`, `rawget`, `rawset`, and metatable replacement bypass the proxy API.
+`leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types. With `decode_array_with_array_mt(true)`, array views expose the public `array_mt` marker through a private metatable; their proxy mechanics remain active. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility. Direct `next`, `rawget`, `rawset`, and metatable replacement bypass the proxy API.
 
 `lazyload` defaults to `true`. Set `lazyload=false` to build the complete value
 as ordinary Lua tables/scalars during validation, without proxy descendants or
 hidden source ownership. Native `pairs`, `ipairs`, `next`, `rawget` and ordinary
 table edits then work directly. Null is `leanjson.null`, numbers are Lua numbers,
-decoded duplicate keys use the final whole value, and empty arrays retain their
-identity under LeanJSON encoding. This mode works without the optional `cjson`
+decoded duplicate keys use the final whole value. Eager arrays are unmarked by
+default, matching cjson: an empty array normally re-encodes as `{}`. Enable
+`decode_array_with_array_mt(true)` before decoding to retain explicit array
+identity. The policy is snapshotted per input, including incremental get/finish
+rebuilds. This mode works without the optional `cjson`
 module. The separate `lazy` option controls validation and remains unsupported
 for these strict source APIs.
 

@@ -34,7 +34,7 @@ describe("decode loading modes", function()
         assert.is_false(rawget(value.a, "b"))
         assert.are.equal(json.null, rawget(value.items, 1))
         assert.is_nil(next(value.items[2]))
-        assert.are.equal("[]", json.encode(value.items[3]))
+        assert.are.equal("{}", json.encode(value.items[3]))
         value.a.b = true
         assert.is_true(rawget(value.a, "b"))
     end)
@@ -78,7 +78,7 @@ describe("decode loading modes", function()
             assert.are.equal(4, #value.items)
             assert.is_false(rawget(value.items, 3))
             assert.are.equal("{}", json.encode(value.items[1]))
-            assert.are.equal("[]", json.encode(value.items[2]))
+            assert.are.equal("{}", json.encode(value.items[2]))
             local count = 0
             for _ in pairs(value) do count = count + 1 end
             assert.are.equal(2, count)
@@ -205,7 +205,7 @@ describe("decode loading modes", function()
         first.items[1][1] = 9
         local second = assert(input:finish())
         assert.is_false(rawget(second.a, "x"))
-        assert.are.equal("[]", json.encode(second.items[1]))
+        assert.are.equal("{}", json.encode(second.items[1]))
         local child, status = input:get("a")
         assert.are.equal("READY", status)
         child.x = 3

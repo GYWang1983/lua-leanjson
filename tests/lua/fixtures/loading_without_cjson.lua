@@ -1,6 +1,8 @@
 package.loaded.cjson = nil
 package.preload.cjson = function() error("cjson deliberately unavailable") end
 local json = require("leanjson")
+assert(json.encode(json.decode('[]', { lazyload = false })) == '{}')
+json.decode_array_with_array_mt(true)
 local value = json.decode('{"a":[false,null,[],{}],"x":1}', { lazyload = false })
 assert(rawget(value, "a") and rawget(value.a, 1) == false and rawget(value.a, 2) == json.null)
 assert(json.encode(value.a[3]) == "[]" and json.encode(value.a[4]) == "{}")

@@ -3,16 +3,20 @@ local ffi = require("ffi")
 local proxy = require("leanjson.proxy")
 local bounded_reader = require("leanjson.reader")
 local leases = require("leanjson.leases")
+local settings = require("leanjson.settings")
+local raw_metatable = debug and debug.getmetatable or getmetatable
+local raw_length = rawget(_G, "rawlen") or table.getn
 local has_cjson, cjson = pcall(require, "cjson")
 local _M = {}
 _M.null = has_cjson and cjson.null or setmetatable({}, { __tostring = function() return "null" end })
-_M.empty_array_mt = (has_cjson and (cjson.empty_array_mt or cjson.array_mt)) or { __jsontype = "array" }
+_M.empty_array_mt = (has_cjson and cjson.empty_array_mt) or { __jsontype = "array" }
+_M.array_mt = (has_cjson and cjson.array_mt) or { __jsontype = "array" }
+_M.empty_array = (has_cjson and cjson.empty_array) or setmetatable({}, { __tostring = function() return "empty_array" end })
 local TABLE_TYPE_HINT = setmetatable({}, { __mode = "k" })
 local TABLE_ORIGIN = setmetatable({}, { __mode = "k" })
 local LazyObject, LazyArray = proxy.Object, proxy.Array
 local loading = require("leanjson.loading")
-loading.configure({ null = _M.null, empty_array_mt = _M.empty_array_mt,
-    hint = function(value, kind) TABLE_TYPE_HINT[value] = kind end })
+loading.configure({ null = _M.null, array_mt = _M.array_mt })
 
 _M.pairs, _M.ipairs, _M.len = proxy.pairs, proxy.ipairs, proxy.len
 _M.fork, _M.type, _M.close = proxy.fork, proxy.type, proxy.close
@@ -20,7 +24,7 @@ _M.source_stats = proxy.stats
 _M.array_insert, _M.array_remove = proxy.array_insert, proxy.array_remove
 
 local function decode(raw, opts, codec)
-    local backend, root = require("leanjson.source_memory").open(raw, opts)
+    local backend, root = require("leanjson.source_memory").open(raw, opts, codec)
     if not backend.opts.lazyload then
         local value = backend.loading:take()
         local source = ffi.gc(backend.state.source, nil)
@@ -75,7 +79,10 @@ materialize_node = function(node, keep_origin, scope, backends)
             if not record then complete = false end
         end
     end
-    if node.kind == "array" and n == 0 then setmetatable(out, _M.empty_array_mt) end
+    if node.kind == "array" then
+        if proxy.array_marked(node) then setmetatable(out, _M.array_mt)
+        elseif n == 0 then setmetatable(out, _M.empty_array_mt) end
+    end
     TABLE_TYPE_HINT[out] = node.kind
     if keep_origin then
         local backend, first, last = proxy.span(node)
@@ -116,10 +123,32 @@ local uint64_ct = ffi.typeof("uint64_t")
 local function new_codec()
     local codec = {}
     local classify_plain_table
+    local ENCODE_EMPTY_AS_OBJECT = true
+    local DECODE_ARRAY_WITH_MT = false
+
+    function codec.encode_empty_table_as_object(...)
+        settings.arity(select("#", ...), 1)
+        ENCODE_EMPTY_AS_OBJECT = settings.boolean((...), ENCODE_EMPTY_AS_OBJECT, 1)
+        return ENCODE_EMPTY_AS_OBJECT
+    end
+
+    function codec.decode_array_with_array_mt(...)
+        settings.arity(select("#", ...), 1)
+        DECODE_ARRAY_WITH_MT = settings.boolean((...), DECODE_ARRAY_WITH_MT, 1)
+        return DECODE_ARRAY_WITH_MT
+    end
 
     local function classify_table(value)
+        local mt = raw_metatable(value)
         local hint = TABLE_TYPE_HINT[value]
-        if getmetatable(value) == _M.empty_array_mt and hint ~= "array" then return "array", #value end
+        if rawequal(mt, _M.array_mt) then return "array", raw_length(value), true end
+        if rawequal(mt, _M.empty_array_mt) and hint ~= "array" then
+            -- Native empty_array_mt first checks ordinary sparse policy, then
+            -- forces an array even when non-numeric/hash keys were present.
+            local kind, length = classify_plain_table(value)
+            if kind == "array" then return kind, length end
+            return "array", raw_length(value), true
+        end
         if hint == "object" then return "object" end
         if hint == "array" then
             -- Materialization preserves empty-array identity, but later ordinary
@@ -133,21 +162,11 @@ local function new_codec()
     local _ENCODE_NUMBER_PRECISION = 14
     local _ENCODE_NUMBER_FMT = "%.14g"
 
-    function codec.encode_number_precision(precision)
-        if precision == nil then
-            return _ENCODE_NUMBER_PRECISION
-        end
-        if type(precision) ~= "number"
-            or precision ~= math.floor(precision)
-            or precision < 1
-            or precision > 14
-        then
-            error("expected integer between 1 and 14")
-        end
-        local old = _ENCODE_NUMBER_PRECISION
-        _ENCODE_NUMBER_PRECISION = precision
-        _ENCODE_NUMBER_FMT = "%." .. precision .. "g"
-        return old
+    function codec.encode_number_precision(...)
+        settings.arity(select("#", ...), 1)
+        _ENCODE_NUMBER_PRECISION = settings.integer((...), _ENCODE_NUMBER_PRECISION, 1, 16, 1)
+        _ENCODE_NUMBER_FMT = "%." .. _ENCODE_NUMBER_PRECISION .. "g"
+        return _ENCODE_NUMBER_PRECISION
     end
 
     -- Escape lookup table: byte value → escape sequence string (or nil if safe).
@@ -193,9 +212,6 @@ local function new_codec()
         if n ~= n or n == math.huge or n == -math.huge then
             error("leanjson.encode: cannot encode non-finite number")
         end
-        if n == math.floor(n) and math.abs(n) < 1e15 then
-            return string_format("%d", n)
-        end
         return string_format(fmt or _ENCODE_NUMBER_FMT, n)
     end
 
@@ -219,42 +235,11 @@ local function new_codec()
     local ENCODE_DEPTH_ERROR = "leanjson.encode: max depth exceeded"
     local ENCODE_CYCLE_ERROR = "leanjson.encode: circular reference"
 
-    local function validate_non_negative_integer(value, arg_index)
-        if type(value) ~= "number"
-            or value ~= value
-            or value == math.huge
-            or value == -math.huge
-            or value < 0
-            or value ~= math.floor(value)
-        then
-            error(
-                "bad argument #" .. tostring(arg_index)
-                    .. " to leanjson.encode_sparse_array (expected non-negative integer)",
-                2
-            )
-        end
-    end
-
     function codec.encode_sparse_array(convert, ratio, safe, ...)
-        if select("#", ...) > 0 then
-            error("bad argument #4 to leanjson.encode_sparse_array (found too many arguments)", 2)
-        end
-
-        local new_convert = ENCODE_SPARSE_CONVERT
-        local new_ratio = ENCODE_SPARSE_RATIO
-        local new_safe = ENCODE_SPARSE_SAFE
-
-        if convert ~= nil then
-            new_convert = convert ~= false
-        end
-        if ratio ~= nil then
-            validate_non_negative_integer(ratio, 2)
-            new_ratio = ratio
-        end
-        if safe ~= nil then
-            validate_non_negative_integer(safe, 3)
-            new_safe = safe
-        end
+        settings.arity(3 + select("#", ...), 3)
+        local new_convert = settings.boolean(convert, ENCODE_SPARSE_CONVERT, 1)
+        local new_ratio = settings.integer(ratio, ENCODE_SPARSE_RATIO, 0, 2147483647, 2)
+        local new_safe = settings.integer(safe, ENCODE_SPARSE_SAFE, 0, 2147483647, 3)
 
         ENCODE_SPARSE_CONVERT = new_convert
         ENCODE_SPARSE_RATIO = new_ratio
@@ -289,7 +274,8 @@ local function new_codec()
                 max = k
             end
         end
-        if not saw_key or not all_positive_integer_keys then
+        if not saw_key then return ENCODE_EMPTY_AS_OBJECT and "object" or "array", 0 end
+        if not all_positive_integer_keys then
             return "object"
         end
         if ENCODE_SPARSE_RATIO > 0
@@ -304,14 +290,16 @@ local function new_codec()
         return "array", max
     end
 
-    local function encode_array(t, depth, active, n)
+    local function encode_array(t, depth, active, n, raw)
         if depth > ENCODE_MAX_DEPTH then
             error(ENCODE_DEPTH_ERROR)
         end
         local parts = {}
         n = n or #t
         for i = 1, n do
-            parts[i] = encode(t[i], depth + 1, active)
+            local value
+            if raw then value = rawget(t, i) else value = t[i] end
+            parts[i] = encode(value, depth + 1, active)
         end
         return "[" .. table.concat(parts, ",") .. "]"
     end
@@ -352,6 +340,9 @@ local function new_codec()
             end
             local origin = TABLE_ORIGIN[value]
             if origin == nil or origin ~= record.origin then
+                return false
+            end
+            if classify_table(value) ~= origin.kind then
                 return false
             end
             if depth > ENCODE_MAX_DEPTH then
@@ -407,7 +398,8 @@ local function new_codec()
         if depth > ENCODE_MAX_DEPTH then
             error(ENCODE_DEPTH_ERROR)
         end
-        if #t ~= origin.len then
+        local kind, length = classify_table(t)
+        if kind ~= "array" or length ~= origin.len then
             return false
         end
         for i = 1, origin.len do
@@ -485,9 +477,9 @@ local function new_codec()
         if origin.complete == true and origin_array_fully_matches(t, origin, depth, active) then
             return origin_table_slice(origin)
         end
-        local kind, max = classify_table(t)
+        local kind, max, raw = classify_table(t)
         if kind == "array" then
-            return encode_array(t, depth, active, max)
+            return encode_array(t, depth, active, max, raw)
         end
         return encode_object(t, depth, active)
     end
@@ -495,8 +487,9 @@ local function new_codec()
     -- Dispatch for plain (non-lazy) tables. Separated from the main encode
     -- function to keep the lazy-proxy fast path narrow for LuaJIT traces.
     local function encode_plain_table(v, depth, active)
+        local kind, max, raw = classify_table(v)
         local origin = TABLE_ORIGIN[v]
-        if origin ~= nil then
+        if origin ~= nil and origin.kind == kind then
             if origin.kind == "object" then
                 return encode_object_with_origin(v, depth, active, origin)
             end
@@ -505,9 +498,8 @@ local function new_codec()
             end
         end
 
-        local kind, max = classify_table(v)
         if kind == "array" then
-            return encode_array(v, depth, active, max)
+            return encode_array(v, depth, active, max, raw)
         end
         return encode_object(v, depth, active)
     end
@@ -516,6 +508,7 @@ local function new_codec()
         if rawequal(v, _M.null) then
             return "null"
         end
+        if rawequal(v, _M.empty_array) then return "[]" end
         local tv = type(v)
         if tv == "string" then
             return encode_string(v)
@@ -532,9 +525,8 @@ local function new_codec()
                 error(ENCODE_CYCLE_ERROR)
             end
             active[v] = true
-            local mt = getmetatable(v)
             local encoded
-            if mt == LazyObject or mt == LazyArray then
+            if proxy.is_proxy(v) then
                 encoded = encode_proxy(v, depth, active)
             else
                 encoded = encode_plain_table(v, depth, active)
@@ -575,7 +567,8 @@ end
 
 local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
-    "encode_number_precision", "encode_sparse_array", "fork", "type", "get" }
+    "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
+    "decode_array_with_array_mt", "fork", "type", "get" }
 local function methods(codec)
     local out = {}
     for _, key in ipairs(public_methods) do out[key] = codec[key] end
@@ -584,12 +577,14 @@ end
 for key, value in pairs(methods(default)) do _M[key] = value end
 _M.new = function() return methods(new_codec()) end
 _M._new_reader = default._new_reader
-proxy.configure({ null = _M.null, classify = default.classify, tostring = default.tostring })
+proxy.configure({ null = _M.null, empty_array = _M.empty_array, array_mt = _M.array_mt,
+    empty_array_mt = _M.empty_array_mt, classify = default.classify, tostring = default.tostring })
 
 -- Debug convenience: tostring(lazy_view) returns the original JSON bytes.
 -- Not the canonical encoder — callers should still use leanjson.encode for output.
 LazyObject.__tostring = function(t) return proxy.codec(t).tostring(t) end
 LazyArray.__tostring  = function(t) return proxy.codec(t).tostring(t) end
+proxy.MarkedArray.__tostring = LazyArray.__tostring
 
 -- Test-only exports for metatable identity checks.
 _M._LazyObject = LazyObject

@@ -10,6 +10,10 @@ local metrics = require "metrics"
 if mode == "cjson" then
     assert(not package.loaded.leanjson and not package.loaded["leanjson.lib"])
     cjson.decode_array_with_array_mt(true) -- retain empty-array identity for the typed oracle
+elseif mode == "eager" then
+    -- This workload compares typed roundtrips with the marked cjson baseline.
+    -- Unmarked eager defaults are covered separately by the public API suite.
+    json.decode_array_with_array_mt(true)
 end
 local reads = 0
 local options = { chunk_size = 65536, index_depth = 0,

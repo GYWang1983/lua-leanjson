@@ -6,7 +6,7 @@ local io_source = require("leanjson.source_io")
 local path = require("leanjson.path")
 local proxy = require("leanjson.proxy")
 local leases = require("leanjson.leases")
-local options = require("leanjson.options").normalize
+local options = require("leanjson.options").for_codec
 local M = {}
 local Backend = {}; Backend.__index = Backend
 local Decoder = {}; Decoder.__index = Decoder
@@ -144,7 +144,7 @@ local function finish_backend(backend)
 end
 
 function M.decode_file(filename, opts, codec)
-    opts = options(opts)
+    opts = options(opts, codec)
     if type(filename) ~= "string" or filename:find("\0", 1, true) then error("leanjson: file path must be a string without NUL", 0) end
     local fd, open_error = io_source.open(filename)
     if fd == nil then error(open_error, 0) end
@@ -167,7 +167,7 @@ function M.decode_file(filename, opts, codec)
 end
 
 function M.new_decoder(opts, codec)
-    opts = options(opts)
+    opts = options(opts, codec)
     local fd, spool_path = io_source.spool(opts.temp_dir)
     if fd == nil then error(spool_path, 0) end
     local backend, owner = backend_new(fd, spool_path, opts)

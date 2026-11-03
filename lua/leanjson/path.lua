@@ -32,17 +32,17 @@ function M.parse(path)
     return segments
 end
 
-function M.from_node(node, segments, scope)
+function M.from_node(node, segments, scope, codec)
     for _, segment in ipairs(segments) do
         if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end
         node = proxy.lookup(node, segment.key, scope)
         if node == nil then return nil end
     end
-    if node.kind == "array" or node.kind == "object" then return proxy.from_node(node) end
+    if node.kind == "array" or node.kind == "object" then return proxy.from_node(node, codec) end
     return proxy.scalar(node, scope)
 end
 
-function M.get(value, path)
+function M.get(value, path, codec)
     local segments = M.parse(path)
     local node = proxy.node(value)
     if node then return proxy.get_path(value, segments) end
@@ -52,7 +52,7 @@ function M.get(value, path)
             for j = i, #segments do rest[#rest + 1] = segments[j] end
             return proxy.get_path(value, rest)
         end
-        if proxy.type(value) ~= segment.kind then error("leanjson.get: type mismatch", 0) end
+        if proxy.type(value, codec and codec.classify) ~= segment.kind then error("leanjson.get: type mismatch", 0) end
         value = value[segment.key]
         if type(value) == "nil" then return nil end
     end

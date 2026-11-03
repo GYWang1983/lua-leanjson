@@ -6,6 +6,16 @@ lua-cjson revision was adapted and executed across all nine requested cells.
 verification infrastructure and reports existing gaps without changing runtime
 semantics or substituting native cjson for missing target behavior.
 
+Follow-up work is tracked in the [cjson compatibility fix checklist](../design/cjson-compatibility-fixes.md),
+with stable issue IDs, evidence, acceptance criteria and unresolved policy choices.
+
+The later [F03 codec-instance report](f03-codec-instances.md) records the `new()`
+implementation and a fresh nine-cell run. The counts below remain the historical
+pre-F03 baseline.
+
+The subsequent [F04 safe-codec report](f04-safe-codecs.md) adds the real safe
+module, its factory and the next complete matrix run.
+
 The measured runtime is `b928a20505165fc3c0f3399b68500cd02050b42f`.
 Tests live in [tests/upstream-cjson](../../tests/upstream-cjson/README.md);
 the entrypoint is [verify-cjson-compat.py](../../scripts/verify-cjson-compat.py).

@@ -62,7 +62,7 @@ local function string_value(s, always_blob)
 end
 
 package.path = config.root .. "/lua/?.lua;" .. config.native .. "/lua/?.lua;" .. config.native .. "/?.lua;" .. package.path
-local lean, proxy, native, native_safe
+local lean, lean_safe, proxy, native, native_safe
 if config.implementation == "target" then
     assert(package.loaded.cjson == nil, "native cjson was already loaded in target process")
     package.preload.cjson = function()
@@ -74,8 +74,10 @@ if config.implementation == "target" then
         error("native cjson.safe denied during target bootstrap", 0)
     end
     lean = require("leanjson")
+    lean_safe = require("leanjson.safe")
     proxy = require("leanjson.proxy")
     assert(package.loaded.cjson == nil, "target bootstrap loaded native cjson")
+    assert(package.loaded["cjson.safe"] == nil, "target bootstrap loaded native cjson.safe")
 else
     local function load_native(symbol)
         return assert(package.loadlib(config.native .. "/cjson.so", symbol))()
@@ -182,35 +184,43 @@ local function options(raw)
     end
     return out
 end
-local function decode(raw, reference_function, upstream_api)
+local function decode(raw, reference_function, upstream_api, codec, safe)
     api_called(upstream_api or "leanjson.decode")
     dependencies("decode")
     local event = { requested_source = config.source, upstream_api = upstream_api or "selective replay of decode input",
-                    input = string_value(raw, true), configuration = {}, options = {} }
+                    input = string_value(raw, true), configuration = {}, options = {},
+                    codec_scope = codec and codec ~= lean and codec ~= lean_safe and codec ~= native and codec ~= native_safe and "instance" or "module" }
     for key, value in pairs(configuration) do event.configuration[key] = value end
     local result
     if config.implementation == "reference" then
-        event.actual_path = "source-built cjson.decode"
+        event.actual_path = safe and "source-built cjson.safe.decode" or "source-built cjson.decode"
         result = pack(pcall(reference_function, raw))
     else
+        codec = codec or lean
+        local api_prefix = safe and "leanjson.safe." or "leanjson."
         local opts = options(raw)
         for key, value in pairs(opts) do event.options[key] = type(value) == "table" and array({ unpack(value) }) or value end
         if config.source == "memory" then
-            event.actual_path = "leanjson.decode"
-            result = pack(pcall(lean.decode, raw, opts))
+            event.actual_path = api_prefix .. "decode"
+            result = pack(pcall(codec.decode, raw, opts))
         elseif config.source == "file" then
-            event.actual_path = "leanjson.decode_file"
+            event.actual_path = api_prefix .. "decode_file"
             local filename = os.tmpname()
             local output = assert(io.open(filename, "wb"))
             assert(output:write(raw)); assert(output:close())
             temp_files[#temp_files + 1] = filename
-            result = pack(pcall(lean.decode_file, filename, opts))
+            result = pack(pcall(codec.decode_file, filename, opts))
         elseif config.source == "feed" then
-            event.actual_path = "leanjson.new_decoder:feed:finish"
+            event.actual_path = api_prefix .. "new_decoder:feed:finish"
             event.feed_chunks, event.max_chunk_bytes = 0, 0
             result = pack(pcall(function()
-                local decoder = lean.new_decoder(opts)
-                local ok, value = pcall(function()
+                local function failed(err)
+                    if safe then return nil, err end
+                    error(err, 0)
+                end
+                local decoder, construction_error = codec.new_decoder(opts)
+                if not decoder then return failed(construction_error) end
+                local decoded_result = pack(pcall(function()
                     local widths, position, index = { 1, 2, 3, 5, 8, 13, 64, 256, 1024, 4096, 16384 }, 1, 1
                     while position <= #raw do
                         local width = config.feed_one_byte and 1 or widths[index]
@@ -218,18 +228,18 @@ local function decode(raw, reference_function, upstream_api)
                         event.feed_chunks = event.feed_chunks + 1
                         event.max_chunk_bytes = math.max(event.max_chunk_bytes, #chunk)
                         local fed, err = decoder:feed(chunk)
-                        if not fed then error(err, 0) end
+                        if not fed then return failed(err) end
                         position = position + #chunk
                         index = index % #widths + 1
                     end
                     local decoded, err = decoder:finish()
-                    if err ~= nil then error(err, 0) end
+                    if err ~= nil then return failed(err) end
                     return decoded
-                end)
+                end))
                 decoder:close()
                 event.decoder_closed = true
-                if not ok then error(value, 0) end
-                return value
+                if not decoded_result[1] then error(decoded_result[2], 0) end
+                return unpack(decoded_result, 2, decoded_result.n)
             end))
         else error("unknown decode source") end
         if result[1] then
@@ -268,13 +278,22 @@ local function facade(module, prefix, safe)
         if cache[key] ~= nil then return cache[key] end
         local name = prefix .. "." .. key
         local value = module and module[key]
-        if safe and config.implementation == "target" then
+        if safe and config.implementation == "target" and config.fault_missing_safe then
             unavailable("cjson.safe", "module use")
             if key == "encode" or key == "decode" or key == "new" or config_names[key] then value = missing_function(name)
             else unavailable(name, "read"); value = nil end
         elseif key == "decode" then
-            value = function(raw) return decode(raw, module and module.decode, name) end
-        elseif key == "new" and config.implementation == "reference" then
+            value = function(...)
+                local raw = ...
+                -- Arity and non-string inputs exercise the real API directly:
+                -- they cannot be represented as a file/feed JSON byte source.
+                if select("#", ...) ~= 1 or type(raw) ~= "string" then
+                    api_called(name)
+                    return module.decode(...)
+                end
+                return decode(raw, module and module.decode, name, module, safe)
+            end
+        elseif key == "new" and type(value) == "function" then
             value = function(...)
                 api_called(name)
                 return facade(module.new(...), prefix, safe)
@@ -290,11 +309,11 @@ local function facade(module, prefix, safe)
     end })
 end
 local json = facade(lean or native, "cjson")
-local json_safe = facade(native_safe, "cjson.safe", true)
+local json_safe = facade(lean_safe or native_safe, "cjson.safe", true)
 package.loaded.cjson, package.loaded["cjson.safe"] = nil, nil
 package.preload.cjson = function() return json end
 package.preload["cjson.safe"] = function()
-    if lean then unavailable("cjson.safe", "module require") end
+    if lean and config.fault_missing_safe then unavailable("cjson.safe", "module require") end
     return json_safe
 end
 

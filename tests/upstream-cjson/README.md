@@ -27,6 +27,11 @@ to exercise the Czech locale cases. The runner sets `LOCPATH`, probes setlocale,
 and hashes that directory in provenance. Without it, unavailable locale behavior
 is reported explicitly.
 
+The Python control suite (`python3 -m unittest discover -s tests/upstream-cjson`)
+writes to `.superpowers/upstream-cjson-tests` by default. Set
+`CJSON_COMPAT_TEST_OUTPUT` to an absolute or checkout-relative path to retain a
+separate run; it must remain inside the checkout for the Docker bind mount.
+
 ## Execution and observations
 
 - All 131 `test.lua` rows retain their original definitions and order. The adapter
@@ -44,12 +49,21 @@ is reported explicitly.
   standalone null/empty-array sentinels. Afterwards `require "cjson"` names a thin
   target facade. Existing APIs call LeanJSON directly; missing functions raise an
   explicit unsupported marker and missing constants remain absent. `cjson.safe`
-  is unsupported. No configuration API is emulated.
+  maps to the real `leanjson.safe` module. No configuration API is emulated.
 - Decode dispatch records show the actual API, input SHA256/blob, options, source
   statistics, feed chunk counts, and cleanup. Feed uses deterministic widths
   1, 2, 3, 5, 8, 13, 64, 256, 1024, 4096, 16384 bytes. Full-root preload uses `$`
   with all three optional index limits zero. Every observed proxy and decoder is
   closed, and temporary input files are removed after each case.
+- `new()` returns a facade around the actual independent codec, keeping instance
+  decode calls in the requested loading/source cell. `codec_scope` distinguishes
+  instance and module calls. The failed-reset control injects its failure
+  explicitly, so it remains useful when the factory is supported.
+- Safe file/feed dispatch preserves actual safe conversion or decoder error
+  pairs rather than throwing them. Non-string inputs and arity checks call the
+  actual decode API directly, since they cannot represent file/feed bytes.
+  The missing-safe negative control explicitly injects module unavailability;
+  normal matrix runs load the implementation and its shared marker constants.
 - The original `util.compare_values` runs before the separate logical comparison.
   Upstream operators, iteration, metatable access, mutation, and encoding are
   unchanged. No eager materialization or global `pairs` patch precedes them.

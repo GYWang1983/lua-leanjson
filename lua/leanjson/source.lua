@@ -143,7 +143,7 @@ local function finish_backend(backend)
     return require("leanjson.nodes").raw(backend, ffi.new("leanjson_source_v2_node", root[0]))
 end
 
-function M.decode_file(filename, opts)
+function M.decode_file(filename, opts, codec)
     opts = options(opts)
     if type(filename) ~= "string" or filename:find("\0", 1, true) then error("leanjson: file path must be a string without NUL", 0) end
     local fd, open_error = io_source.open(filename)
@@ -159,21 +159,21 @@ function M.decode_file(filename, opts)
         end
         local node = finish_backend(backend)
         if not opts.lazyload then return backend.loading:take() end
-        return proxy.from_backend(backend, node.handle)
+        return proxy.from_backend(backend, node.handle, codec)
     end)
     backend:release(owner)
     if not ok then error(value, 0) end
     return value
 end
 
-function M.new_decoder(opts)
+function M.new_decoder(opts, codec)
     opts = options(opts)
     local fd, spool_path = io_source.spool(opts.temp_dir)
     if fd == nil then error(spool_path, 0) end
     local backend, owner = backend_new(fd, spool_path, opts)
     local scope = leases.acquire()
     scope.entries = { { backend, owner } }
-    return setmetatable({ backend = backend, scope = scope }, Decoder)
+    return setmetatable({ backend = backend, scope = scope, codec = codec }, Decoder)
 end
 
 function Decoder:close()
@@ -214,7 +214,7 @@ function Decoder:finish()
         local was_finished = self.finished
         if not was_finished then self.node = finish_backend(self.backend) end
         local completed
-        if self.backend.opts.lazyload then completed = path.from_node(self.node, {}, self.scope)
+        if self.backend.opts.lazyload then completed = path.from_node(self.node, {}, self.scope, self.codec)
         elseif was_finished then completed = loading.rebuild(self.backend, self.node.handle, self.scope)
         else completed = self.backend.loading:take() end
         self.finished = true
@@ -234,7 +234,7 @@ function Decoder:get(query)
     if not usable then return nil, "ERROR", tostring(source_error) end
     if not self.finished then return nil, "NEED_INPUT" end
     local found, value = pcall(function()
-        if self.backend.opts.lazyload then return path.from_node(self.node, segments, self.scope) end
+        if self.backend.opts.lazyload then return path.from_node(self.node, segments, self.scope, self.codec) end
         local node = self.node
         for _, segment in ipairs(segments) do
             if node.kind ~= segment.kind then error("leanjson.get: type mismatch", 0) end

@@ -6,6 +6,7 @@ The worker controls use the same pinned Docker image as the complete matrix.
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -15,9 +16,80 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/verify-cjson-compat.py"
+TEST_OUTPUT = Path(os.environ.get("CJSON_COMPAT_TEST_OUTPUT", ROOT / ".superpowers/upstream-cjson-tests")).resolve()
 
 
 class RunnerControls(unittest.TestCase):
+    def test_safe_module_and_factory_preserve_pairs_in_all_source_modes(self):
+        runner = self.runner()
+        scratch = TEST_OUTPUT / "safe-dispatch-control"
+        case = {"id": "safe-dispatch", "suite": "negative-control", "line": 1,
+                "name": "safe-dispatch", "category": "direct_decode", "source": "negative-control:safe-dispatch",
+                "declared_apis": ["cjson.safe.decode", "cjson.safe.new"]}
+        code = ('util.run_test_group({{"safe-dispatch",function() '
+                'local safe=require("cjson.safe"); local child=safe.new(); '
+                'local function pack(...) return {n=select("#",...),...} end; '
+                'local f=safe.decode("false"); local n=child.decode("null"); '
+                'local a=pack(safe.decode("Oops")); local b=pack(child.decode("{bad")); '
+                'return f,n==safe.null,a.n,a[1]==nil,type(a[2]),b.n,b[1]==nil,type(b[2]) '
+                'end,{},true,{false,true,2,true,"string",2,true,"string"}}})')
+        with runner.Environment(ROOT, scratch) as environment:
+            for mode in ("lazy", "eager", "preload"):
+                for source, api in (("memory", "decode"), ("file", "decode_file"), ("feed", "new_decoder:feed:finish")):
+                    with self.subTest(mode=mode, source=source):
+                        rows, _ = environment.worker(scratch / (mode + "-" + source), "target", mode, source,
+                                                     [case], kind="control", code=code)
+                        row = rows[0]
+                        self.assertTrue(row["upstream_exact_pass"], row)
+                        self.assertEqual([], row["unsupported"])
+                        self.assertEqual(["module", "instance", "module", "instance"],
+                                         [event["codec_scope"] for event in row["dispatch"]])
+                        for event in row["dispatch"]:
+                            self.assertEqual("leanjson.safe." + api, event["actual_path"])
+                            if mode == "eager":
+                                self.assertIs(False, event["options"]["lazyload"])
+                            if mode == "preload":
+                                self.assertEqual(["$"], event["options"]["preload_paths"])
+                            if source == "feed":
+                                self.assertTrue(event["decoder_closed"])
+
+    def test_instance_decode_keeps_source_and_loading_matrix_dispatch(self):
+        runner = self.runner()
+        scratch = TEST_OUTPUT / "instance-dispatch-control"
+        case = {"id": "instance-dispatch", "suite": "negative-control", "line": 1,
+                "name": "instance-dispatch", "category": "direct_decode",
+                "source": "negative-control:instance-dispatch", "declared_apis": ["cjson.new", "cjson.decode"]}
+        code = ('util.run_test_group({{"instance-dispatch",function() '
+                'local codec=json.new(); local value=codec.decode([[{"child":{"n":1},"other":2}]]); '
+                'return value.child.n,value.other end,{},true,{1,2}}})')
+        paths = {"memory": "leanjson.decode", "file": "leanjson.decode_file",
+                 "feed": "leanjson.new_decoder:feed:finish"}
+        with runner.Environment(ROOT, scratch) as environment:
+            safe_code = ('util.run_test_group({{"instance-dispatch",function() '
+                         'local safe=require("cjson.safe"); return safe.decode("1"),safe.new().decode("2") '
+                         'end,{},true,{1,2}}})')
+            reference, _ = environment.worker(scratch / "safe-reference", "reference", "native", "memory",
+                                               [case], kind="control", code=safe_code)
+            self.assertEqual(["module", "instance"], [e["codec_scope"] for e in reference[0]["dispatch"]])
+            for mode in ("lazy", "eager", "preload"):
+                for source in paths:
+                    with self.subTest(mode=mode, source=source):
+                        records, _ = environment.worker(scratch / (mode + "-" + source), "target", mode,
+                                                        source, [case], kind="control", code=code)
+                        row = records[0]
+                        self.assertTrue(row["upstream_exact_pass"])
+                        self.assertEqual(1, len(row["dispatch"]), "instance bypassed matrix dispatch")
+                        event = row["dispatch"][0]
+                        self.assertEqual(paths[source], event["actual_path"])
+                        self.assertEqual("instance", event["codec_scope"])
+                        if mode == "eager":
+                            self.assertIs(False, event["options"]["lazyload"])
+                        elif mode == "preload":
+                            self.assertEqual(["$"], event["options"]["preload_paths"])
+                        if source == "feed":
+                            self.assertTrue(event["decoder_closed"])
+                            self.assertGreater(event["feed_chunks"], 1)
+
     def runner(self):
         self.assertTrue(SCRIPT.is_file(), "upstream compatibility runner is not implemented")
         spec = importlib.util.spec_from_file_location("cjson_compat", SCRIPT)
@@ -62,7 +134,7 @@ class RunnerControls(unittest.TestCase):
         runner = self.runner()
         # This executes native cjson and LeanJSON in isolated LuaJIT processes;
         # it does not construct pre-classified JSON records as a stand-in.
-        scratch = ROOT / ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts/negative-controls"
+        scratch = TEST_OUTPUT / "negative-controls"
         result = runner.run_negative_controls(ROOT, scratch)
         self.assertTrue(result["healthy"], json.dumps(result, indent=2))
         self.assertEqual("behavioral_difference", result["differing_return"])
@@ -87,7 +159,7 @@ class RunnerControls(unittest.TestCase):
 
     def test_shared_native_target_precision_loss_does_not_fail_selective_compatibility(self):
         runner = self.runner()
-        scratch = ROOT / ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts/roundtrip-controls"
+        scratch = TEST_OUTPUT / "roundtrip-controls"
         case = {"id": "shared-default-precision", "suite": "negative-control", "line": 1,
                 "name": "shared-default-precision", "category": "direct_decode",
                 "source": "negative-control:shared-default-precision", "declared_apis": ["cjson.decode", "cjson.encode"]}

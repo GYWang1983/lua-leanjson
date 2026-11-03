@@ -274,8 +274,21 @@ _M.null           = _lazy.null
 _M.empty_array_mt = _lazy.empty_array_mt
 _M._LazyObject    = _lazy._LazyObject
 _M._LazyArray     = _lazy._LazyArray
-_M.decode_file    = require("leanjson.source").decode_file
-_M.new_decoder    = require("leanjson.source").new_decoder
-_M.get            = require("leanjson.path").get
+_M.decode_file    = _lazy.decode_file
+_M.new_decoder    = _lazy.new_decoder
+_M.get            = _lazy.get
+
+-- Stateless helpers/constants are shared; mutable settings live exclusively
+-- in the fresh codec closures. new() always starts from library defaults.
+local instance_api = {}
+for key, value in pairs(_M) do instance_api[key] = value end
+local function new()
+    local instance = {}
+    for key, value in pairs(instance_api) do instance[key] = value end
+    for key, value in pairs(_lazy.new()) do instance[key] = value end
+    instance.new = new
+    return instance
+end
+_M.new = new
 
 return _M

@@ -172,6 +172,92 @@ adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
 option concerns validation and does not disable source validation. See the
 [source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
 
+## Independent codec instances
+
+`leanjson.new()` returns an independent encoder/decoder API table, like
+`cjson.new()`. It creates a codec, not a JSON document. Each call starts with
+library defaults, including calls to an instance's `new()`; it does not copy
+the parent's current settings. Call its functions with `.` just like the module.
+
+```lua
+local json = require "leanjson"
+local a, b = json.new(), json.new()
+a.encode_number_precision(3)
+a.encode_sparse_array(true)
+assert(a.encode(1 / 3) == "0.333")
+assert(b.encode_number_precision() == 14)
+assert(json.encode_number_precision() == 14)
+
+local body = a.decode('{"model":"old","messages":[]}', {
+    preload_paths = { "$.model" },
+})
+body.model = "new"
+local output = a.encode(body)
+a.close(body)
+```
+
+Instances retain `decode`, `decode_file`, `new_decoder`, lazy/eager/preload
+options and the existing helpers. `new_decoder()` still creates an incremental
+input decoder; it is distinct from `new()`.
+
+- `encode_number_precision` and `encode_sparse_array` are isolated between
+  the default module and every instance. Their existing validation and return
+  values are unchanged; other cjson settings remain pending.
+- `codec.encode(value)` and `codec.reader(value)` use the called codec, including
+  when `value` was created by another instance. A reader snapshots numeric
+  formatting and table contents when created. Unchanged source spans retain
+  their original bytes, including numeric precision.
+- Lazy views, child views and incremental decoder results retain their creating
+  codec for `tostring` and for classifying plain tables assigned into them.
+  Later settings on that codec affect future operations; sibling instances do
+  not. A table assigned to a lazy view is snapshotted at assignment, so changing
+  sparse-array settings later does not reshape an existing snapshot.
+- `codec.fork(value)` adopts the called codec for the new view without changing
+  the original. Eager tables remain ordinary Lua values and use the codec chosen
+  when encoding. Null/array markers and immutable source data can be shared
+  safely across instances. A codec itself needs no `close()`; file/feed views
+  and readers retain their existing cleanup requirements.
+
+## Safe conversions
+
+`require "leanjson.safe"` provides a separate codec whose conversion failures
+return `nil, err`. `safe.new()` creates another independent safe codec at library
+defaults; settings do not leak into normal codecs or sibling safe instances.
+
+```lua
+local safe = require "leanjson.safe"
+local body, err = safe.decode('{"model":"seedance"}', {
+    preload_paths = { "$.model" },
+})
+if body == nil then error(err) end
+body.model = "provider-model"
+local output, encode_err = safe.encode(body)
+safe.close(body)
+if output == nil then error(encode_err) end
+```
+
+- Successful conversions return exactly one value. JSON `false` is a valid
+  result; JSON null is `safe.null`. Test for `value == nil`, not `not value`.
+- `encode(value)` requires exactly one argument: `encode(nil)` returns `"null"`,
+  but `encode()` throws. `decode(raw[, opts])` and `decode_file(path[, opts])`
+  require one or two arguments; `new_decoder([opts])` takes zero or one.
+- Wrong argument counts, invalid loading options and configuration setter
+  errors throw. JSON syntax/value errors and decode input-type errors return
+  exactly `nil, err`. Like cjson, safe decode accepts numeric input by converting
+  it to a string. Existing parser restrictions still apply.
+- `decode_file` and `new_decoder` return `nil, err` on source/construction
+  failures. Failed file scans and incremental input release their descriptors
+  and spool ownership through the existing source implementation.
+- Lazy/eager/preload and all input sources remain available. Helpers, lazy
+  property access, and reader/decoder methods retain their existing contracts:
+  late property errors may throw, `reader:next()` returns `nil, err` on failure,
+  and `decoder:get()` uses its status return. Safe conversion does not make
+  these later operations protected or remove the need for `close()`.
+
+This Lua adapter does not reproduce the native C wrapper's separate
+`LUA_ERRMEM` classification; VM allocation failures are not a verified
+compatibility guarantee. Exact cjson error wording remains tracked separately.
+
 ## Rewrite a file without assembling the output
 
 This example keeps the original file as its source, changes `model`, and writes

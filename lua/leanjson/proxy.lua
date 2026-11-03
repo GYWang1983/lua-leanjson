@@ -47,8 +47,9 @@ end
 
 local changed = nodes.changed
 
-local function new_cell(node, parent, key, lexical)
-    return { node = node, parent = parent, key = key, children = setmetatable({}, { __mode = "v" }), version = 0, lexical = lexical }
+local function new_cell(node, parent, key, lexical, codec)
+    return { node = node, parent = parent, key = key, children = setmetatable({}, { __mode = "v" }), version = 0,
+        lexical = lexical, codec = codec or (parent and parent.codec) or config }
 end
 
 local function wrap(cell, prepared)
@@ -66,10 +67,10 @@ local function wrap(cell, prepared)
     return value
 end
 
-local function child_cell(node, parent, key, lexical, scope, expected)
+local function child_cell(node, parent, key, lexical, scope, expected, codec)
     if parent and not lexical then
         leases.check(scope)
-        if parent.closed or parent.node ~= expected then return new_cell(node) end
+        if parent.closed or parent.node ~= expected then return new_cell(node, nil, nil, nil, parent.codec) end
         local cached = parent.children[key]
         if cached and nodes.same(cached.node, node) and not cached.closed then return cached end
         if cached then cached.parent = nil end
@@ -77,18 +78,18 @@ local function child_cell(node, parent, key, lexical, scope, expected)
         parent.children[key] = cell
         return cell
     end
-    return new_cell(node, parent, key, lexical)
+    return new_cell(node, parent, key, lexical, codec)
 end
 
-local function expose(node, parent, key, lexical, scope, expected)
+local function expose(node, parent, key, lexical, scope, expected, codec)
     if node == nil then return nil end
     if node.kind ~= "object" and node.kind ~= "array" then return M.scalar(node, scope) end
-    return wrap(child_cell(node, parent, key, lexical, scope, expected))
+    return wrap(child_cell(node, parent, key, lexical, scope, expected, codec))
 end
 local array_length = nodes.length
 
 local snapshot
-snapshot = function(value, active, depth)
+snapshot = function(value, active, depth, classify)
     if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
     local holder = META[value]
     if holder then leases.check(holder.scope); return holder.cell.node end
@@ -97,12 +98,12 @@ snapshot = function(value, active, depth)
     if active[value] then error("leanjson.encode: circular reference", 0) end
     if depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
     active[value] = true
-    local kind, n = config.classify(value)
+    local kind, n = classify(value)
     local node = { kind = kind, keys = {}, values = {} }
     if kind == "array" then
         for i = 1, n do
             node.keys[i] = i
-            node.values[i] = snapshot(value[i], active, depth + 1)
+            node.values[i] = snapshot(value[i], active, depth + 1, classify)
         end
     else
         for key, child in pairs(value) do
@@ -112,23 +113,27 @@ snapshot = function(value, active, depth)
             end
             key = tostring(key)
             if node.values[key] == nil then node.keys[#node.keys + 1] = key end
-            node.values[key] = snapshot(child, active, depth + 1)
+            node.values[key] = snapshot(child, active, depth + 1, classify)
         end
     end
     active[value] = nil
     return node
 end
 
-function M.snapshot(value) return snapshot(value, {}, 1) end
+function M.snapshot(value, classify) return snapshot(value, {}, 1, classify or config.classify) end
 function M.is_proxy(value) return META[value] ~= nil end
 function M.node(value)
     local holder = META[value]
     if holder then leases.check(holder.scope); return holder.cell.node end
 end
 function M.scope(value) return META[value] and META[value].scope end
-function M.from_backend(backend, handle) return expose(raw_node(backend, handle)) end
-function M.from_node(node) return expose(node) end
-function M.fork(value) return expose(M.snapshot(value)) end
+function M.codec(value) return (META[value] and META[value].cell.codec) or config end
+function M.from_backend(backend, handle, codec) return expose(raw_node(backend, handle), nil, nil, nil, nil, nil, codec) end
+function M.from_node(node, codec) return expose(node, nil, nil, nil, nil, nil, codec) end
+function M.fork(value, codec)
+    codec = codec or M.codec(value)
+    return M.from_node(M.snapshot(value, codec.classify), codec)
+end
 
 function M.get_path(value, segments)
     if #segments == 0 then return value end
@@ -173,12 +178,12 @@ function M.close(value)
     leases.release(holder.scope)
 end
 
-function M.type(value)
+function M.type(value, classify)
     if rawequal(value, config.null) then return "null" end
     local holder = META[value]
     if holder then leases.check(holder.scope); return holder.cell.node.kind end
     if type(value) == "table" then
-        local kind = config.classify(value)
+        local kind = (classify or config.classify)(value)
         return kind
     end
     return type(value)
@@ -290,7 +295,7 @@ local function write(proxy, key, value)
                 error("leanjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
-        local node = present and M.snapshot(value) or nil
+        local node = present and M.snapshot(value, cell.codec.classify) or nil
         if node then dependencies(node) end
         return changed(original, key, node, scope), function()
             local cached = cell.children[key]
@@ -388,7 +393,7 @@ function M.array_insert(value, index, child)
         if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, true)
-        local inserted = M.snapshot(child)
+        local inserted = M.snapshot(child, cell.codec.classify)
         dependencies(inserted)
         return nodes.array_edit(original, index, 0, inserted, scope), function()
             local moved = {}
@@ -427,7 +432,7 @@ function M.array_remove(value, index)
             end
             cell.children = setmetatable(moved, { __mode = "v" })
         end, function()
-            if container then return wrap(removed_cell or new_cell(removed_node), prepared) end
+            if container then return wrap(removed_cell or new_cell(removed_node, nil, nil, nil, cell.codec), prepared) end
             return removed
         end
     end)

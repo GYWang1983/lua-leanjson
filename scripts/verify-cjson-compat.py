@@ -538,9 +538,9 @@ def run_negative_controls(root, output):
         _, missing = control("missing", [case("missing", "settings", ["cjson.decode_max_depth"])],
                              'util.run_test_group({{"missing",json.decode_max_depth,{5},true,{5}}})')
         _, safe_constant = control("safe-constant", [case("safe-constant", "settings", ["cjson.safe.empty_array_mt"])],
-                             'util.run_test_group({{"safe-constant",function() return require("cjson.safe").empty_array_mt end,{},true,{json.empty_array_mt}}})')
+                             'util.run_test_group({{"safe-constant",function() return require("cjson.safe").empty_array_mt end,{},true,{json.empty_array_mt}}})', fault_missing_safe=True)
         _, reset_getter = control("reset-getter", [case("reset", "helper", ["cjson.new"]), case("getter", "settings", ["cjson.encode_sparse_array"])],
-                             'util.run_test_group({{"reset",function() json=json.new() end},'
+                             'util.run_test_group({{"reset",function() if CONTROL_TARGET then error("intentional reset failure",0) end json=json.new() end},'
                              '{"getter",function() return json.encode_sparse_array() end,{},true,{false,2,10}}})')
         _, setup = control("setup", [case("setup", "helper", []), case("dependent")],
                            'util.run_test_group({{"setup",function() if CONTROL_TARGET then error("intentional setup failure",0) end end},'

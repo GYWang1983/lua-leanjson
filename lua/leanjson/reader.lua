@@ -226,7 +226,7 @@ function M.new(value, options, codec)
     end
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local ok, result = pcall(function()
-        local root = proxy.snapshot(value)
+        local root = proxy.snapshot(value, codec.classify)
         self.scope = leases.acquire(root)
         self.root = root
         self.stack = { { tag = "value", node = root } }

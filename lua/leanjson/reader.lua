@@ -4,40 +4,64 @@ local proxy = require("leanjson.proxy")
 local leases = require("leanjson.leases")
 local M = {}
 local Reader = {}; Reader.__index = Reader
-local ESCAPES = {
-    [0x22] = '\\"', [0x5c] = '\\\\', [0x0a] = '\\n', [0x0d] = '\\r',
-    [0x09] = '\\t', [0x08] = '\\b', [0x0c] = '\\f',
-}
+local bit = require("bit")
 local CLOSED = "leanjson.reader: closed"
 
-local function escape(byte)
-    return ESCAPES[byte] or (byte < 0x20 and string.format('\\u%04x', byte) or nil)
-end
-
-local function string_length(value)
+local function string_length(value, codec)
     local length = #value + 2
     for i = 1, #value do
-        local b = string.byte(value, i)
-        if ESCAPES[b] then length = length + 1
-        elseif b < 0x20 then length = length + 5 end
+        local escaped = codec.escape(string.byte(value, i))
+        if escaped then length = length + #escaped - 1 end
     end
     return length
 end
 
-local function raw_span(node, normalize)
-    if node.backend and (not normalize or (node.kind ~= "object" and node.kind ~= "array")
-        or (node.backend.clean and node.backend:clean(node.handle))) then
-        return proxy.span(node)
+local function raw_span(node, normalize, scope)
+    if node.backend then
+        local flags = node.backend.flags and node.backend:flags(node.handle) or 0
+        -- Special source strings and numbers must obey the calling codec even
+        -- when their surrounding original bytes could otherwise be reused.
+        if bit.band(flags, 4) ~= 0 then return end
+        if bit.band(flags, 8) ~= 0 then
+            if node.kind ~= "number" then return end
+            local n = proxy.scalar(node, scope)
+            if n ~= n or n == math.huge or n == -math.huge then return end
+        end
+        if not normalize or (node.kind ~= "object" and node.kind ~= "array")
+            or (node.backend.clean and node.backend:clean(node.handle)) then
+            return proxy.span(node)
+        end
     end
 end
 
-local function token(node, codec)
+local function source_string(node, scope)
+    if node.backend and not node.preloaded then
+        return node.backend:scalar_chunks(node.handle, scope)
+    end
+end
+
+local function token(node, codec, scope)
     local kind = node.kind
     if kind == "null" or kind == "nil" then return "null" end
     if kind == "boolean" then return node.value and "true" or "false" end
-    if kind == "number" then return codec.number(node.value) end
+    if kind == "number" then return codec.number(proxy.scalar(node, scope)) end
     if kind == "cdata" then return codec.cdata(node.value) end
     error("leanjson.encode: unsupported value type: " .. kind, 0)
+end
+
+local function output_members(node, scope)
+    -- Distinct Lua keys can have identical JSON spellings after numeric
+    -- formatting. Preserve both fields when encoding that table snapshot;
+    -- logical proxy lookups still use the final value for each JSON name.
+    if node.serialized_entries then
+        local index = 0
+        return function()
+            index = index + 1
+            local entry = node.serialized_entries[index]
+            if entry then return entry[1], entry[2] end
+        end
+    end
+    return proxy.iter(node, scope, true)
 end
 
 local function count_length(root, normalize, codec, scope)
@@ -52,26 +76,35 @@ local function count_length(root, normalize, codec, scope)
             else
                 if frame.index > 0 then length = length + 1 end
                 frame.index = frame.index + 1
-                if node.kind == "object" then length = length + string_length(key) + 1 end
+                if node.kind == "object" then length = length + string_length(key, codec) + 1 end
                 stack[#stack + 1] = { node = child, depth = frame.depth + 1 }
             end
         else
-            local backend, first, last = raw_span(node, normalize)
+            local backend, first, last = raw_span(node, normalize, scope)
             leases.check(scope)
             if backend then
                 length = length + last - first
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
                 if frame.depth > 1000 then error("leanjson.encode: max depth exceeded", 0) end
-                frame.iterator = proxy.iter(node, scope, true)
+                frame.iterator = output_members(node, scope)
                 leases.check(scope)
                 frame.index = 0
                 length = length + 2
             elseif node.kind == "string" then
-                length = length + string_length(node.value)
+                local chunks = source_string(node, scope)
+                if chunks then
+                    length = length + 2
+                    while true do
+                        local chunk = chunks()
+                        leases.check(scope)
+                        if chunk == nil then break end
+                        length = length + string_length(chunk, codec) - 2
+                    end
+                else length = length + string_length(node.value, codec) end
                 stack[#stack] = nil
             else
-                length = length + #token(node, codec)
+                length = length + #token(node, codec, scope)
                 stack[#stack] = nil
             end
         end
@@ -80,7 +113,9 @@ local function count_length(root, normalize, codec, scope)
 end
 
 local function literal(value) return { tag = "literal", value = value, pos = 1 } end
-local function string_frame(value) return { tag = "string", value = value, pos = 1, phase = "open" } end
+local function string_frame(value, chunks)
+    return { tag = "string", value = value or "", pos = 1, phase = "open", chunks = chunks }
+end
 
 local function next_chunk(self)
     local stack, parts, room = self.stack, {}, self.chunk_size
@@ -90,18 +125,18 @@ local function next_chunk(self)
         local tag, fragment = frame.tag
         if tag == "value" then
             local node = frame.node
-            local backend, first, last = raw_span(node, self.normalize)
+            local backend, first, last = raw_span(node, self.normalize, self.scope)
             if self.closed then return nil end
             if backend then
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
-                local iterator = proxy.iter(node, self.scope, true)
+                local iterator = output_members(node, self.scope)
                 if self.closed then return nil end
                 stack[#stack] = { tag = "container", node = node, iterator = iterator, index = 0, open = true }
             elseif node.kind == "string" then
-                stack[#stack] = string_frame(node.value)
+                stack[#stack] = string_frame(node.value, source_string(node, self.scope))
             else
-                stack[#stack] = literal(token(node, self.codec))
+                stack[#stack] = literal(token(node, self.codec, self.scope))
             end
         elseif tag == "raw" then
             local wanted = math.min(room, frame.last - frame.pos)
@@ -124,18 +159,23 @@ local function next_chunk(self)
             if frame.phase == "open" then
                 fragment, frame.phase = '"', "body"
             elseif frame.pos > #frame.value then
-                fragment = '"'
-                stack[#stack] = nil
+                local chunk = frame.chunks and frame.chunks()
+                if self.closed then return nil end
+                if chunk then frame.value, frame.pos = chunk, 1
+                else
+                    fragment = '"'
+                    stack[#stack] = nil
+                end
             else
                 local first = frame.pos
                 local last = math.min(#frame.value, first + room - 1)
                 local i = first
-                while i <= last and not escape(string.byte(frame.value, i)) do i = i + 1 end
+                while i <= last and not self.codec.escape(string.byte(frame.value, i)) do i = i + 1 end
                 if i > first then
                     fragment = frame.value:sub(first, i - 1)
                     frame.pos = i
                 else
-                    local escaped = escape(string.byte(frame.value, i))
+                    local escaped = self.codec.escape(string.byte(frame.value, i))
                     frame.pos = i + 1
                     stack[#stack + 1] = literal(escaped)
                 end
@@ -226,7 +266,7 @@ function M.new(value, options, codec)
     end
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local ok, result = pcall(function()
-        local root = proxy.snapshot(value, codec.classify)
+        local root = proxy.snapshot(value, codec.classify, codec.key)
         self.scope = leases.acquire(root)
         self.root = root
         self.stack = { { tag = "value", node = root } }

@@ -1,5 +1,6 @@
 -- Shared sparse span protocol for memory, file and incremental sources.
 local ffi = require("ffi")
+local bit = require("bit")
 local C = require("leanjson.lib")
 local leases = require("leanjson.leases")
 local M = {}
@@ -27,7 +28,8 @@ function M.require_status(status, expected, result)
     end
 end
 function M.native_options(opts)
-    return ffi.new("leanjson_source_v2_options[1]", { { 2, 0, opts.max_depth, opts.chunk_size,
+    local mode = (opts.decode_invalid_numbers and 1 or 0) + (not opts.decode_validate_utf8 and 2 or 0)
+    return ffi.new("leanjson_source_v2_options[1]", { { 2, mode, opts.max_depth, opts.chunk_size,
         opts.index_depth, opts.index_array_limit, opts.index_budget_bytes, 0, opts.temp_dir, #opts.temp_dir } })
 end
 function M.type(self, handle) self:check_open(); return kinds[tonumber(handle.kind)] end
@@ -41,7 +43,8 @@ function M.length(self, handle, scope)
     for _ in self:children(handle, scope, true) do n = n + 1 end
     return n
 end
-function M.clean(self, handle) return handle.flags == 1 end
+function M.flags(self, handle) return tonumber(handle.flags) end
+function M.clean(self, handle) return bit.band(handle.flags, 3) == 1 end
 function M.stats(self)
     self:check_open()
     local result, stats = ffi.new("leanjson_source_v1_result[1]"), ffi.new("leanjson_source_v2_stats[1]")
@@ -64,9 +67,11 @@ function M.clear_indexes(self)
     local result = ffi.new("leanjson_source_v1_result[1]")
     M.require_status(C.leanjson_source_v2_clear_indexes(self.state.source, result), READY, result)
 end
-function M.scalar(self, handle, scope)
-    local kind = self:type(handle)
-    if kind == "null" then return nil end
+-- The iterator owns one resumable native operation. Its cleanup is attached
+-- to the initiating lease scope, so closing a reader also cancels a suspended
+-- source read without keeping a decoded long string in memory.
+function M.scalar_chunks(self, handle, scope)
+    self:check_open()
     local lease = self:retain()
     local out, result = ffi.new("leanjson_source_v1_op *[1]"), ffi.new("leanjson_source_v1_result[1]")
     local status = C.leanjson_source_v2_node_scalar_begin(handle, out, result)
@@ -77,36 +82,65 @@ function M.scalar(self, handle, scope)
         self:release(lease)
     end)
     local fallback = leases.fallback(scope, record)
-    local ok, value = pcall(function()
-        local parts, pointer, size = {}, ffi.new("const uint8_t *[1]"), ffi.new("size_t[1]")
-        while status ~= DONE do
-            leases.check(scope)
-            if not fallback or not operation then error("leanjson: source operation closed", 0) end
-            if status == NEED_READ then
-                local offset, count = M.exact(result[0].offset), M.exact(result[0].length)
-                local bytes = self:read(offset, count, scope)
+    local pointer, size = ffi.new("const uint8_t *[1]"), ffi.new("size_t[1]")
+    local function close()
+        if fallback then leases.finish(scope, record); fallback = nil end
+    end
+    local function next_chunk()
+        leases.check(scope)
+        if not fallback or not operation then return nil end
+        local ok, value = pcall(function()
+            while status ~= DONE do
                 leases.check(scope)
-                M.require_status(C.leanjson_source_v1_provide_window(operation, offset, bytes, #bytes, result), READY, result)
-            elseif status == READY then
-                parts[#parts + 1] = ffi.string(pointer[0], size[0])
-                self:notify(scope)
-            else error(M.result_error(result), 0) end
-            status = C.leanjson_source_v1_op_step(operation, pointer, size, result)
-        end
-        local raw = table.concat(parts)
-        if kind == "string" then return raw end
-        if kind == "boolean" then return raw == "true" end
-        local number = tonumber(raw)
-        if number == nil or number == math.huge or number == -math.huge then
-            if self.memory then error("leanjson: out of range at byte " .. M.exact(handle.raw_start), 0) end
-            error("leanjson: number out of range", 0)
-        end
-        return number
-    end)
-    leases.finish(scope, record)
-    fallback = nil
-    if not ok then error(value, 0) end
-    return value
+                if not operation then error("leanjson: source operation closed", 0) end
+                if status == NEED_READ then
+                    local offset, count = M.exact(result[0].offset), M.exact(result[0].length)
+                    local bytes = self:read(offset, count, scope)
+                    leases.check(scope)
+                    M.require_status(C.leanjson_source_v1_provide_window(operation, offset, bytes, #bytes, result), READY, result)
+                    status = C.leanjson_source_v1_op_step(operation, pointer, size, result)
+                elseif status == READY then
+                    local chunk = ffi.string(pointer[0], size[0])
+                    self:notify(scope)
+                    leases.check(scope)
+                    status = C.leanjson_source_v1_op_step(operation, pointer, size, result)
+                    if #chunk > 0 then return chunk end
+                else error(M.result_error(result), 0) end
+            end
+        end)
+        if not ok or value == nil then close() end
+        if not ok then error(value, 0) end
+        return value
+    end
+    return next_chunk, close
+end
+
+function M.scalar(self, handle, scope)
+    local kind = self:type(handle)
+    if kind == "null" then return nil end
+    if kind == "number" and bit.band(handle.flags, 8) ~= 0 then
+        -- Validation already proved this token nonfinite. Only its sign and
+        -- NaN prefix are needed, even for a multi-megabyte NaN payload.
+        local next_chunk, close = M.scalar_chunks(self, handle, scope)
+        local bytes = next_chunk() or ""
+        local first = bytes:byte(1)
+        local negative, signed = first == 45, first == 45 or first == 43
+        local initial = bytes:byte(signed and 2 or 1)
+        if signed and initial == nil then initial = (next_chunk() or ""):byte(1) end
+        close()
+        if initial == 110 or initial == 78 then return 0/0 end
+        return negative and -math.huge or math.huge
+    end
+    local next_chunk, parts = M.scalar_chunks(self, handle, scope), {}
+    while true do
+        local chunk = next_chunk()
+        if chunk == nil then break end
+        parts[#parts + 1] = chunk
+    end
+    local raw = table.concat(parts)
+    if kind == "string" then return raw end
+    if kind == "boolean" then return raw == "true" end
+    return require("leanjson.number").decode(raw)
 end
 local function iterator(self, handle, scope, normalize, lookup, linked)
     leases.check(scope)

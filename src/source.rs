@@ -21,6 +21,13 @@ pub const DETAIL_BAD_OFFSET: u32 = 5;
 pub const DETAIL_BAD_OPTIONS: u32 = 6;
 pub const SPAN_CLEAN: u32 = 1;
 pub const SPAN_DUPLICATES: u32 = 2;
+pub const SPAN_STRING_ESCAPE: u32 = 4;
+pub const SPAN_NONFINITE: u32 = 8;
+pub const MODE_INVALID_NUMBERS: u32 = 1;
+pub const MODE_RAW_BYTES: u32 = 2;
+
+#[derive(Clone, Copy, Default)]
+pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceError { pub code: leanjson_err, pub detail: u32, pub offset: u64 }
@@ -64,9 +71,10 @@ struct Value {
 }
 struct Frame {
     value: Value, state: FrameState, key: (u64, u64), key_hash: u64, decoded_key: Vec<u8>, count: u64,
-    duplicates: Option<KeyMap>, dirty: bool,
+    duplicates: Option<KeyMap>, flags: u32,
 }
 enum Token {
+    PendingNull { start: u64 },
     String { start: u64, value: Option<Value>, state: StringState, key: Option<Vec<u8>>, key_hash: u64, key_limit: usize },
     Number { value: Value, state: NumberState },
     Literal { value: Value, expected: &'static [u8], matched: usize },
@@ -80,7 +88,7 @@ pub struct Source {
     finished: bool, failure: Option<SourceError>, max_depth: u32, window_size: usize,
     indexes: Option<IndexOptions>, index_bytes: usize, indexed_depth: u32,
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
-    loading: Option<loading::Loading>,
+    loading: Option<loading::Loading>, policy: SourcePolicy,
 }
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
@@ -91,7 +99,7 @@ impl Source {
             window_size: if window_size == 0 { 65536 } else { window_size },
             indexes: None, index_bytes: 0, indexed_depth: 0, events: false,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
-            loading: None,
+            loading: None, policy: SourcePolicy::default(),
         }
     }
     pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
@@ -99,9 +107,12 @@ impl Source {
         source.indexes = Some(indexes);
         source
     }
-    pub(crate) fn walker(start: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool) -> Self {
+    pub(crate) fn with_policy(mut self, policy: SourcePolicy) -> Self { self.policy = policy; self }
+    pub(crate) fn policy(&self) -> SourcePolicy { self.policy }
+    pub(crate) fn walker(start: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool, policy: SourcePolicy) -> Self {
         let mut source = Self::new_sparse(LEANJSON_MAX_MAX_DEPTH, window_size,
             IndexOptions { depth: 0, array_limit: 0, budget_bytes: 0 });
+        source.policy = policy;
         source.next_offset = start;
         source.events = true;
         source.detect_duplicates = detect;
@@ -109,8 +120,9 @@ impl Source {
         source.workspace = workspace;
         source
     }
-    pub(crate) fn walker_resume(span: Span, offset: u64, ordinal: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool) -> Self {
-        let mut source = Self::walker(span.raw_start, window_size, detect, spill_dir, workspace);
+    pub(crate) fn walker_resume(span: Span, resume: (u64, u64), window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool, policy: SourcePolicy) -> Self {
+        let (offset, ordinal) = resume;
+        let mut source = Self::walker(span.raw_start, window_size, detect, spill_dir, workspace, policy);
         if ordinal != 0 {
             let opener = if span.kind == leanjson_type::LEANJSON_T_ARR { b'[' } else { b'{' };
             source.start_value(opener, span.raw_start).unwrap();
@@ -201,14 +213,14 @@ impl Source {
         if self.finished { return Ok(()); }
         let eof_error = match self.token.take() {
             Some(Token::Number { value, state }) => match state.finish() {
-                Ok(()) => { self.complete(value, total_len, 0, SPAN_CLEAN); None },
+                Ok(nonfinite) => { self.complete(value, total_len, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); None },
                 Err(code) => Some(SourceError::json(code, value.start)),
             },
             Some(Token::String { start, state, .. }) => Some(match state.finish() {
                 Err(code) => SourceError::json(code, start),
                 Ok(()) => SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len),
             }),
-            Some(Token::Literal { .. }) => Some(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len)),
+            Some(Token::Literal { .. } | Token::PendingNull { .. }) => Some(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len)),
             None => None,
         };
         if let Some(error) = eof_error { return self.fail(error); }
@@ -235,7 +247,7 @@ impl Source {
             self.nodes[id].child_count = count;
             self.nodes[id].flags = flags;
         }
-        if let Some(parent) = self.frames.last_mut() { parent.dirty |= flags != SPAN_CLEAN; }
+        if let Some(parent) = self.frames.last_mut() { parent.flags |= flags & !SPAN_CLEAN; }
         if self.events && self.frames.len() == 1 {
             self.member = Some(SpanMember { ordinal: value.ordinal, key_start: value.key.0,
                 key_end: value.key.1, key: value.decoded_key,
@@ -293,10 +305,17 @@ impl Source {
         value
     }
     fn start_value(&mut self, byte: u8, offset: u64) -> Result<(), SourceError> {
+        // Lowercase n can begin null or a native NaN token. Delay publication
+        // until the second byte determines its type, including loading events.
+        if byte == b'n' && self.policy.invalid_numbers {
+            self.token = Some(Token::PendingNull { start: offset });
+            return Ok(());
+        }
         let kind = match byte {
             b'{' => leanjson_type::LEANJSON_T_OBJ, b'[' => leanjson_type::LEANJSON_T_ARR,
             b'"' => leanjson_type::LEANJSON_T_STR, b't' | b'f' => leanjson_type::LEANJSON_T_BOOL,
             b'n' => leanjson_type::LEANJSON_T_NULL, b'-' | b'0'..=b'9' => leanjson_type::LEANJSON_T_NUM,
+            b'+' | b'i' | b'I' | b'N' if self.policy.invalid_numbers => leanjson_type::LEANJSON_T_NUM,
             _ => return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)),
         };
         if matches!(byte, b'{' | b'[') && self.frames.len() as u32 >= self.max_depth {
@@ -308,14 +327,14 @@ impl Source {
                 let duplicates = (self.detect_duplicates && !self.frames.is_empty() && byte == b'{')
                     .then(|| KeyMap::new(self.spill_dir.clone(), self.workspace.clone()));
                 self.frames.push(Frame { value, key: (0, 0), key_hash: 0, decoded_key: Vec::new(), count: 0,
-                    state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst }, duplicates, dirty: false });
+                    state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst }, duplicates, flags: 0 });
             },
-            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::new(), key: None, key_hash: 0xcbf29ce484222325, key_limit: 0 }),
+            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::with_bytes(self.policy.raw_bytes), key: None, key_hash: 0xcbf29ce484222325, key_limit: 0 }),
             b't' | b'f' | b'n' => {
                 if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
                 self.token = Some(Token::Literal { value, expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1 });
             },
-            _ => { let mut state = NumberState::new(); state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
+            _ => { let mut state = NumberState::new(self.policy.invalid_numbers); state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
                 if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
                 self.token = Some(Token::Number { value, state }); },
         }
@@ -333,7 +352,7 @@ impl Source {
                 let capture = self.events && self.frames.len() == 1 || self.frames.last().unwrap().duplicates.is_some();
                 let key_limit = if capture { usize::MAX } else { self.loading.as_ref().map_or(0, |loading|
                     loading.key_limit(self.frames.last().unwrap().value.loading.as_ref().unwrap())) };
-                self.token = Some(Token::String { start: offset, value: None, state: StringState::new(), key: (key_limit != 0).then(Vec::new), key_hash: 0xcbf29ce484222325, key_limit }); Ok(())
+                self.token = Some(Token::String { start: offset, value: None, state: StringState::with_bytes(self.policy.raw_bytes), key: (key_limit != 0).then(Vec::new), key_hash: 0xcbf29ce484222325, key_limit }); Ok(())
             },
             Some(ObjectColon) if byte == b':' => { self.frames.last_mut().unwrap().state = ObjectValue; Ok(()) },
             Some(ArrayAfter) if byte == b',' => { self.frames.last_mut().unwrap().state = ArrayValue; Ok(()) },
@@ -345,19 +364,33 @@ impl Source {
     }
     fn close_container(&mut self, offset: u64) -> Result<(), SourceError> {
         let frame = self.frames.pop().unwrap();
-        let dirty = frame.dirty || frame.duplicates.as_ref().is_some_and(|d| d.had_duplicates());
-        let flags = if self.detect_duplicates { if dirty { SPAN_DUPLICATES } else { SPAN_CLEAN } } else { 0 };
+        let duplicate = frame.flags & SPAN_DUPLICATES != 0 || frame.duplicates.as_ref().is_some_and(|d| d.had_duplicates());
+        let flags = frame.flags | if self.detect_duplicates { if duplicate { SPAN_DUPLICATES } else { SPAN_CLEAN } } else { 0 };
         self.complete(frame.value, offset + 1, frame.count, flags);
         Ok(())
     }
     fn token_byte(&mut self, token: Token, byte: u8, offset: u64) -> Result<bool, SourceError> {
         match token {
+            Token::PendingNull { start } => {
+                if byte == b'u' {
+                    let value = self.allocate(leanjson_type::LEANJSON_T_NULL, start);
+                    if let Some(loading) = &mut self.loading { loading.data(&value, b"nu"); }
+                    self.token = Some(Token::Literal { value, expected: b"null", matched: 2 });
+                } else if matches!(byte, b'a' | b'A') {
+                    let value = self.allocate(leanjson_type::LEANJSON_T_NUM, start);
+                    let mut state = NumberState::new(true);
+                    state.feed(b'n').unwrap(); state.feed(byte).unwrap();
+                    if let Some(loading) = &mut self.loading { loading.data(&value, &[b'n', byte]); }
+                    self.token = Some(Token::Number { value, state });
+                } else { return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)); }
+            },
             Token::String { start, value, mut state, mut key, mut key_hash, key_limit } => {
                 if byte == b'"' && state.at_boundary() {
                     match value {
-                        Some(value) => self.complete(value, offset + 1, 0, SPAN_CLEAN),
+                        Some(value) => self.complete(value, offset + 1, 0, SPAN_CLEAN | if state.needs_escape() { SPAN_STRING_ESCAPE } else { 0 }),
                         None => {
                             let frame = self.frames.last_mut().unwrap();
+                            if state.needs_escape() { frame.flags |= SPAN_STRING_ESCAPE; }
                             frame.key = (start, offset + 1);
                             frame.key_hash = key_hash;
                             if let Some(key) = key {
@@ -382,8 +415,8 @@ impl Source {
             },
             Token::Number { value, mut state } => {
                 if is_delimiter(byte) {
-                    state.finish().map_err(|code| SourceError::json(code, value.start))?;
-                    self.complete(value, offset, 0, SPAN_CLEAN); return Ok(false);
+                    let nonfinite = state.finish().map_err(|code| SourceError::json(code, value.start))?;
+                    self.complete(value, offset, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); return Ok(false);
                 }
                 state.feed(byte).map_err(|code| SourceError::json(code, value.start))?;
                 if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }

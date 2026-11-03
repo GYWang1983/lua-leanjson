@@ -58,12 +58,15 @@ describe("file and feed source differential coverage", function()
     end)
 
     it("accepts every required-valid and rejects every required-invalid JSONTestSuite file", function()
+        local strict = leanjson.new()
+        strict.decode_invalid_numbers(false)
+        strict.decode_validate_utf8(true)
         local base = "tests/vendor/JSONTestSuite/test_parsing/"
         local valid, invalid = 0, 0
         for name in lfs.dir(base) do
             local requirement = name:sub(1, 2)
             if requirement == "y_" or requirement == "n_" then
-                local ok, value = pcall(leanjson.decode_file, base .. name, { chunk_size = 3 })
+                local ok, value = pcall(strict.decode_file, base .. name, { chunk_size = 3 })
                 if requirement == "y_" then
                     assert.is_true(ok, name .. ": " .. (ok and "" or tostring(value)))
                     leanjson.close(value)

@@ -1,6 +1,6 @@
 //! Additive v2 sparse ABI. v1 layouts and functions remain unchanged.
 use super::*;
-use crate::source::{IndexOptions, Span, SpanMember};
+use crate::source::{IndexOptions, Span, SpanMember, SourcePolicy, MODE_INVALID_NUMBERS, MODE_RAW_BYTES};
 use crate::source::sparse::{Walker, WalkStep, Lookup};
 
 #[repr(C)]
@@ -66,7 +66,7 @@ pub struct leanjson_source_v2_iter {
 pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_options, out: *mut leanjson_source_v1_result) -> *mut leanjson_source_v1 {
     let result = catch_unwind(AssertUnwindSafe(|| {
         let opts = if opts.is_null() { leanjson_source_v2_options::default() } else { *opts };
-        if opts.api_version != 2 || opts.mode != 0 || opts.reserved != 0 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
+        if opts.api_version != 2 || opts.mode & !(MODE_INVALID_NUMBERS | MODE_RAW_BYTES) != 0 || opts.reserved != 0 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
         let directory = if opts.spill_directory_len == 0 { std::env::temp_dir() } else {
             let bytes = input(opts.spill_directory, opts.spill_directory_len)?;
             if bytes.contains(&0) { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
@@ -74,7 +74,7 @@ pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_
             #[cfg(not(unix))] { std::path::PathBuf::from(std::str::from_utf8(bytes).map_err(|_| invalid_arg())?) }
         };
         let indexes = IndexOptions { depth: opts.index_depth, array_limit: opts.index_array_limit, budget_bytes: opts.index_budget_bytes as usize };
-        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes)), spill_dir: directory })) as *mut leanjson_source_v1)
+        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
     }));
     match result {
         Ok(Ok(handle)) => { write_result(out, leanjson_source_v1_result::pending(0)); handle },
@@ -198,7 +198,7 @@ impl leanjson_source_v2_iter {
         self.pending = Some(SpanMember { ordinal, key_start: member.key_start, key_end: member.key_end, key: Vec::new(), value: span });
         self.key.clear();
         let node = Span { kind: leanjson_type::LEANJSON_T_STR, flags: 1, raw_start: member.key_start, raw_end: member.key_end, child_count: 0 }.node();
-        self.key_reader = Some(SourceReader::new(&node, true, self.source.inner.borrow().window_size())?);
+        self.key_reader = Some(SourceReader::with_policy(&node, true, self.source.inner.borrow().window_size(), self.source.inner.borrow().policy())?);
         Ok(())
     }
     fn next(&mut self) -> Result<WalkStep, SourceError> {
@@ -225,10 +225,10 @@ impl leanjson_source_v2_iter {
                     if self.walker.is_none() {
                         let source = self.source.inner.borrow();
                         self.walker = Some(if self.mode == 2 && self.span.kind == leanjson_type::LEANJSON_T_OBJ {
-                            Walker::linked(self.span, source.window_size(), self.source.spill_dir.clone(), source.workspace())
+                            Walker::linked(self.span, source.window_size(), self.source.spill_dir.clone(), source.workspace(), source.policy())
                         } else {
                             Walker::new(self.span, source.window_size(), self.mode == 1,
-                                self.lookup.clone(), self.source.spill_dir.clone(), source.workspace())
+                                self.lookup.clone(), self.source.spill_dir.clone(), source.workspace(), source.policy())
                         });
                     }
                     return self.walker.as_mut().unwrap().next();
@@ -247,8 +247,8 @@ impl leanjson_source_v2_iter {
                         if self.span.kind == leanjson_type::LEANJSON_T_OBJ { self.prepare_key(member, value, ordinal)?; }
                         else { return Ok(WalkStep::Member(SpanMember { ordinal, key_start: 0, key_end: 0, key: Vec::new(), value })); }
                     } else {
-                        self.walker = Some(Walker::resume(self.span, offset, ordinal, self.source.inner.borrow().window_size(),
-                            self.mode == 1, self.source.spill_dir.clone(), self.source.inner.borrow().workspace()));
+                        self.walker = Some(Walker::resume(self.span, (offset, ordinal), self.source.inner.borrow().window_size(),
+                            self.mode == 1, self.source.spill_dir.clone(), self.source.inner.borrow().workspace(), self.source.inner.borrow().policy()));
                         self.cached = CacheWalk::Streaming;
                     }
                 },
@@ -325,7 +325,7 @@ pub unsafe extern "C" fn leanjson_source_v2_node_scalar_begin(node: leanjson_sou
     boundary(out, || {
         if op_out.is_null() { return Err(invalid_arg()); } *op_out = ptr::null_mut();
         let span = node.span()?; let handle = source(node.source)?;
-        let mut reader = SourceReader::new(&span.node(), true, handle.inner.borrow().window_size())?;
+        let mut reader = SourceReader::with_policy(&span.node(), true, handle.inner.borrow().window_size(), handle.inner.borrow().policy())?;
         let result = leanjson_source_v1_result::step(reader.step()?);
         *op_out = Box::into_raw(Box::new(leanjson_source_v1_op { source: clone_source(node.source), reader })); Ok(result)
     })

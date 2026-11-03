@@ -1,5 +1,5 @@
 use crate::error::{leanjson_err, leanjson_type};
-use super::{Node, SourceError, DETAIL_BAD_WINDOW};
+use super::{Node, SourceError, SourcePolicy, DETAIL_BAD_WINDOW};
 use super::validate::StringState;
 
 #[derive(Debug)]
@@ -29,6 +29,9 @@ pub struct SourceReader {
 
 impl SourceReader {
     pub fn new(node: &Node, scalar: bool, window_size: usize) -> Result<Self, SourceError> {
+        Self::with_policy(node, scalar, window_size, SourcePolicy::default())
+    }
+    pub(crate) fn with_policy(node: &Node, scalar: bool, window_size: usize, policy: SourcePolicy) -> Result<Self, SourceError> {
         if scalar && matches!(node.kind, leanjson_type::LEANJSON_T_ARR | leanjson_type::LEANJSON_T_OBJ) {
             return Err(SourceError::json(leanjson_err::LEANJSON_TYPE_MISMATCH, node.raw_start));
         }
@@ -37,7 +40,7 @@ impl SourceReader {
         Ok(Self {
             position: node.raw_start + u64::from(string), end: node.raw_end - u64::from(string),
             token_start: node.raw_start, limit,
-            string: if string { Some(StringState::new()) } else { None },
+            string: if string { Some(StringState::with_bytes(policy.raw_bytes)) } else { None },
             window: Vec::new(), window_index: 0, output: Vec::new(),
             pending: [0; 4], pending_start: 0, pending_end: 0, requested: false, failure: None,
         })

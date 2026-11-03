@@ -1,7 +1,7 @@
 //! Resumable member walks over immutable spans. No public handle refers to an
 //! evictable index entry and no walk retains skipped siblings.
 use std::path::PathBuf;
-use super::{Source, SourceError, Span, SpanMember, DETAIL_BAD_WINDOW};
+use super::{Source, SourceError, Span, SpanMember, SourcePolicy, DETAIL_BAD_WINDOW};
 use super::duplicates::{KeyMap, WorkspacePool};
 use crate::error::leanjson_type;
 
@@ -14,22 +14,23 @@ pub(crate) struct Walker {
     replay: Option<Box<Walker>>, current: bool,
 }
 impl Walker {
-    pub(crate) fn new(span: Span, limit: usize, normalize: bool, lookup: Option<Lookup>, directory: PathBuf, workspace: WorkspacePool) -> Self {
+    pub(crate) fn new(span: Span, limit: usize, normalize: bool, lookup: Option<Lookup>, directory: PathBuf, workspace: WorkspacePool, policy: SourcePolicy) -> Self {
         let normalized = (normalize && span.kind == leanjson_type::LEANJSON_T_OBJ).then(|| KeyMap::new(directory.clone(), workspace.clone()));
-        Self { parser: Source::walker(span.raw_start, limit, normalize, directory, workspace), end: span.raw_end,
+        Self { parser: Source::walker(span.raw_start, limit, normalize, directory, workspace, policy), end: span.raw_end,
             limit, window: Vec::new(), cursor: 0, requested: false, normalized, collected: false,
             lookup, found: None, done: false, replay: None, current: true }
     }
-    pub(crate) fn linked(span: Span, limit: usize, directory: PathBuf, workspace: WorkspacePool) -> Self {
-        let mut walker = Self::new(span, limit, false, None, directory.clone(), workspace.clone());
+    pub(crate) fn linked(span: Span, limit: usize, directory: PathBuf, workspace: WorkspacePool, policy: SourcePolicy) -> Self {
+        let mut walker = Self::new(span, limit, false, None, directory.clone(), workspace.clone(), policy);
         walker.normalized = Some(KeyMap::new(directory.clone(), workspace.clone()));
-        walker.replay = Some(Box::new(Self::new(span, limit, false, None, directory, workspace)));
+        walker.replay = Some(Box::new(Self::new(span, limit, false, None, directory, workspace, policy)));
         walker
     }
     pub(crate) fn is_current(&self) -> bool { self.current }
-    pub(crate) fn resume(span: Span, offset: u64, ordinal: u64, limit: usize, normalize: bool, directory: PathBuf, workspace: WorkspacePool) -> Self {
-        let mut walker = Self::new(span, limit, normalize, None, directory.clone(), workspace.clone());
-        walker.parser = Source::walker_resume(span, offset, ordinal, limit, normalize, directory, workspace);
+    pub(crate) fn resume(span: Span, resume: (u64, u64), limit: usize, normalize: bool, directory: PathBuf, workspace: WorkspacePool, policy: SourcePolicy) -> Self {
+        let (offset, ordinal) = resume;
+        let mut walker = Self::new(span, limit, normalize, None, directory.clone(), workspace.clone(), policy);
+        walker.parser = Source::walker_resume(span, (offset, ordinal), limit, normalize, directory, workspace, policy);
         walker
     }
     pub(crate) fn next(&mut self) -> Result<WalkStep, SourceError> {

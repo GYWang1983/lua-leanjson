@@ -97,7 +97,7 @@ end
 local array_length = nodes.length
 
 local snapshot
-snapshot = function(value, active, depth, classify)
+snapshot = function(value, active, depth, classify, encode_key)
     if rawequal(value, config.null) or type(value) == "nil" then return { kind = "null" } end
     if rawequal(value, config.empty_array) then return { kind = "array", keys = {}, values = {}, marked_array = true } end
     local holder = META[value]
@@ -116,7 +116,7 @@ snapshot = function(value, active, depth, classify)
             node.keys[i] = i
             local item
             if raw then item = rawget(value, i) else item = value[i] end
-            node.values[i] = snapshot(item, active, depth + 1, classify)
+            node.values[i] = snapshot(item, active, depth + 1, classify, encode_key)
         end
     else
         for key, child in pairs(value) do
@@ -124,16 +124,28 @@ snapshot = function(value, active, depth, classify)
             if kt ~= "string" and kt ~= "number" then
                 error("leanjson.encode: object key must be a string or number, got " .. kt, 0)
             end
-            key = tostring(key)
+            key = encode_key(key)
+            local member = snapshot(child, active, depth + 1, classify, encode_key)
+            if node.values[key] ~= nil and not node.serialized_entries then
+                node.serialized_entries = {}
+                for _, name in ipairs(node.keys) do
+                    node.serialized_entries[#node.serialized_entries + 1] = { name, node.values[name] }
+                end
+            end
+            if node.serialized_entries then
+                node.serialized_entries[#node.serialized_entries + 1] = { key, member }
+            end
             if node.values[key] == nil then node.keys[#node.keys + 1] = key end
-            node.values[key] = snapshot(child, active, depth + 1, classify)
+            node.values[key] = member
         end
     end
     active[value] = nil
     return node
 end
 
-function M.snapshot(value, classify) return snapshot(value, {}, 1, classify or config.classify) end
+function M.snapshot(value, classify, encode_key)
+    return snapshot(value, {}, 1, classify or config.classify, encode_key or config.key or tostring)
+end
 function M.is_proxy(value) return META[value] ~= nil end
 function M.node(value)
     local holder = META[value]
@@ -145,7 +157,7 @@ function M.from_backend(backend, handle, codec) return expose(raw_node(backend, 
 function M.from_node(node, codec) return expose(node, nil, nil, nil, nil, nil, codec) end
 function M.fork(value, codec)
     codec = codec or M.codec(value)
-    return M.from_node(M.snapshot(value, codec.classify), codec)
+    return M.from_node(M.snapshot(value, codec.classify, codec.key), codec)
 end
 
 function M.get_path(value, segments)
@@ -309,7 +321,7 @@ local function write(proxy, key, value)
                 error("leanjson: sparse proxy arrays require explicit materialization", 0)
             end
         end
-        local node = present and M.snapshot(value, cell.codec.classify) or nil
+        local node = present and M.snapshot(value, cell.codec.classify, cell.codec.key) or nil
         if node then dependencies(node) end
         return changed(original, key, node, scope), function()
             local cached = cell.children[key]
@@ -407,7 +419,7 @@ function M.array_insert(value, index, child)
         if original.kind ~= "array" then error("leanjson: expected array", 0) end
         local n = array_length(original, scope)
         check_index(index, n, true)
-        local inserted = M.snapshot(child, cell.codec.classify)
+        local inserted = M.snapshot(child, cell.codec.classify, cell.codec.key)
         dependencies(inserted)
         return nodes.array_edit(original, index, 0, inserted, scope), function()
             local moved = {}

@@ -177,7 +177,7 @@ fn v2_option_status_and_scalar_operation_contracts_preserve_v1_layouts() {
         assert_eq!(std::mem::size_of::<leanjson_source_v1_node>(), 16);
         for options in [
             leanjson_source_v2_options { api_version: 1, ..Default::default() },
-            leanjson_source_v2_options { mode: 1, ..Default::default() },
+            leanjson_source_v2_options { mode: 4, ..Default::default() },
             leanjson_source_v2_options { reserved: 1, ..Default::default() },
         ] {
             let mut result = leanjson_source_v1_result::default();

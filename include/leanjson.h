@@ -186,7 +186,7 @@ void leanjson_source_v1_iter_release(leanjson_source_v1_iter *);
  * while any copied node is used. Creation returns an operation plus NEED_READ
  * (or DONE for an empty scalar string). step yields nonempty READY output,
  * NEED_READ or DONE. Raw output is exact source bytes; scalar strings decode
- * escapes into UTF-8 bytes (a chunk may split a codepoint), while numbers,
+ * escapes into bytes (a chunk may split a UTF-8 codepoint), while numbers,
  * booleans and null stream their exact raw token. Numeric conversion/range
  * checks belong to the caller's explicit materialization. Containers cannot
  * be read as scalars. Every output chunk is <= window_size and its pointer is
@@ -210,13 +210,27 @@ void leanjson_source_v1_op_release(leanjson_source_v1_op *);
  * max_depth remains the independent full-validation nesting limit. Feed,
  * finish, abort, retain and release use v1 source functions. All new exports
  * catch panics. Source spans borrow their source; iterator/op handles retain it.
- * flags: 0=unknown duplicate status, 1=proven no duplicate in subtree,
- * 2=duplicates in subtree. Unknown must never be interpreted as clean.
+ * v2 mode bits: 1=allow native nonstandard numbers, 2=allow raw non-UTF8
+ * string/key bytes. Zero retains strict RFC number/UTF-8 validation. Unknown
+ * bits are rejected. Unicode escapes and surrogate pairs are always validated.
+ * flags are independent bits: 1=proven no duplicate in subtree,
+ * 2=duplicates in subtree, 4=decoded slash or DEL in any string/key,
+ * 8=nonfinite decoded number (NaN, infinity or floating overflow) in subtree.
+ * Plain decimal integers use native signed-64 saturation and stay finite.
+ * No duplicate bits means unknown; never interpret it as proven clean.
  * Only rebuildable native capacity is budgeted. Root/validation stack, active
  * bounded I/O and duplicate work, input, edits, returned values and output are
  * separate semantic/working storage, not a total RSS bound. Wide duplicate
  * indexes spill to owned temporary files; Unix pathnames are unlinked on open.
  */
+enum {
+    LEANJSON_SOURCE_V2_ALLOW_INVALID_NUMBERS = 1,
+    LEANJSON_SOURCE_V2_ALLOW_RAW_BYTES = 2,
+    LEANJSON_SOURCE_V2_SPAN_CLEAN = 1,
+    LEANJSON_SOURCE_V2_SPAN_DUPLICATES = 2,
+    LEANJSON_SOURCE_V2_SPAN_STRING_ESCAPE = 4,
+    LEANJSON_SOURCE_V2_SPAN_NONFINITE = 8
+};
 typedef struct {
     uint32_t api_version, mode, max_depth, window_size;
     uint32_t index_depth, index_array_limit, index_budget_bytes, reserved;
@@ -272,7 +286,7 @@ int leanjson_source_v2_node_scalar_begin(leanjson_source_v2_node, leanjson_sourc
  * tries compiled from concatenated little-endian u32 lengths + UTF-8 JSONPath
  * strings. Configure before any feed. eager=1 selects the complete source.
  * Drain events after each bounded feed and finish: BEGIN=1, decoded DATA=2,
- * END=3; DONE means the queue is currently empty. DATA is decoded UTF-8 for
+ * END=3; DONE means the queue is currently empty. DATA is decoded bytes for
  * strings and the original token for other scalars. BEGIN selected=0 is route
  * metadata, selected=1 is a complete selected value/subtree. Byte pointers are
  * borrowed until the next feed/finish/next-event/release; copy immediately.

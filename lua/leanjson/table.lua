@@ -51,6 +51,11 @@ local function read_all(backend, first, last, scope)
     return table.concat(parts)
 end
 
+local function string_needs_escape_policy(value)
+    return type(value) == "string"
+        and (value:find("/", 1, true) or value:find("\127", 1, true))
+end
+
 local materialize_node
 materialize_node = function(node, keep_origin, scope, backends)
     if node.backend then backends[node.backend] = true end
@@ -67,7 +72,8 @@ materialize_node = function(node, keep_origin, scope, backends)
         if keep_origin then
             local backend, first, last = proxy.span(child)
             local record
-            if backend and child.kind == "string" and last - first > 24 then
+            if backend and child.kind == "string" and last - first > 24
+                and not string_needs_escape_policy(value) then
                 record = { tag = "string", value = value, raw = read_all(backend, first, last, scope) }
             elseif backend and (child.kind == "object" or child.kind == "array") then
                 local origin = TABLE_ORIGIN[value]
@@ -76,7 +82,7 @@ materialize_node = function(node, keep_origin, scope, backends)
                 end
             end
             records[key] = record
-            if not record then complete = false end
+            if not record or string_needs_escape_policy(key) then complete = false end
         end
     end
     if node.kind == "array" then
@@ -125,6 +131,36 @@ local function new_codec()
     local classify_plain_table
     local ENCODE_EMPTY_AS_OBJECT = true
     local DECODE_ARRAY_WITH_MT = false
+    local DECODE_INVALID_NUMBERS = true
+    local DECODE_VALIDATE_UTF8 = false
+    local ENCODE_INVALID_NUMBERS = false
+    local ENCODE_ESCAPE_FORWARD_SLASH = true
+
+    function codec.decode_invalid_numbers(...)
+        settings.arity(select("#", ...), 1)
+        DECODE_INVALID_NUMBERS = settings.boolean((...), DECODE_INVALID_NUMBERS, 1)
+        return DECODE_INVALID_NUMBERS
+    end
+
+    function codec.decode_validate_utf8(...)
+        settings.arity(select("#", ...), 1)
+        DECODE_VALIDATE_UTF8 = settings.boolean((...), DECODE_VALIDATE_UTF8, 1)
+        return DECODE_VALIDATE_UTF8
+    end
+
+    function codec.encode_invalid_numbers(...)
+        settings.arity(select("#", ...), 1)
+        local value = (...)
+        if value == "null" then ENCODE_INVALID_NUMBERS = value
+        else ENCODE_INVALID_NUMBERS = settings.boolean(value, ENCODE_INVALID_NUMBERS, 1) end
+        return ENCODE_INVALID_NUMBERS
+    end
+
+    function codec.encode_escape_forward_slash(...)
+        settings.arity(select("#", ...), 1)
+        ENCODE_ESCAPE_FORWARD_SLASH = settings.boolean((...), ENCODE_ESCAPE_FORWARD_SLASH, 1)
+        return ENCODE_ESCAPE_FORWARD_SLASH
+    end
 
     function codec.encode_empty_table_as_object(...)
         settings.arity(select("#", ...), 1)
@@ -178,7 +214,16 @@ local function new_codec()
         [0x09] = '\\t',
         [0x08] = '\\b',
         [0x0C] = '\\f',
+        [0x7F] = '\\u007f',
     }
+    for byte = 0, 0x1F do
+        if not ESCAPES[byte] then ESCAPES[byte] = string_format('\\u%04x', byte) end
+    end
+
+    local function escape_byte(byte, escape_slash)
+        if byte == 0x2F then return escape_slash and '\\/' or nil end
+        return ESCAPES[byte]
+    end
 
     -- JSON string escaper with bulk-copy fast path.
     -- Scans for bytes that need escaping; copies clean segments via s:sub.
@@ -189,15 +234,11 @@ local function new_codec()
         local out = nil   -- lazily create table only when escapes found
         while i <= n do
             local b = string_byte(s, i)
-            local esc = ESCAPES[b]
-            if esc or b < 0x20 then
+            local esc = escape_byte(b, ENCODE_ESCAPE_FORWARD_SLASH)
+            if esc then
                 if not out then out = {'"'} end
                 if i > last then out[#out + 1] = s:sub(last, i - 1) end
-                if esc then
-                    out[#out + 1] = esc
-                else
-                    out[#out + 1] = string_format('\\u%04x', b)
-                end
+                out[#out + 1] = esc
                 last = i + 1
             end
             i = i + 1
@@ -208,12 +249,27 @@ local function new_codec()
         return table.concat(out)
     end
 
-    local function encode_number(n, fmt)
+    local function encode_number(n, fmt, invalid_mode)
         if n ~= n or n == math.huge or n == -math.huge then
+            if invalid_mode == nil then invalid_mode = ENCODE_INVALID_NUMBERS end
+            if invalid_mode == "null" then return "null" end
+            if invalid_mode then
+                if n ~= n then return "NaN" end
+                return n < 0 and "-Infinity" or "Infinity"
+            end
             error("leanjson.encode: cannot encode non-finite number")
         end
         return string_format(fmt or _ENCODE_NUMBER_FMT, n)
     end
+
+    local function encode_key(key, fmt, invalid_mode)
+        local kind = type(key)
+        if kind == "string" then return key end
+        if kind == "number" then return encode_number(key, fmt, invalid_mode) end
+        error("leanjson.encode: object key must be a string or number, got " .. kind)
+    end
+
+    codec.key = function(key) return encode_key(key) end
 
     local function encode_cdata(v)
         if ffi.istype(int64_ct, v) or ffi.istype(uint64_ct, v) then
@@ -310,13 +366,7 @@ local function new_codec()
         end
         local parts = {}
         for k, v in pairs(t) do
-            local kt = type(k)
-            if kt == "number" then
-                k = tostring(k)
-            elseif kt ~= "string" then
-                error("leanjson.encode: object key must be a string or number, got " .. kt)
-            end
-            parts[#parts+1] = encode_string(k) .. ":" .. encode(v, depth + 1, active)
+            parts[#parts+1] = encode_string(codec.key(k)) .. ":" .. encode(v, depth + 1, active)
         end
         return "{" .. table.concat(parts, ",") .. "}"
     end
@@ -454,16 +504,7 @@ local function new_codec()
 
         for key, value in pairs(t) do
             if not emitted[key] then
-                local key_type = type(key)
-                local encoded_key
-                if key_type == "string" then
-                    encoded_key = key
-                elseif key_type == "number" then
-                    encoded_key = tostring(key)
-                else
-                    error("leanjson.encode: object key must be a string or number, got " .. key_type)
-                end
-                parts[#parts + 1] = encode_string(encoded_key) .. ":" .. encode(value, depth + 1, active)
+                parts[#parts + 1] = encode_string(codec.key(key)) .. ":" .. encode(value, depth + 1, active)
             end
         end
 
@@ -539,8 +580,12 @@ local function new_codec()
 
     function codec._new_reader(value, options, depth)
         local fmt = _ENCODE_NUMBER_FMT
+        local invalid_mode = ENCODE_INVALID_NUMBERS
+        local escape_slash = ENCODE_ESCAPE_FORWARD_SLASH
         return bounded_reader.new(value, options, {
-            number = function(n) return encode_number(n, fmt) end,
+            number = function(n) return encode_number(n, fmt, invalid_mode) end,
+            key = function(key) return encode_key(key, fmt, invalid_mode) end,
+            escape = function(byte) return escape_byte(byte, escape_slash) end,
             cdata = encode_cdata,
             classify = classify_table,
             depth = depth,
@@ -568,7 +613,8 @@ end
 local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
-    "decode_array_with_array_mt", "fork", "type", "get" }
+    "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8",
+    "encode_invalid_numbers", "encode_escape_forward_slash", "fork", "type", "get" }
 local function methods(codec)
     local out = {}
     for _, key in ipairs(public_methods) do out[key] = codec[key] end
@@ -578,7 +624,8 @@ for key, value in pairs(methods(default)) do _M[key] = value end
 _M.new = function() return methods(new_codec()) end
 _M._new_reader = default._new_reader
 proxy.configure({ null = _M.null, empty_array = _M.empty_array, array_mt = _M.array_mt,
-    empty_array_mt = _M.empty_array_mt, classify = default.classify, tostring = default.tostring })
+    empty_array_mt = _M.empty_array_mt, classify = default.classify, key = default.key,
+    tostring = default.tostring })
 
 -- Debug convenience: tostring(lazy_view) returns the original JSON bytes.
 -- Not the canonical encoder — callers should still use leanjson.encode for output.

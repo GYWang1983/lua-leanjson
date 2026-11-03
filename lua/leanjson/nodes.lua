@@ -225,6 +225,11 @@ function M.dependencies(node, visit)
         for _, child in pairs(node.patches) do if child ~= DELETE then visit(child) end end
     elseif node.segments then
         for _, segment in ipairs(node.segments) do if segment.value then visit(segment.value) end end
-    elseif node.values then for _, child in pairs(node.values) do visit(child) end end
+    elseif node.values then
+        for _, child in pairs(node.values) do visit(child) end
+        if node.serialized_entries then
+            for _, entry in ipairs(node.serialized_entries) do visit(entry[2]) end
+        end
+    end
 end
 return M

@@ -43,15 +43,11 @@ function M.new(backend)
     return setmetatable({ backend = backend, eager = not opts.lazyload, stack = {}, frames = {} }, Builder)
 end
 
-local function scalar(kind, raw, first)
+local function scalar(kind, raw)
     if kind == "null" then return config.null end
     if kind == "string" then return raw end
     if kind == "boolean" then return raw == "true" end
-    local value = tonumber(raw)
-    if value == nil or value == math.huge or value == -math.huge then
-        error("leanjson: number out of range at byte " .. first, 0)
-    end
-    return value
+    return require("leanjson.number").decode(raw)
 end
 
 function Builder:drain()
@@ -90,7 +86,7 @@ function Builder:drain()
                     if frame.kind == "array" and self.backend.opts.decode_array_with_array_mt then
                         setmetatable(value, config.array_mt)
                     end
-                else value = scalar(frame.kind, frame.parts and table.concat(frame.parts) or frame.raw or "", frame.first) end
+                else value = scalar(frame.kind, frame.parts and table.concat(frame.parts) or frame.raw or "") end
             elseif frame.selected or next(frame.values) ~= nil then
                 local handle = ffi.new("leanjson_source_v2_node", { self.backend.state.source,
                     frame.first, e.raw_end, e.child_count, e.kind, e.flags })
@@ -99,7 +95,7 @@ function Builder:drain()
                     preload_keys = frame.keys, preload_entries = frame.entries }
                 if not container and frame.selected then
                     local raw = frame.parts and table.concat(frame.parts) or frame.raw or ""
-                    node.value = scalar(frame.kind, raw, frame.first)
+                    node.value = scalar(frame.kind, raw)
                     -- Logical scalar payload units, excluding Lua allocations:
                     -- UTF-8 string bytes, 8 per number, 1 per bool, 0 per null.
                     node.preload_bytes = frame.kind == "string" and #raw or frame.kind == "number" and 8

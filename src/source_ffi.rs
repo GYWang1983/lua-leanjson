@@ -273,7 +273,7 @@ unsafe fn begin(node: leanjson_source_v1_node, scalar: bool, op_out: *mut *mut l
     let (handle, id) = node_source(node)?;
     let source = handle.inner.borrow();
     let value = match source.node(id)? { Some(value) => value, None => return Ok(leanjson_source_v1_result::pending(source.offset())) };
-    let mut reader = SourceReader::new(value, scalar, source.window_size())?;
+    let mut reader = SourceReader::with_policy(value, scalar, source.window_size(), source.policy())?;
     let result = leanjson_source_v1_result::step(reader.step()?);
     *op_out = Box::into_raw(Box::new(leanjson_source_v1_op { source: clone_source(node.source), reader }));
     Ok(result)

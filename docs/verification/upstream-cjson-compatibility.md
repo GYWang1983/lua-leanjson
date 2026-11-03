@@ -1,5 +1,8 @@
 # Upstream lua-cjson compatibility matrix
 
+The later [F08/F09/F11/F12 report](f08-f09-f11-f12-numbers-bytes.md) records
+native number/byte defaults, escaping, bounded output and the updated matrix.
+
 Recorded 2026-11-02. The complete functional inventory of the pinned OpenResty
 lua-cjson revision was adapted and executed across all nine requested cells.
 **The harness is healthy; LeanJSON is not fully cjson-compatible.** This work adds

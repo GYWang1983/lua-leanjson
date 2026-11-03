@@ -48,12 +48,11 @@ describe("LazyObject __index — scalars", function()
         assert.is_nil(t.missing)
     end)
 
-    it("formats lazy numeric decode failures with byte offsets", function()
+    it("decodes standard overflow like cjson and rejects it during default encoding", function()
         local t = leanjson.decode('{"n":1e9999}')
-        assert.has_error(
-            function() return t.n end,
-            "leanjson: out of range at byte 5"
-        )
+        assert.equal(math.huge, t.n)
+        assert.has_error(function() leanjson.encode(t) end)
+        leanjson.close(t)
     end)
 end)
 

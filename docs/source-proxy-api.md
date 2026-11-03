@@ -12,7 +12,11 @@ default, matching cjson: an empty array normally re-encodes as `{}`. Enable
 identity. The policy is snapshotted per input, including incremental get/finish
 rebuilds. This mode works without the optional `cjson`
 module. The separate `lazy` option controls validation and remains unsupported
-for these strict source APIs.
+for these fully validated source APIs. Lua defaults accept native nonstandard
+numbers and raw byte strings. `decode_invalid_numbers(false)` enables RFC
+number grammar; `decode_validate_utf8(true)` additionally requires valid UTF-8.
+Unicode escapes remain validated in both policies. Settings are fixed per
+source, including late child access and eager get/finish rebuilds.
 
 ```lua
 local plain = leanjson.decode(raw, { lazyload = false })
@@ -36,7 +40,7 @@ path arrays are harmless. The compiled selection is immutable even if the
 caller's path array changes. `lazyload=false` loads everything while still
 validating any supplied paths.
 
-Selection shares path prefixes during the strict native scan; unselected data
+Selection shares path prefixes during the native scan under the chosen policy; unselected data
 is fully validated without building its Lua values or an unrestricted metadata
 tree. Selecting an object/array loads its complete subtree. Required path spans
 and selected decoded values are independent of all three automatic index bounds,
@@ -126,7 +130,7 @@ Loading diagnostics are separate from `index_bytes`:
 | --- | --- |
 | `preloaded_nodes` | Retained selected scalar/container node count, including retained lexical duplicate occurrences inside selected subtrees. |
 | `preload_path_nodes` | Retained route-only node count needed to reach selected descendants; excludes complete selected nodes. |
-| `preloaded_payload_bytes` | Logical scalar payload: decoded UTF-8 string bytes, 8 bytes per Lua number, 1 per boolean and 0 per null. |
+| `preloaded_payload_bytes` | Logical scalar payload: decoded string bytes (including accepted raw high bytes), 8 bytes per Lua number, 1 per boolean and 0 per null. |
 | `preloaded_key_bytes` | Sum of decoded key byte lengths for retained cache occurrences; route-only nodes count their final matched members. |
 
 These counts are zero without preloading. They describe immutable selected

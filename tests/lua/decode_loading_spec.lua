@@ -4,10 +4,11 @@ local io_source = require("leanjson.source_io")
 local ffi = require("ffi")
 ffi.cdef[[int fcntl(int, int, ...);]]
 
-local function decode(mode, raw, opts)
-    if mode == "memory" then return json.decode(raw, opts) end
+local function decode(mode, raw, opts, codec)
+    local api = codec or json
+    if mode == "memory" then return api.decode(raw, opts) end
     if mode == "feed" then
-        local input = json.new_decoder(opts)
+        local input = api.new_decoder(opts)
         for i = 1, #raw do assert.is_true(input:feed(raw:sub(i, i))) end
         local value, err = input:finish()
         input:close()
@@ -17,7 +18,7 @@ local function decode(mode, raw, opts)
     local filename = os.tmpname()
     local file = assert(io.open(filename, "wb"))
     file:write(raw); file:close()
-    local ok, value = pcall(json.decode_file, filename, opts)
+    local ok, value = pcall(api.decode_file, filename, opts)
     os.remove(filename)
     if not ok then error(value, 0) end
     return value
@@ -149,10 +150,13 @@ describe("decode loading modes", function()
         end)
 
         it("strictly validates ignored subtrees in every loading mode in " .. mode, function()
+            local strict = json.new()
+            strict.decode_invalid_numbers(false)
+            strict.decode_validate_utf8(true)
             for _, opts in ipairs({ selected({ "$.ok" }), { lazyload = false, chunk_size = 1 } }) do
                 for _, raw in ipairs({ '{"ok":1,"bad":[1,]}', '{"ok":1,"bad":"\\uD800x"}',
                     '{"ok":1,"bad":01}', '{"ok":1,"bad":"' .. string.char(255) .. '"}' }) do
-                    assert.has_error(function() decode(mode, raw, opts) end)
+                    assert.has_error(function() decode(mode, raw, opts, strict) end)
                 end
             end
         end)

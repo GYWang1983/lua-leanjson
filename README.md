@@ -200,13 +200,14 @@ Instances retain `decode`, `decode_file`, `new_decoder`, lazy/eager/preload
 options and the existing helpers. `new_decoder()` still creates an incremental
 input decoder; it is distinct from `new()`.
 
-- `encode_number_precision`, `encode_sparse_array`, `encode_empty_table_as_object`
-  and `decode_array_with_array_mt` are isolated between the default module and
-  every normal/safe instance. Each setter returns its current/new setting.
+- Numeric, byte validation, escaping and array settings are isolated between
+  the default module and every normal/safe instance. Each setter returns its current/new setting.
 - `codec.encode(value)` and `codec.reader(value)` use the called codec, including
   when `value` was created by another instance. A reader snapshots numeric
-  formatting and table contents when created. Unchanged source spans retain
-  their original bytes, including numeric precision.
+  formatting, nonfinite-number policy, escaping and table contents when created.
+  Unaffected source spans retain original bytes, including finite numeric
+  spellings. Nonfinite numbers and strings/keys containing slash or DEL follow
+  the called codec's encoding policy even inside unchanged source containers.
 - Lazy views, child views and incremental decoder results retain their creating
   codec for `tostring` and for classifying plain tables assigned into them.
   Later settings on that codec affect future operations; sibling instances do
@@ -266,6 +267,37 @@ file or incremental input starts; later children and repeated decoder results
 keep that policy. Lazy array edits still use the existing dense-array rules.
 Explicit `materialize` retains its shape-preserving helper contract and sparse
 reclassification after edits; `array_mt` explicitly overrides that shape.
+
+## Numbers and byte strings
+
+Decode defaults follow the pinned OpenResty lua-cjson: native nonstandard
+numbers (including hex floats, leading zeroes, Inf/Infinity and NaN) and raw
+non-UTF8 bytes in strings/keys are accepted. Unicode escapes and surrogate pairs
+are always validated; arbitrary raw control characters remain invalid.
+
+```lua
+local codec = require("leanjson").new()
+codec.decode_invalid_numbers(false) -- opt into RFC number grammar
+codec.decode_validate_utf8(true)    -- also require valid UTF-8 raw string bytes
+codec.encode_invalid_numbers("null") -- false: reject; true: NaN/Infinity tokens
+codec.encode_escape_forward_slash(false) -- default true: / becomes \/
+```
+
+These settings are isolated on normal/safe instances and support getters and
+boolean or exact `on`/`off` values; only `encode_invalid_numbers` also accepts
+`"null"`. Encoding rejects nonfinite numbers by default. True mode emits `NaN`,
+`Infinity` and `-Infinity`; null mode emits `null`. DEL always encodes as
+`\u007f`. All other high bytes remain byte-exact, without replacement characters.
+
+Decode settings are fixed when each memory/file/incremental source starts;
+readers fix encoding settings when created. Source strings needing escaping are
+decoded and encoded in bounded chunks. Native conversion preserves signed-64
+saturation for plain decimal integers and the native distinction between `-0`
+(integer zero) and `-0.0` (negative floating zero). A private C numeric locale
+handles exponent ranges beyond LuaJIT's converter without changing process
+locale. Unchanged finite source tokens retain their original spelling, so
+encoding is not a general JSON canonicalizer. The legacy low-level `parse` ABI
+and zero-mode C source constructors retain their strict defaults.
 
 ## Safe conversions
 
@@ -461,9 +493,10 @@ Additional boundaries:
   changes. `nil` deletes a field; `json.null` represents JSON null.
 - Concurrent mutations on the same branch may report a stale-mutation conflict
   across a yield. Use independent forks or handle the conflict explicitly.
-- The core follows strict validation by default. File/incremental Source APIs
-  require complete validation; the inherited low-level `parse` API also has
-  an explicitly opt-in lazy-validation mode.
+- Lua decode validates the entire input under the chosen number/byte policy;
+  native-compatible permissive defaults are described above. The inherited
+  low-level `parse` API remains strict by default and has a separate opt-in
+  lazy-validation mode.
 
 ## Compatibility and migration
 

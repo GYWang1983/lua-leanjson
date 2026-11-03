@@ -16,7 +16,7 @@ local shared = require("leanjson.source_backend")
 local loading = require("leanjson.loading")
 local exact, result_error, require_status = shared.exact, shared.result_error, shared.require_status
 local native_options = shared.native_options
-for _, name in ipairs({ "type", "span", "scalar", "children", "lookup", "length", "identity", "clean", "stats", "lexical_length", "clear_indexes" }) do
+for _, name in ipairs({ "type", "span", "scalar", "scalar_chunks", "flags", "children", "lookup", "length", "identity", "clean", "stats", "lexical_length", "clear_indexes" }) do
     Backend[name] = shared[name]
 end
 

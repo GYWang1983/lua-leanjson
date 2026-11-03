@@ -12,7 +12,7 @@
 
 **Spec:** `docs/design/openresty-json-source.md` (approved scope; OpenResty only).
 
-**Validation status:** implementation and independent review are complete at code commit `92aefc0e107dd62dd32e3b5ffd7a6c91487862f9`. All Important review findings were fixed with regressions and scoped rereview. The final canonical, installed-package and exact-runtime gates pass; see [evidence and measured limits](../verification/openresty-json-source.md). Publication is a separate handoff below.
+**Validation status:** implementation and independent review are complete at code commit `92aefc0e107dd62dd32e3b5ffd7a6c91487862f9`. All Important review findings were fixed with regressions and scoped rereview. The final canonical, installed-package and exact-runtime gates pass; see [evidence and measured limits](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/openresty-json-source.md). Publication is a separate handoff below.
 
 ## Global Constraints
 

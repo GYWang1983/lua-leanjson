@@ -617,37 +617,31 @@ for buffering, disk storage, upstream settings and cancellation behavior.
 
 ## Measured advantages and current limits
 
-The bounded-metadata runtime passed **63/63** paired native-process memory
-checks against a pure-cjson baseline across memory/file/feed sources, defaults, zero/tiny budgets, traversal
-and forks. The following rows use 32,768 entries, completed-file input,
-direct mutation and no forced GC during measured phases:
+At revision `33d00b5`, the fresh Linux ARM64 run passed **66/66 default
+paired memory checks**: 33 cases for each of the table and userdata carriers,
+across memory/file/feed inputs. Each comparison used separate native OpenResty
+processes, direct mutation and no forced GC during measured phases.
 
-| Shape | lua-cjson peak RSS | LeanJSON peak RSS |
-| --- | ---: | ---: |
-| 32,768 short array objects | 18.68 MiB | 13.70 MiB |
-| 32,768 small-object fields | 23.18 MiB | 15.07 MiB |
-| 32,768 scalar fields | 15.88 MiB | 14.87 MiB |
+The following completed-file cases contain 32,768 entries. Values are peak
+process RSS; each carrier has its own independently measured cjson baseline.
 
-**The memory reduction has a CPU/I/O cost.** In the paired local HTTP run with
-two concurrent clients, the wide-object case used 17.18 MiB versus cjson's
-43.00 MiB, but p50 latency was **1,413 ms versus 26 ms**. Wide exact-key
-normalization currently uses many synchronous disk operations. This is not a
-speed improvement or a production latency guarantee.
+| Shape | cjson / table carrier | LeanJSON table | cjson / userdata carrier | LeanJSON userdata |
+| --- | ---: | ---: | ---: | ---: |
+| Short array objects | 18.64 MiB | 13.96 MiB | 18.61 MiB | 13.93 MiB |
+| Small-object fields | 23.17 MiB | 15.14 MiB | 23.12 MiB | 15.05 MiB |
+| Scalar fields | 15.87 MiB | 15.03 MiB | 15.80 MiB | 15.11 MiB |
 
-The [bounded-metadata report](docs/verification/bounded-metadata.md) records
-exact revisions, fingerprints, all process modes, CPU/HTTP results, raw data and
-validation boundaries. These finite tests fix the measured small-object
-regression; they do not prove lower RSS for every JSON shape or caller behavior.
-Earlier [historical measurements](docs/verification/openresty-json-source.md)
-and their original qjson labels remain available for traceability.
+These are finite observations, not a universal memory bound. The closest
+userdata comparison, wide scalars from memory, had only **16 KiB** of headroom.
+Eager loading can use more memory than cjson, and lower RSS can come with
+substantial CPU and synchronous I/O costs. This run does not establish a
+production throughput or latency improvement.
 
-The [loading-mode report](docs/verification/decode-loading-modes.md) separately
-records eager and explicit-preload results. In its 4.28 MiB completed-file case,
-selected fields plus bounded output peaked at **14.50 MiB**, compared with cjson's
-**36.45 MiB**. Eager ordinary values plus full encoding of 32,768 small-object
-fields used **36.11 MiB versus 24.31 MiB**. Both modes took more CPU than cjson in
-these runs. Disabling lazy loading is a compatibility option, not a promise of
-cjson's memory or speed.
+The [current verification report](docs/verification/full-verification.md)
+contains the complete memory/loading results, compatibility matrix, original
+failures, tool identities, reproducible commands and evidence archives. Its
+results replace the earlier measurements formerly stored in this directory;
+those reports remain in Git history.
 
 Additional boundaries:
 
@@ -673,18 +667,28 @@ Additional boundaries:
 
 ## Compatibility and migration
 
-The [complete pinned upstream cjson matrix](docs/verification/upstream-cjson-compatibility.md)
-has been executed for lazy, `lazyload=false`, and preload modes across memory,
-file, and incremental input. It **does not establish full cjson compatibility**:
-missing configuration APIs, exact error differences, lazy container semantics, and
-foreign array-proxy encoding remain gaps. Eager loading returns ordinary Lua
-values; it does not implement every cjson API. The report separates unsupported
-setup dependencies from actual value/output differences and links the raw evidence.
-The [F01/F02/F05 report](docs/verification/f01-f02-f05-config-arrays.md) records
-the repaired settings, current array rules, and the remaining lazy differences.
-The [F18 report](docs/verification/f18-userdata-proxies.md) records both carriers'
-actual Lua types, exact upstream differences, HTTP acceptance and paired memory
-observations. Strict proxies do not make native table operations transparent.
+The [current upstream cjson matrix](docs/verification/full-verification.md)
+was run on OpenResty 1.29 ARM64 with Lua 5.2 compatibility enabled. It
+covers lazy, `lazyload=false` and preload modes across memory, file and
+incremental input, for both proxy carriers. Each cell retains all 164 upstream
+records. Eager cells pass 159 assertions and differ only on the intentionally
+separate module identity; three records are setup helpers and one conditional
+record does not apply in this environment.
+
+Lazy and preload cells also retain intentional proxy-array differences. The
+userdata carrier adds observable Lua type differences, so an upstream comparator
+that requires tables rejects those containers. Native table operations do not
+become transparent. Use the proxy API, or eager loading / `materialize()` when
+ordinary Lua values are required. The report preserves exact upstream verdicts
+separately from semantic diagnostics and does not claim complete cjson
+compatibility. The strict project gate records module identity, lazy-array
+semantics and userdata carriers as declared differences. It reports
+`accepted=true, compatible=false` when only those differences remain; unexpected
+errors or content/container-kind changes still fail. A separate Ubuntu distro
+LuaJIT beta3 run without Lua 5.2
+compatibility still has **7 failed and 3 pending tests**; its Valgrind run also
+reports failures and memory-check errors. See the report for exact runtime
+boundaries and the blocked OpenResty 1.27 / x86_64 ASan checks.
 
 All current public names use the new namespace:
 
@@ -726,6 +730,6 @@ against native cjson. The gate defaults to direct mutation without forks;
 
 - [Proxy, mutation and reader API](docs/source-proxy-api.md)
 - [File/incremental input and ownership](docs/file-source-api.md)
-- [OpenResty APIs, verification and benchmarks](docs/verification/openresty-json-source.md)
+- [Complete verification report and evidence](docs/verification/full-verification.md)
 - [Migrating from lua-cjson](docs/migrating-from-cjson.md)
 - [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md) · [License](LICENSE)

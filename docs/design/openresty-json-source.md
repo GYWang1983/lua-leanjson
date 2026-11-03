@@ -2,7 +2,7 @@
 
 > Historical design written before the rename. Original `qjson` paths, repository names, and upstream references are preserved. Current namespace and distribution details are in [LeanJSON rename](2026-11-01-leanjson-rename.md) and the [current source API](../file-source-api.md).
 
-> 日期：2026-10-31。状态：独立库与原生 OpenResty 接口已实现；验证范围、实测结果和限制见[验收记录](../verification/openresty-json-source.md)。
+> 日期：2026-10-31。状态：独立库与原生 OpenResty 接口已实现；验证范围、实测结果和限制见[验收记录](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/openresty-json-source.md)。
 > 已确定方向：fork `api7/lua-qjson`，在现有 Rust 内核和 LuaJIT 接口上扩展。
 > 集成范围：独立 JSON 组件与原生 OpenResty；本次不对接 Kong，不修改 Gateway、Controller 或业务插件。
 > 上游评估基线：`8e1b394e0dd0322bedae3a9fc87d15d8049a02ce`；个人 fork：`GYWang1983/lua-qjson`。
@@ -155,7 +155,7 @@ Lua wrapper 在可 yield 的阶段等待输入推进；Rust 调用保持有界�
 
 live socket 路径已在固定原生 OpenResty 版本上验证，仅支持 HTTP/1.1 + Content-Length 且无 Transfer-Encoding。HTTP/2 和 chunked 使用已完成请求体路径，并报告 fallback 原因。两种路径不混用 `ngx.req.socket` 与 `ngx.req.read_body`，也不轮询未完成的 Nginx 临时文件。文件读写仍是同步有界 I/O，块间 Lua yield 不等于异步磁盘后端。
 
-OpenResty 示例在 EOF、finish 和完整 JSON 校验完成后才连接并发送测试上游。业务准入由调用方负责，组件不提前触发外部副作用。公开 API、所有权、错误返回及验证命令见[接口与验收记录](../verification/openresty-json-source.md)。
+OpenResty 示例在 EOF、finish 和完整 JSON 校验完成后才连接并发送测试上游。业务准入由调用方负责，组件不提前触发外部副作用。公开 API、所有权、错误返回及验证命令见[接口与验收记录](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/openresty-json-source.md)。
 
 ## 7. 仓库、构建与接入
 
@@ -188,7 +188,7 @@ L1 的发布验收只承诺三个可测不变量：修改 model 不物化兄弟�
 
 内存验收必须同时覆盖：嵌套长消息、顶层长 input、转义密集字符串、大量短元素、多个分支、并发请求和显式读取大字段。检查 Lua heap、Rust heap 与进程/容器 RSS，不能只把分配从 Lua 移到 Rust 后宣布完成。记录原文大小、索引大小、实际物化字节数、overlay 大小、输出最大 chunk、CPU、磁盘 I/O、worker 延迟及上游首字节时间；与同一 OpenResty 环境下的完整 `cjson.decode/encode` 对照，不预设无依据的提升倍数，并记录硬件、输入及并发条件。
 
-已完成的 ARM64 原生实测见[验收记录与原始 JSONL](../verification/openresty-json-source.md#paired-local-measurements)：长字符串输入降低了 RSS，但增加了部分延迟和 CPU 开销；大量短对象输入的内存和吞吐明显退化，是当前发布边界，不能宣传为所有 JSON 形状都更快或更省内存。未提供准确接口的 Rust heap、结构索引和 overlay 分配计数明确记为 unavailable/null，不从 RSS 推算。
+已完成的 ARM64 原生实测见[验收记录与原始 JSONL](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/openresty-json-source.md#paired-local-measurements)：长字符串输入降低了 RSS，但增加了部分延迟和 CPU 开销；大量短对象输入的内存和吞吐明显退化，是当前发布边界，不能宣传为所有 JSON 形状都更快或更省内存。未提供准确接口的 Rust heap、结构索引和 overlay 分配计数明确记为 unavailable/null，不从 RSS 推算。
 
 ## 9. 参考
 

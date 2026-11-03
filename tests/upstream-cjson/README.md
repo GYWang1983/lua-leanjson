@@ -4,7 +4,8 @@
 directory and executes its complete functional inventory against that library,
 then LeanJSON in all nine loading/source cells. It emits a report even when
 compatibility differs. `make cjson-compat-strict` runs the same work and exits 1
-from the Python runner for applicable differences or unsupported APIs. Harness
+from the Python runner for unexpected differences or unsupported APIs. The three
+declared differences below are recorded as `expected_difference`, not failures. Harness
 failures exit 2 from the runner; GNU make reports a failing recipe as make exit 2.
 `make cjson-compat-controls` runs focused negative controls, including real native
 cjson and LeanJSON worker processes.
@@ -93,10 +94,38 @@ output, and an encode/decode logical roundtrip diagnostic. Lossless roundtrip
 results are reported separately in `encoded_roundtrip_diagnostics` and do not
 change compatibility classification or strict status: native cjson's default
 precision can lose the same numeric information. Supplemental comparisons use
-decode results, unselected access and index checks; they currently use the default normal codec and only record the reference
-configuration metadata. They do not reapply captured settings or preserve a
-captured safe-call route; use the complete configured normal/safe matrix and
-focused regressions for those contracts. Original encoding evidence is retained.
+decode results, unselected access and index checks. Each decode event snapshots
+the actual instance's four native decode settings and safe/normal route, including
+changes made inside a test function. Replay applies them to a fresh target codec
+before selecting fields. Encode/roundtrip observations remain supplemental, not a
+claim to replay every upstream encoder setting. Original evidence is retained.
+
+## Declared differences and acceptance
+
+The allowlist in `scripts/verify-cjson-compat.py` has three groups:
+
+| Group | Scope | Required observation |
+| --- | --- | --- |
+| `module_identity` | `test.lua:L94`, all loading modes | `leanjson` and the actual Cargo package version, with both return values present |
+| `lazy_array_semantics` | `agentzh.t:TEST12/13/14`, lazy/preload | Empty arrays remain `[]`; assigning a hash field to a proxy array raises the specified array-index error |
+| `userdata_carrier` | 17 named direct-decode and 9 cycle records, userdata lazy/preload; selective container observations | Only the proxy carrier differs; contents, return arity, scalar bytes/values and errors must match |
+
+Matching a case ID alone does not allow a failure. Wrong metadata, changed array
+output, unrelated exceptions, missing APIs, failed setup and content corruption
+remain failing results. Cycle decode contents are observed **after** the original
+upstream comparator, so a false userdata comparison cannot hide damaged data.
+A separate native codec records the original JSON object/array kinds after that
+comparison; this also rejects a `{}`/`[]` kind regression hidden by equal empty
+contents. It does not change the upstream test's array-marker settings. The
+declared-policy map is enforced by both the main matrix and selective gate.
+Eager mode only allows the module-identity difference.
+
+Schema version 2 separates `summary.accepted` (project acceptance) from
+`summary.compatible` (no observed compatibility differences). Strict exit status
+uses `accepted`. A report may have `accepted=true, compatible=false` with zero
+unexpected failures. Each difference retains its group and the original
+`upstream_exact_pass`, Lua types, stdout/errors and observed values; it is never
+counted as an exact pass. New differences require an explicit policy decision.
 
 ## Evidence schema and limits
 
@@ -111,15 +140,17 @@ Typed values distinguish nil, false, null, table key types, return arity, NaN,
 infinities, negative zero, and exact string bytes. Long strings use length,
 SHA256, bounded hexadecimal samples, and deduplicated complete `.bin` artifacts.
 Original plain Lua tables do not retain empty-array/object identity after native
-cjson decoding; that ambiguity is named in the observation rather than invented.
+cjson decoding; that ambiguity remains in the raw observation. The separate
+`reference_shape_result` probe retains array markers solely for the allowance guard.
 Known target proxy container kinds and exact encoded output remain visible.
 Deep/cyclic *input* diagnostics are bounded; the unmodified generating definition
 and source hash retain reproducibility. Output/error observations are not replaced
 with upstream expectations or normalized messages.
 
 Completeness checks reject missing, duplicate, and unexpected IDs. Report-mode exit
-0 means a healthy harness, not compatibility success; use `summary.compatible` or
-strict mode. Baseline failures, unsupported APIs/dependencies, behavioral
+0 means a healthy harness, not acceptance success; use `summary.accepted` or
+strict mode. `summary.compatible` retains the stronger equivalence result.
+Baseline failures, unsupported APIs/dependencies, expected and unexpected
 differences, environment exclusions, helper setup outcomes, and raw assertion
 matches have separate fields/counts. The matrix is functional validation, not a
 performance measurement or a claim of full cjson API support.

@@ -1,4 +1,8 @@
-local leanjson = require "leanjson"
+-- JSONTestSuite's n_ cases require strict JSON. Keep the public cjson-compatible
+-- defaults intact and make this corpus's validation policy explicit.
+local leanjson = require("leanjson").new()
+leanjson.decode_invalid_numbers(false)
+leanjson.decode_validate_utf8(true)
 local root = "tests/vendor/JSONTestSuite/test_parsing"
 local listing = assert(io.popen("ls -1 " .. root, "r"))
 local names = {}

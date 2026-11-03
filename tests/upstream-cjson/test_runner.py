@@ -20,6 +20,51 @@ TEST_OUTPUT = Path(os.environ.get("CJSON_COMPAT_TEST_OUTPUT", ROOT / ".superpowe
 
 
 class RunnerControls(unittest.TestCase):
+    def test_cycle_allowance_checks_real_decoded_contents_after_original_comparison(self):
+        runner = self.runner()
+        scratch = TEST_OUTPUT / "cycle-carrier-control"
+        case = {"id": "decode-cycle:example1.json", "suite": "decode-cycle", "line": 1,
+                "name": "cycle carrier", "category": "decode_cycle", "source": "negative-control:cycle",
+                "declared_apis": ["cjson.decode"]}
+        code = ('util.run_test_group({{"cycle carrier",function() '
+                'local value=json.decode([[{"child":[false]}]]); return type(value)=="table" '
+                'end,{},true,{true}}})')
+        with runner.Environment(ROOT, scratch, proxy_mode="userdata") as environment:
+            reference, _ = environment.worker(scratch / "reference", "reference", "native", "memory",
+                                               [case], kind="control", code=code)
+            target, _ = environment.worker(scratch / "target", "target", "lazy", "memory",
+                                            [case], kind="control", code=code)
+            self.assertFalse(target[0]["upstream_exact_pass"])
+            self.assertEqual("expected_difference", runner.classify(reference[0], target[0]))
+            self.assertEqual("userdata", target[0]["dispatch"][0]["decoded_result"]["values"][0]["type"])
+
+    def test_selective_replay_restores_instance_settings_and_safe_route(self):
+        runner = self.runner()
+        scratch = TEST_OUTPUT / "selective-settings-control"
+        cases = [{"id": name, "suite": "negative-control", "line": i, "name": name,
+                  "category": "direct_decode", "source": "negative-control:" + name,
+                  "declared_apis": ["cjson.new", "cjson.decode", "cjson.safe.decode"]}
+                 for i, name in enumerate(("strict-number", "comment", "safe-error"), 1)]
+        code = '''util.run_test_group({
+            {"strict-number", function() local c=json.new(); c.decode_invalid_numbers(false)
+                return c.decode("[+1]") end, {}, false, {"Expected value but found invalid token at character 2"}},
+            {"comment", function() local c=json.new(); c.decode_allow_comment(true)
+                return c.decode("/*comment*/ 1") end, {}, true, {1}},
+            {"safe-error", function() return require("cjson.safe").new().decode("Oops") end,
+                {}, true, {nil, "Expected value but found invalid token at character 1"}}
+        })'''
+        with runner.Environment(ROOT, scratch) as environment:
+            reference, _ = environment.worker(scratch / "reference", "reference", "native", "memory",
+                                               cases, kind="control", code=code)
+            summaries, compatible = runner.run_selective(environment, scratch, reference)
+            self.assertTrue(compatible, summaries)
+            for source in ("memory", "file", "feed"):
+                rows = [json.loads(line) for line in (scratch / "selective" / source / "records.jsonl").read_text().splitlines()]
+                self.assertEqual({"pass": 3}, summaries[source]["classifications"])
+                self.assertFalse(rows[0]["dispatch"][0]["decode_settings"]["decode_invalid_numbers"])
+                self.assertTrue(rows[1]["dispatch"][0]["decode_settings"]["decode_allow_comment"])
+                self.assertTrue(rows[2]["dispatch"][0]["safe"])
+
     def test_userdata_observation_retains_types_and_native_exact_failure(self):
         runner = self.runner()
         scratch = TEST_OUTPUT / "userdata-types"

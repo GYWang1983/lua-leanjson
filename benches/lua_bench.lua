@@ -431,11 +431,6 @@ local scenarios = {
     {name = "10m",    iters = 20,   payload = make_payload(10 * 1024 * 1024)},
 }
 
--- The pooled API (leanjson.new_decoder + :parse) only exists on commits that
--- landed the Decoder refactor. Probe so the bench still runs on older builds.
-local has_pooled_api = type(leanjson.new_decoder) == "function"
-local pooled_decoder = has_pooled_api and leanjson.new_decoder() or nil
-
 local function scenario_by_name(n)
     for _, s in ipairs(scenarios) do
         if s.name == n then return s end
@@ -666,19 +661,6 @@ local function run_scenario_smoke(s)
     assert_semantic_equal(s.name, "leanjson.parse + access fields",
         expected_summary, doc_summary(parsed))
 
-    if has_pooled_api then
-        local pooled = pooled_decoder:parse(s.payload)
-        leanjson_access(pooled)
-        assert_semantic_equal(s.name, "leanjson pooled :parse + access fields",
-            expected_summary, doc_summary(pooled))
-
-        local dec = leanjson.new_decoder()
-        local one_shot = dec:parse(s.payload)
-        leanjson_access(one_shot)
-        assert_semantic_equal(s.name, "leanjson new_decoder()+parse (one-shot)",
-            expected_summary, doc_summary(one_shot))
-    end
-
     local lazy = leanjson.decode(s.payload)
     table_access(lazy)
     assert_semantic_equal(s.name, "leanjson.decode + access content",
@@ -830,19 +812,6 @@ local function run_benchmarks()
             leanjson_access(d)
         end)
 
-        if has_pooled_api then
-            bench("leanjson pooled :parse + access fields", s.iters, function()
-                local d = pooled_decoder:parse(s.payload)
-                leanjson_access(d)
-            end)
-
-            bench("leanjson new_decoder()+parse (one-shot)", s.iters, function()
-                local dec = leanjson.new_decoder()
-                local d = dec:parse(s.payload)
-                leanjson_access(d)
-            end)
-        end
-
         bench("leanjson.decode + access content", s.iters, function()
             local t = leanjson.decode(s.payload)
             table_access(t)
@@ -903,15 +872,6 @@ local function run_benchmarks()
                 local d = leanjson.parse(p)
                 default_leanjson_access(d)
             end)
-
-            if has_pooled_api then
-                next_p = make_cycler(interleaved)
-                bench("leanjson pooled :parse + access fields", 400, function()
-                    local p = next_p()
-                    local d = pooled_decoder:parse(p)
-                    default_leanjson_access(d)
-                end)
-            end
 
             next_p = make_cycler(interleaved)
             bench("leanjson.decode + access content", 400, function()
@@ -980,13 +940,6 @@ local function run_benchmarks()
                     local d = leanjson.parse(payload)
                     access(d)
                 end)
-
-                if has_pooled_api then
-                    bench("leanjson pooled :parse + manifest access", iters, function()
-                        local d = pooled_decoder:parse(payload)
-                        access(d)
-                    end)
-                end
             end
         end
     end  -- filter == "manifest"

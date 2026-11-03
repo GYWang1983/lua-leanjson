@@ -90,7 +90,7 @@ bounded-fuzz: ## Run bounded nightly libFuzzer sessions (cargo-fuzz required)
 cjson-compat: ## Generate the complete pinned upstream cjson matrix (differences remain reported)
 	python3 scripts/verify-cjson-compat.py --docker --image '$(CJSON_COMPAT_IMAGE)' --output '$(CJSON_COMPAT_OUTPUT)' $(if $(CJSON_COMPAT_LOCALE_DIR),--locale-dir '$(CJSON_COMPAT_LOCALE_DIR)')
 
-cjson-compat-strict: ## Run the same matrix, failing for any applicable compatibility differences
+cjson-compat-strict: ## Fail on unexpected differences/unsupported APIs; retain declared differences
 	python3 scripts/verify-cjson-compat.py --docker --strict --image '$(CJSON_COMPAT_IMAGE)' --output '$(CJSON_COMPAT_OUTPUT)' $(if $(CJSON_COMPAT_LOCALE_DIR),--locale-dir '$(CJSON_COMPAT_LOCALE_DIR)')
 
 cjson-compat-controls: ## Verify omission/duplicate/difference/API/setup/malformed-input negative controls

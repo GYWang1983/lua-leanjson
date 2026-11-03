@@ -85,7 +85,7 @@ else
     native, native_safe = load_native("luaopen_cjson"), load_native("luaopen_cjson_safe")
 end
 
-local current, resources, resource_set, temp_files
+local current, resources, resource_set, temp_files, decode_observations
 local failed_settings, failed_helpers, configuration = {}, {}, {}
 local expected_one_of = setmetatable({}, { __mode = "k" })
 local known_functions = {}
@@ -101,7 +101,7 @@ local function iteration(value)
     if lean and proxy.is_proxy(value) then return lean.pairs(value) end
     return pairs(value)
 end
-local function describe(value, seen, depth, input)
+local function describe(value, seen, depth, input, shape_array_mt)
     local kind = type(value)
     if rawequal(value, null) then return { type = "json_null", lua_type = kind } end
     if kind == "nil" then return { type = "nil" } end
@@ -127,6 +127,7 @@ local function describe(value, seen, depth, input)
     track(value)
     local out = { type = kind, lua_type = kind, entries = array(), storage = own_proxy and "proxy" or "plain" }
     if own_proxy then out.container = lean.type(value)
+    elseif shape_array_mt then out.container = getmetatable(value) == shape_array_mt and "array" or "object"
     elseif expected_one_of[value] then out.container = "one_of"
     else out.container = "Lua table (empty shape ambiguous upstream)" end
     local keys = {}
@@ -140,14 +141,15 @@ local function describe(value, seen, depth, input)
         return tostring(a.key) < tostring(b.key)
     end)
     for i, entry in ipairs(keys) do
-        out.entries[i] = { key = describe(entry.key, seen, depth + 1, input), value = describe(entry.value, seen, depth + 1, input) }
+        out.entries[i] = { key = describe(entry.key, seen, depth + 1, input, shape_array_mt),
+                           value = describe(entry.value, seen, depth + 1, input, shape_array_mt) }
     end
     return out
 end
-local function describe_pack(values, start)
+local function describe_pack(values, start, shape_array_mt)
     start = start or 1
     local out = { arity = values.n - start + 1, values = array() }
-    for i = start, values.n do out.values[#out.values + 1] = describe(values[i]) end
+    for i = start, values.n do out.values[#out.values + 1] = describe(values[i], nil, nil, nil, shape_array_mt) end
     return out
 end
 
@@ -190,8 +192,14 @@ local function decode(raw, reference_function, upstream_api, codec, safe)
     dependencies("decode")
     local event = { requested_source = config.source, upstream_api = upstream_api or "selective replay of decode input",
                     input = string_value(raw, true), configuration = {}, options = {},
+                    safe = not not safe, decode_settings = {},
                     codec_scope = codec and codec ~= lean and codec ~= lean_safe and codec ~= native and codec ~= native_safe and "instance" or "module" }
     for key, value in pairs(configuration) do event.configuration[key] = value end
+    -- Capture the actual codec, including settings changed inside an upstream
+    -- test function or on a new/safe instance. Declared APIs are not a snapshot.
+    for _, key in ipairs({ "decode_invalid_numbers", "decode_max_depth", "decode_allow_comment", "decode_array_with_array_mt" }) do
+        event.decode_settings[key] = (codec or lean or native)[key]()
+    end
     local result
     if config.implementation == "reference" then
         event.actual_path = safe and "source-built cjson.safe.decode" or "source-built cjson.decode"
@@ -253,7 +261,25 @@ local function decode(raw, reference_function, upstream_api, codec, safe)
         end
     end
     event.success = result[1]
-    if config.implementation == "reference" then event.reference_result = describe_pack(result, 2) end
+    if config.implementation == "reference" then
+        event.reference_result = describe_pack(result, 2)
+        decode_observations[#decode_observations + 1] = function()
+            -- A separate native codec preserves JSON container kinds for the
+            -- allowance guard; never alter the actual upstream test's codec.
+            local shape_codec = native.new()
+            for key, value in pairs(event.decode_settings) do shape_codec[key](value) end
+            shape_codec.decode_array_with_array_mt(true)
+            local shaped = pack(pcall(shape_codec.decode, raw))
+            event.reference_shape_result = describe_pack(shaped, 2, shape_codec.array_mt)
+        end
+    end
+    if lean and current.suite == "decode-cycle" then
+        -- Observe after the unmodified upstream comparator has run, so a
+        -- userdata-type mismatch cannot conceal a separate content regression.
+        decode_observations[#decode_observations + 1] = function()
+            event.decoded_result = describe_pack(result, 2)
+        end
+    end
     current.dispatch[#current.dispatch + 1] = event
     if not result[1] then error(result[2], 0) end
     return unpack(result, 2, result.n)
@@ -374,7 +400,7 @@ end
 
 local row_index, passes, total = 0, 0, 0
 local function begin_case(meta, name)
-    resources, resource_set, temp_files = {}, {}, {}
+    resources, resource_set, temp_files, decode_observations = {}, {}, {}, {}
     current = { record_type = "case", id = meta.id, suite = meta.suite, line = meta.line,
                 source_location = meta.source, name = name or meta.name, category = meta.category,
                 cell = config.cell, implementation = config.implementation, mode = config.mode, requested_source = config.source,
@@ -398,6 +424,7 @@ local function begin_case(meta, name)
 end
 local function finish_case()
     debug.sethook()
+    for _, observe in ipairs(decode_observations) do observe() end
     local closed, errors = 0, array()
     if lean then
         for i = #resources, 1, -1 do
@@ -412,7 +439,7 @@ local function finish_case()
     if #errors > 0 then error("case cleanup failure: " .. table.concat(errors, "; ")) end
     emit(current)
     current = nil
-    resources, resource_set, temp_files = nil, nil, nil
+    resources, resource_set, temp_files, decode_observations = nil, nil, nil, nil
     collectgarbage("collect")
 end
 local function run_case(meta, name, func, input, expected_success, expected_output)
@@ -535,7 +562,11 @@ local function execute()
             current.selection_reason = meta.selection_reason
             local file = assert(io.open(meta.input_blob, "rb"))
             local raw = file:read("*a"); file:close()
-            local result = pack(pcall(decode, raw))
+            local codec = (meta.reference_safe and lean_safe or lean).new()
+            for key, value in pairs(assert(meta.reference_decode_settings, "reference decode settings missing")) do
+                codec[key](value)
+            end
+            local result = pack(pcall(decode, raw, nil, meta.reference_api, codec, meta.reference_safe))
             current.success = result[1]
             if result[1] then
                 if meta.unselected_key ~= nil then
@@ -546,10 +577,10 @@ local function execute()
                     else current.unselected_access_error = describe(accessed[2]) end
                 end
                 local complete = pack(pcall(function()
-                    local encoded = lean.encode(result[2])
+                    local encoded = codec.encode(result[2])
                     current.encoded_output = string_value(encoded)
-                    current.encoded_validation_path = "leanjson.decode(encoded_output, {lazyload=false}) after replay operations"
-                    local decoded = lean.decode(encoded, { lazyload = false })
+                    current.encoded_validation_path = "replay codec.decode(encoded_output, {lazyload=false}) after replay operations"
+                    local decoded = codec.decode(encoded, { lazyload = false })
                     return logical_equal(decoded, result[2])
                 end))
                 current.encoded_roundtrip_complete = complete[1] and complete[2] == true

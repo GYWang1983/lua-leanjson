@@ -26,4 +26,7 @@ To use another test upstream, set `LEANJSON_UPSTREAM_HOST` and `LEANJSON_UPSTREA
 
 File reads are synchronous bounded reads with Lua yields between chunks. They do not become asynchronous disk I/O. Measure worker delay on the intended storage before using this adapter in a latency-sensitive service.
 
-See [verification and API details](../../docs/verification/openresty-json-source.md) for native acceptance tests, benchmarks, ownership, and error-state reporting.
+See the [complete verification report](../../docs/verification/full-verification.md)
+for native acceptance, installed-image checks and measured limits. The
+[source API](../../docs/file-source-api.md) and
+[proxy/reader API](../../docs/source-proxy-api.md) describe ownership and errors.

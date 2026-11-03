@@ -27,6 +27,17 @@ IMAGE_ID = "sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036
 DEFAULT_OUTPUT = ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts"
 MODES = ("lazy", "eager", "preload")
 SOURCES = ("memory", "file", "feed")
+PROJECT_VERSION = re.search(r'^version = "([^"]+)"', (ROOT / "Cargo.toml").read_text(), re.M).group(1)
+EXPECTED_DIFFERENCES = {
+    "module_identity": "LeanJSON uses its own module name and Cargo package version.",
+    "lazy_array_semantics": "Lazy arrays preserve [] and reject non-index fields.",
+    "userdata_carrier": "Lazy userdata containers have equal contents but are not Lua tables.",
+}
+USERDATA_DECODE_IDS = {f"test.lua:L{line}" for line in
+                       (101, 110, 113, 116, 161, 167, 224, 226, 228, 231, 339, 341, 345, 347, 349, 351, 410)}
+USERDATA_CYCLE_IDS = {"decode-cycle:" + name + ".json" for name in
+                      ("example1", "example2", "example3", "example4", "example5", "numbers",
+                       "rfc-example1", "rfc-example2", "types")}
 
 
 class HarnessError(RuntimeError):
@@ -369,7 +380,68 @@ def canonical(value):
     return value
 
 
+def carrier_contents(value, preserve_shape=False):
+    """Compare contents without erasing the original evidence's carrier types."""
+    if isinstance(value, list):
+        return [carrier_contents(v, preserve_shape) for v in value]
+    if isinstance(value, dict):
+        out = {k: carrier_contents(v, preserve_shape) for k, v in value.items()
+               if k not in ("storage", "lua_type", "artifact") and (k != "container" or preserve_shape)}
+        if value.get("type") == "userdata" and value.get("storage") == "proxy" and "entries" in value:
+            out["type"] = "table"
+        return out
+    return value
+
+
+def observed_string(value, expected):
+    raw = expected.encode()
+    return canonical(value) == {"type": "string", "bytes": len(raw), "hex": raw.hex(),
+                                "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def expected_difference(reference, target):
+    """Allow observed, documented behavior only; an ID alone never grants a pass."""
+    case_id = target.get("id")
+    result = target.get("result", {})
+    values = result.get("values", [])
+    if case_id == "test.lua:L94" and target.get("success") and result.get("arity") == 2 and len(values) == 2:
+        if observed_string(values[0], "leanjson") and observed_string(values[1], PROJECT_VERSION):
+            return "module_identity"
+    if target.get("mode") not in ("lazy", "preload") or target.get("proxy_mode") not in ("table", "userdata"):
+        return None
+    if case_id in ("agentzh.t:TEST12", "agentzh.t:TEST14") and target.get("success"):
+        if result == {"arity": 0, "values": []} and observed_string(
+                target.get("stdout"), 'decoded JSON array has metatable: false\n{"my_array":[]}\n'):
+            return "lazy_array_semantics"
+    if case_id == "agentzh.t:TEST13" and target.get("success") is False:
+        if (result.get("arity") == 1 and len(values) == 1 and observed_string(target.get("stdout"), "")
+                and observed_string(values[0], "leanjson: array index must be a positive integer")):
+            return "lazy_array_semantics"
+    if target.get("proxy_mode") != "userdata" or not target.get("success"):
+        return None
+    if case_id in USERDATA_DECODE_IDS and reference.get("success"):
+        dispatch = reference.get("dispatch", [])
+        if (canonical(result) != carrier_contents(result) and carrier_contents(result) == canonical(reference.get("result"))
+                and len(dispatch) == 1 and carrier_contents(result, True) == carrier_contents(dispatch[0].get("reference_shape_result"), True)):
+            return "userdata_carrier"
+    if case_id in USERDATA_CYCLE_IDS and result == {"arity": 1, "values": [{"type": "boolean", "value": False}]}:
+        native, actual = reference.get("dispatch", []), target.get("dispatch", [])
+        if (native and len(native) == len(actual)
+                and canonical(native[0].get("input")) == canonical(actual[0].get("input")) and all(
+            a.get("success") is True and b.get("success") is True
+            and "decoded_result" in b and canonical(b["decoded_result"]) != carrier_contents(b["decoded_result"])
+            and carrier_contents(b["decoded_result"]) == canonical(a.get("reference_result"))
+            # Cycles must retain the ORIGINAL JSON shape. Native re-encoding
+            # may turn an unmarked [] into {}, the declared lazy-array behavior.
+            and carrier_contents(b["decoded_result"], True) == carrier_contents(native[0].get("reference_shape_result"), True)
+            for a, b in zip(native, actual)
+        )):
+            return "userdata_carrier"
+    return None
+
+
 def classify(reference, target):
+    target.pop("expected_difference", None)
     target["matches_reference_result"] = canonical(target.get("result")) == canonical(reference.get("result"))
     if target.get("environment_inapplicable") or reference.get("environment_inapplicable"):
         return "environment_inapplicable"
@@ -383,13 +455,20 @@ def classify(reference, target):
         return "baseline_failure"
     if target.get("unsupported") or target.get("dependencies"):
         return "unsupported"
-    return "pass" if target.get("upstream_exact_pass") else "behavioral_difference"
+    if target.get("upstream_exact_pass"):
+        return "pass"
+    difference = expected_difference(reference, target)
+    if difference in EXPECTED_DIFFERENCES:
+        target["expected_difference"] = difference
+        return "expected_difference"
+    return "behavioral_difference"
 
 
 def summarize(records):
     return {"total": len(records), "assertions": sum(not r.get("helper") for r in records),
             "helpers": sum(bool(r.get("helper")) for r in records),
             "classifications": dict(Counter(r["classification"] for r in records)),
+            "expected_differences": dict(Counter(r["expected_difference"] for r in records if r.get("expected_difference"))),
             "by_category": {category: dict(Counter(r["classification"] for r in records if r["category"] == category))
                             for category in sorted({r["category"] for r in records})},
             "upstream_exact_passes": sum(r.get("upstream_exact_pass") is True and not r.get("helper") for r in records),
@@ -420,7 +499,8 @@ def run_suites(env, out, inv, implementation, mode, source):
 
 
 def exit_status(report, strict=False):
-    return 2 if not report.get("harness_healthy") else 1 if strict and not report.get("compatible") else 0
+    accepted = report.get("accepted", report.get("compatible", False))
+    return 2 if not report.get("harness_healthy") else 1 if strict and not accepted else 0
 
 
 def sparse_selection(call):
@@ -454,6 +534,9 @@ def run_selective(env, output, reference):
                            "origin_id": case["id"], "input_blob": call["input"]["artifact"],
                            "reference_success": call["success"], "reference_result": call["reference_result"],
                            "reference_configuration": call.get("configuration", {}),
+                           "reference_decode_settings": call["decode_settings"],
+                           "reference_shape_result": call["reference_shape_result"],
+                           "reference_safe": call["safe"], "reference_api": call["upstream_api"],
                            "declared_apis": ["cjson.decode"], **sparse_selection(call)})
     write_json(output / "selective/inventory.json", {"cases": replay})
     summaries, compatible = {}, True
@@ -471,6 +554,15 @@ def run_selective(env, output, reference):
                 if stats and stats.get("index_bytes") != 0:
                     raise HarnessError("selective replay allocated automatic indexes: " + record["id"])
             record["logical_pass"] = record["classification"] == "pass"
+            if (record["classification"] == "behavioral_difference" and env.proxy_mode == "userdata"
+                    and "userdata_carrier" in EXPECTED_DIFFERENCES
+                    and record["success"] == wanted["reference_success"]
+                    and carrier_contents(record["result"]) == canonical(wanted["reference_result"])
+                    and carrier_contents(record["result"], True) == carrier_contents(wanted["reference_shape_result"], True)
+                    and ("unselected_key" not in wanted or carrier_contents(record.get("unselected_value"))
+                         == canonical(wanted["reference_unselected_value"]))):
+                record["classification"] = "expected_difference"
+                record["expected_difference"] = "userdata_carrier"
             if record["classification"] != "pass":
                 compatible = False
         write_records(output / "selective" / source / "records.jsonl", records)
@@ -499,7 +591,9 @@ def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None, proxy_mo
                                         "pass" if record.get("upstream_exact_pass") else "baseline_failure")
         write_records(output / "baseline/records.jsonl", reference)
         print("baseline: " + json.dumps(summarize(reference)["classifications"]), flush=True)
-        summary = {"schema_version": 1, "harness_healthy": True, "compatible": True,
+        summary = {"schema_version": 2, "harness_healthy": True, "compatible": True,
+                   "accepted": not any(r["classification"] == "baseline_failure" for r in reference),
+                   "expected_difference_policy": EXPECTED_DIFFERENCES,
                    "proxy_mode": proxy_mode,
                    "inventory_total_per_cell": len(inv["cases"]), "baseline": summarize(reference), "matrix": {}, "selective": {}}
         for mode in MODES:
@@ -512,9 +606,13 @@ def run_matrix(root, output, docker=True, image=IMAGE, locale_dir=None, proxy_mo
                 summary["matrix"][cell] = summarize(records)
                 print(cell + ": " + json.dumps(summary["matrix"][cell]["classifications"]), flush=True)
                 if any(r["classification"] in ("unsupported", "behavioral_difference", "setup_failure", "baseline_failure") for r in records):
+                    summary["accepted"] = False
+                if any(r["classification"] in ("unsupported", "behavioral_difference", "expected_difference", "setup_failure", "baseline_failure") for r in records):
                     summary["compatible"] = False
         summary["selective"], selective_compatible = run_selective(env, output, reference)
         summary["compatible"] = summary["compatible"] and selective_compatible
+        summary["accepted"] = summary["accepted"] and all(
+            not set(cell["classifications"]) - {"pass", "expected_difference"} for cell in summary["selective"].values())
         write_json(output / "summary.json", summary)
         return summary
 
@@ -569,7 +667,8 @@ def run_negative_controls(root, output, proxy_mode="table"):
                               '{{["a.b"]={x=1},tail={y=false}}}}})')
         call = selected_reference[1]["dispatch"][0]
         replay_case = dict(case("selective-existing-child"), input_blob=call["input"]["artifact"],
-                           reference_configuration=call["configuration"], **sparse_selection(call))
+                           reference_configuration=call["configuration"], reference_decode_settings=call["decode_settings"],
+                           reference_safe=call["safe"], reference_api=call["upstream_api"], **sparse_selection(call))
         selected, _ = env.worker(output / "selective-existing-child", "target", "selective", "feed", [replay_case], kind="replay")
         selection = selected[0]
         selection_stats = selection["dispatch"][0].get("initial_source_stats", {})
@@ -611,7 +710,7 @@ def main():
     parser.add_argument("--docker", action="store_true", help="use the immutable pinned ARM64 development image")
     parser.add_argument("--image", default=IMAGE)
     parser.add_argument("--proxy-mode", choices=("table", "userdata"), default="table")
-    parser.add_argument("--strict", action="store_true", help="exit 1 for applicable differences/unsupported APIs; harness errors exit 2")
+    parser.add_argument("--strict", action="store_true", help="exit 1 for unexpected differences/unsupported APIs; declared differences are recorded, harness errors exit 2")
     parser.add_argument("--locale-dir", type=Path, help="prepared LOCPATH directory containing cs_CZ/LC_NUMERIC; hashed in provenance")
     parser.add_argument("--inventory-only", action="store_true")
     parser.add_argument("--controls", action="store_true", help="execute focused fault-injection controls, not the complete matrix")
@@ -627,7 +726,8 @@ def main():
         if args.controls:
             return 0 if run_negative_controls(ROOT, output, args.proxy_mode)["healthy"] else 2
         report = run_matrix(ROOT, output, args.docker, args.image, args.locale_dir, args.proxy_mode)
-        print(json.dumps({"harness_healthy": report["harness_healthy"], "compatible": report["compatible"], "output": str(output)}))
+        print(json.dumps({"harness_healthy": report["harness_healthy"], "compatible": report["compatible"],
+                          "accepted": report["accepted"], "output": str(output)}))
         return exit_status(report, args.strict)
     except (HarnessError, OSError, ValueError, KeyError) as error:
         (output / "summary.json").unlink(missing_ok=True)

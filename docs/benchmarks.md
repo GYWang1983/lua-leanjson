@@ -1,6 +1,6 @@
 # Benchmarks
 
-> Historical benchmark report from upstream `api7/lua-qjson`. The original `qjson` labels and measurements are preserved; they are not measurements of the renamed LeanJSON fork. The current harness uses `leanjson`; see [current OpenResty API and verification](verification/openresty-json-source.md).
+> Historical benchmark report from upstream `api7/lua-qjson`. The original `qjson` labels and measurements are preserved; they are not measurements of the renamed LeanJSON fork. The current harness uses `leanjson`; see the [current verification report](verification/full-verification.md). The obsolete pooled-decoder rows have been removed: current `new_decoder()` is an incremental `feed`/`finish` API. Benchmark smoke, a 10 MiB smoke scenario and the small timed scenario now run successfully; the data below remains historical and was not revalidated as current performance.
 
 Throughput and memory comparison of `qjson` (this library) against
 `lua-cjson` and `lua-resty-simdjson` on a multimodal chat-completion payload

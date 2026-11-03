@@ -1,16 +1,19 @@
 # lua-cjson 兼容性修复清单
 
-更新日期：2026-11-03。F01/F02 配置、F03 独立编解码器、F04 safe 接口已验证；F05 标记与配置已实现，明确保留 lazy 结构语义差异；F08/F09/F11/F12 的数值、字节与转义路径已实现并验证；F07 深度设置和 F17 已支持功能的公开错误契约已实现，保留严格扩展及未实现功能的边界。验证结果及边界见各项，F10 的注释策略、跨分片诊断及去注释输出已实现并验证；F13/F14 的缩进与跳过不支持值类型已实现并验证，保留原生崩溃／非法输出及整数 cdata 扩展的明确边界；F06 的外部数组识别、快照保留与生命周期已实现并验证；F15 保留兼容配置，F16 提供自身名称／版本，F18 提供可选严格 userdata 代理。F07/F17 最终功能验证通过，但该轮内存复验为 32/33，宽标量边界样本高出 cjson 约 0.4%；不宣称所有负载均满足 RSS 上限。
+更新日期：2026-11-03。F01–F18 的实现状态与保留边界见下表。当前代码 `33d00b5` 的统一验收见[完整验证报告](../verification/full-verification.md)：主环境 OpenResty 1.29 ARM64 的 Lua 802 项、HTTP 72 项、122 组有限样本内存对比通过；后续 V01/V02 脚本已修正，总入口与 benchmark smoke 复验通过。cjson 严格验收将品牌、lazy 数组语义及 userdata 载体列为预期差异，不计为失败；保留原始 exact verdict，新增差异仍失败。扩展 distro LuaJIT beta3 非插桩完整运行仍有 7 fail / 3 pending，Valgrind 另有失败和告警；这些是本轮新发现的运行时边界，不由逐项修复的历史通过记录覆盖。不宣称所有负载均满足 RSS 上限。
+
+本清单中的逐项测试数量、内存数值和修复记录属于对应实现阶段的历史验收，不能作为当前版本的测试结果；当前结果以统一报告为准。
 
 ## 基线与使用方式
 
+- 当前版本的统一验收入口是[完整验证报告](../verification/full-verification.md)。逐项记录中的旧报告固定引用 Git 历史，用于保留当时的测试结果和边界。
 - 对照实现：仓库 `vendor/lua-cjson` 中的 OpenResty lua-cjson，固定提交 `617164a0fe3bb647128178f9caefb304b8573bb6`。这里的功能包括该分支的扩展，不泛指所有 lua-cjson 版本。
 - 初始被测运行时：LeanJSON `b928a20505165fc3c0f3399b68500cd02050b42f`；以下基线数字保留为修复前记录，后续实现及验证以各项报告为准。
-- 完整结果：[兼容性验证报告](../verification/upstream-cjson-compatibility.md)；原始记录、日志和独立审查保存在报告链接的归档中。
+- 修复前历史结果：[初始兼容性验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/upstream-cjson-compatibility.md)；原始记录、日志和独立审查保存在报告链接的归档中。
 - 上游定义：[test.lua](../../vendor/lua-cjson/tests/test.lua)、[agentzh.t](../../vendor/lua-cjson/tests/agentzh.t)。下文沿用报告中的 `test.lua:L420`、`agentzh.t:TEST20` 等稳定用例编号。
 - 每个问题使用固定编号 F01–F18，新增问题另加编号，不随排序调整重新编号。后续可直接指定“修复 F01”。
 
-九种组合均执行了 164 条记录，每组为 15 通过、14 行为差异、134 未支持或依赖受阻、1 环境不适用。134 条中包含三个 setup helper；48 条有直接缺失 API/字段的证据，86 条仅受失败前提影响。**这些数字不是独立缺陷数量，也不能解释为同样数量的 JSON 解析失败。**
+初始修复前基线的九种组合均执行了 164 条记录，每组为 15 通过、14 行为差异、134 未支持或依赖受阻、1 环境不适用。134 条中包含三个 setup helper；48 条有直接缺失 API/字段的证据，86 条仅受失败前提影响。**这些数字不是独立缺陷数量，也不能解释为同样数量的 JSON 解析失败。**
 
 状态约定：`待修复` 表示缺口及基本目标明确；`待确认策略` 表示事实已确认，但默认行为或兼容边界还需在该项实施前确定；`修复中`、`已验证`、`保留差异` 用于后续更新。保留差异必须记录原因和范围，不能作为兼容通过。
 
@@ -60,7 +63,7 @@
 - **已实现：** `leanjson.new()` 返回独立编解码器；每次创建使用库默认配置，不继承父实例当前值。`encode_number_precision`、`encode_sparse_array` 使用实例闭包，默认模块和兄弟实例互不污染，不切换全局状态。null/数组标记共享。
 - **已确认语义：** 用户明确保留 lazy／eager／preload 与内存／文件／增量输入；`new()` 不创建 JSON 文档，也不强制 eager。显式编码使用调用实例；reader 创建时固定数字格式；未修改的原文片段保持原样。lazy 写入、子视图及 decoder 输出保留创建实例，`codec.fork` 为分支采用调用实例。具体时机见 [README](../../README.md#independent-codec-instances)。
 - **验收：** 覆盖默认模块、两个实例、嵌套 `new()`、失败设置不改变配置、跨实例编码／fork／reader、子视图脱离、增量 get／finish、重入及协程让出，九种输入／加载组合保持有效。safe 实例隔离已在 F04 补充联验。
-- **验证记录：** [F03 验证报告](../verification/f03-codec-instances.md)。F01/F02 的参数及返回值差异未在本项修改，其余缺口继续逐项处理。
+- **验证记录：** [F03 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f03-codec-instances.md)。F01/F02 的参数及返回值差异未在本项修改，其余缺口继续逐项处理。
 
 ### F04：safe 模块及错误返回契约
 
@@ -68,7 +71,7 @@
 - **证据：** `test.lua:L501`、`L504`、`L512`、`L515`；`agentzh.t:TEST18`。
 - **已实现：** `require "leanjson.safe"` 及 `safe.new()` 使用独立普通 codec，并仅保护转换／源构造。成功返回一个值；转换错误返回两个值 `nil, err`，保留 false 和共享 null。`decode(nil)` 属于受保护的输入类型错误；缺少／多余参数与配置 setter 错误直接抛出。数字输入沿用 cjson 的字符串转换语义。
 - **LeanJSON 扩展：** `decode(raw[, opts])`、`decode_file(path[, opts])` 接受加载选项；非法选项在保护调用外校验。`new_decoder([opts])` 的源构造错误返回错误对。decoder／reader 方法、辅助函数及 lazy 属性访问保持原有契约，不承诺将后续错误全部转换为错误对。
-- **已验证：** 成功值、JSON null、false、返回数量、语法／参数错误、safe.new 默认配置与隔离、已有标记、九种加载／输入组合、文件扫描与增量失败后的无 GC 资源释放。上游适配器已调用真实 safe 模块并保留 feed／finish 错误对。[F04 验证报告](../verification/f04-safe-codecs.md)记录实际结果。
+- **已验证：** 成功值、JSON null、false、返回数量、语法／参数错误、safe.new 默认配置与隔离、已有标记、九种加载／输入组合、文件扫描与增量失败后的无 GC 资源释放。上游适配器已调用真实 safe 模块并保留 feed／finish 错误对。[F04 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f04-safe-codecs.md)记录实际结果。
 - **保留边界：** 已支持功能的精确错误文本已由 F17 对齐；F01/F02/F05 见对应项。Lua 保护调用没有暴露原生 C 包装器的 `LUA_ERRMEM` 分类，本项不宣称 VM 内存耗尽行为完全一致，也不靠错误字符串猜测该状态。
 
 ### F05：数组／空表标记和配置
@@ -77,7 +80,7 @@
 - **证据：** `agentzh.t:TEST2`–`TEST4`、`TEST7`–`TEST15`；不能把现有 `empty_array_mt` 一并说成未实现。
 - **已实现／验证：** 共享且区分两种 metatable 与空数组 sentinel。显式 `array_mt` 使用 raw 长度／值并忽略 hash，`empty_array_mt` 先执行稀疏策略。两个配置均隔离于实例，支持布尔／on/off 和参数检查；eager 默认不添加标记，开启后为所有数组添加 `array_mt`。source 创建时固定策略，增量 get／重复 finish 及延迟子视图均保持该策略。
 - **保留差异：** lazy/preload 默认继续保留 JSON 容器类型与原字节，不把源 `[]` 改写为 `{}`。开启标记时通过私有 metatable 暴露公共 marker；不通过物化绕过 proxy 的 F18 修改限制。因此 TEST12/13/14 在 eager 下通过，在 lazy/preload 中仍有明确行为差异；不能宣称九格全部 cjson 等价。
-- **验收记录：** [F01/F02/F05 验证报告](../verification/f01-f02-f05-config-arrays.md)，包含 raw marker 优先级、正常／safe 九格、配置快照及资源回归。
+- **验收记录：** [F01/F02/F05 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f01-f02-f05-config-arrays.md)，包含 raw marker 优先级、正常／safe 九格、配置快照及资源回归。
 
 ### F06：外部数组代理编码
 
@@ -86,21 +89,21 @@
 - **长度／错误：** 按原生接受数值及数值字符串、小数向零截断、非数值／nil／布尔／table／cdata 返回 0、有限负长度为空数组。非可调用元方法、回调错误及循环／深度错误保持可控；normal／safe encode 保留非字符串错误对象，reader 清理资源后转换错误，无法打印时返回固定后备字符串。
 - **明确边界：** 非有限或截断后超出 signed32 范围的长度明确报错，不模拟 C 实现不可移植的浮点到整数转换；不增加更小的任意长度限制。外部长度回调不在 keep_origin 比对中重复执行，虚拟读取不能被原文复用绕过。
 - **源生命周期：** reader 在构造时固定回调结果；fork／赋值／插入在扫描期间立即保留源节点所需 lease，防止后续回调关闭或 GC 原始 public holder。成功后转交最终 holder，失败／取消时释放本次临时 lease，不隐式关闭调用方持有的对象。
-- **验收记录：** 原 TEST23、普通／safe／new、缩进／skip、原文／origin、九格输入、临时文件／feed 子代理的 GC／关闭／取消与无 GC 清理见 [F06 验证报告](../verification/f06-external-arrays.md)。
+- **验收记录：** 原 TEST23、普通／safe／new、缩进／skip、原文／origin、九格输入、临时文件／feed 子代理的 GC／关闭／取消与无 GC 清理见 [F06 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f06-external-arrays.md)。
 
 ### F07：最大嵌套深度配置
 
 - **原问题：** 缺少 `decode_max_depth`、`encode_max_depth`；索引深度不能代替合法嵌套深度，原文片段编码还会绕过限制。
 - **已实现：** 两个独立配置默认 1000，范围 1–2147483647，支持 getter、新值返回及原生参数校验。source／decoder 固定创建时 decode 限制；非零 `opts.max_depth` 为单次覆盖。reader 固定 encode 限制，并在 length／首次 next 校验普通 table、修改节点和原文片段的实际输出深度。
 - **深度范围：** source v2 不再截断至 4096；重扫、eager rebuild 与按需读取继承源策略。legacy `parse`／source v1 保持原有上限。编码、赋值快照、物化与依赖遍历使用显式栈，已执行实际 5000 层输入，不能只以 setter 返回值证明支持。
-- **验收：** 对象／数组／混合容器边界、循环、非法参数、配置隔离、原文片段迁移后的祖先深度、keep_origin、九格输入及错误后的清理。详见 [F07/F17 报告](../verification/f07-f17-depth-diagnostics.md)。
+- **验收：** 对象／数组／混合容器边界、循环、非法参数、配置隔离、原文片段迁移后的祖先深度、keep_origin、九格输入及错误后的清理。详见 [F07/F17 报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f07-f17-depth-diagnostics.md)。
 
 ### F08：非标准数字解码
 
 - **原问题：** 缺少 `decode_invalid_numbers`，不能读取原生支持的十六进制、前导零、Inf/Infinity/NaN 等形式。
 - **已实现：** 用户确认默认对齐 lua-cjson。配置默认 true，接受布尔与 on/off；策略固定于源创建时并传递到重扫、延迟字段及 eager rebuild。支持带符号的小数、hex float、NaN payload 和超大指数；纯十进制整数使用原生 signed64 饱和值，整数 `-0` 与浮点 `-0.0` 按原生语义区分。
 - **明确边界：** `decode_invalid_numbers(false)` 使用 RFC 数字语法，不复制原生 strict 分支仍接受尾随小数点／带符号 `.5` 的细节；C source 零模式与 legacy parse 保持原有严格语法。未修改的有限源数字继续保留原文拼写。精确异常文本仍属 F17。
-- **验证：** 上游 `test.lua:L220`–`L257`、独立原生对照和九格联验；完整矩阵中受 F07 深度 reset 依赖阻挡的记录保持 unsupported，另执行未经改写的上游相关用例切片，不能把切片结果冒充完整矩阵通过。见 [本轮报告](../verification/f08-f09-f11-f12-numbers-bytes.md)。
+- **验证：** 上游 `test.lua:L220`–`L257`、独立原生对照和九格联验；完整矩阵中受 F07 深度 reset 依赖阻挡的记录保持 unsupported，另执行未经改写的上游相关用例切片，不能把切片结果冒充完整矩阵通过。见 [本轮报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f08-f09-f11-f12-numbers-bytes.md)。
 
 ### F09：非有限数字编码
 
@@ -114,7 +117,7 @@
 - **已实现：** 默认 false，支持布尔与精确 on/off、getter、新值返回及原生参数错误。普通／safe／new 配置隔离，source／decoder 创建时固定策略，后续按需重扫、缓存续读、preload、eager rebuild/get／重复 finish 均沿用源策略。legacy parse／source v1／C 零模式仍严格。
 - **语法／诊断：** 固定大小状态机支持 token 间的单行与非嵌套块注释；LF／EOF 结束行注释，CR 不单独结束。字符串／键中的标记保持字面值，`1/*x*/0` 等不能拼接。未闭合注释、跨分片位置和 NUL 诊断与原生对照；既有严格控制字符／NUL 接受差异仍明确保留。
 - **输出／内存：** comment flag 随源容器传播，encode／reader 对受影响容器使用现有有界迭代器重建；keep_origin 禁止整块复用带注释的原文。干净子片段可保留拼写，不为去注释构建完整对象或保存注释正文。该行为不等于所有工作负载的 RSS 均低于 cjson。
-- **已验证：** 全部 11 个原用例九格通过；新增 16 项 Lua 回归、583 项完整 Lua、Rust 444/444/445、HTTP 60 及独立审查通过。标准内存复验 32/33，16 MiB 注释输入的 file/feed 峰值约 12.5 MiB，memory 模式仍略高于原生。完整数据、保留边界及证据见 [F10 报告](../verification/f10-comments.md)。
+- **已验证：** 全部 11 个原用例九格通过；新增 16 项 Lua 回归、583 项完整 Lua、Rust 444/444/445、HTTP 60 及独立审查通过。标准内存复验 32/33，16 MiB 注释输入的 file/feed 峰值约 12.5 MiB，memory 模式仍略高于原生。完整数据、保留边界及证据见 [F10 报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f10-comments.md)。
 
 ### F11：非 UTF-8 字节字符串
 
@@ -126,7 +129,7 @@
 
 - **原问题：** 缺少正斜杠配置，all-octets 编码未转义 `/` 与 DEL。
 - **已实现／验证：** `encode_escape_forward_slash` 默认 true；布尔／on/off 可切换。DEL 始终输出 `\u007f`，其他高位字节原样保留。字符串值、对象键、proxy 新值与包含 slash/DEL 的源字符串均执行配置；源字符串按有界块解码／转义，keep_origin 不能绕过策略。
-- **原文边界：** 不涉及 slash/DEL 的未修改源字符串仍保留既有原始 escape，而非强制整体 canonicalize；修改后字符串按当前配置重新编码。所有编码设置在 reader 创建时固定。详见 [本轮报告](../verification/f08-f09-f11-f12-numbers-bytes.md)。
+- **原文边界：** 不涉及 slash/DEL 的未修改源字符串仍保留既有原始 escape，而非强制整体 canonicalize；修改后字符串按当前配置重新编码。所有编码设置在 reader 创建时固定。详见 [本轮报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f08-f09-f11-f12-numbers-bytes.md)。
 
 ### F13：编码缩进配置
 
@@ -134,7 +137,7 @@
 - **已实现：** 实例独立的 getter/setter，默认空字符串；接受字符串与数值转换，按原生 C 字符串规则截断 NUL，保留 `abc` 等非空白缩进。非法参数与额外参数保持错误原子性。普通／safe／new 与调用 codec 的输出策略一致。
 - **输出规则：** 非空缩进重建容器布局，原文容器、修改片段、嵌套 proxy 与 keep_origin 均不能绕过；原始标量拼写可保留。reader 固定创建时配置，缩进以有界状态输出，length 与实际字节数一致，不物化整棵 JSON。空缩进保留此前的原文复用规则，不强制把原始 JSON 压紧。
 - **明确边界：** 固定原生版本在新实例或空字符串重置后调用缩进 getter 会进程崩溃；LeanJSON 安全返回空字符串，不复刻崩溃。源对象 pretty 输出保留词法重复键；`normalize_duplicates=true` 时采用最终值，紧凑重建沿用原有规则。
-- **验收记录：** 十二条原生 F13 记录在九种组合中全部通过；配置、raw／dirty／keep_origin、深度、分块及资源回归见 [F13/F14 验证报告](../verification/f13-f14-encoding.md)。
+- **验收记录：** 十二条原生 F13 记录在九种组合中全部通过；配置、raw／dirty／keep_origin、深度、分块及资源回归见 [F13/F14 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f13-f14-encoding.md)。
 
 ### F14：跳过不支持的值类型
 
@@ -142,7 +145,7 @@
 - **已实现：** 默认 false，开启后不支持的根值编码为空字符串，对象成员删除，数组元素压紧；nil/null 不删除。普通／safe／new 实例独立；reader 固定创建时开关。空容器与全部元素被跳过的非空容器按原生缩进格式区分。
 - **错误边界：** 非法对象键、非法数字、稀疏数组、循环及深度错误继续报错，不把这些错误当作可跳过类型。普通 table、源代理修改、fork 与 keep_origin 均已联验。
 - **保留扩展／差异：** LeanJSON 原有 int64/uint64 cdata 数值编码继续有效；原生将其视为不支持。非空 lightuserdata 的原生分支会生成空 token，容器可能因此成为非法 JSON；LeanJSON 保留关闭时类型错误、开启时删除的规则，不复刻非法输出。这些情况不计为原生等价通过。
-- **验收记录：** TEST22 在九种组合中全部通过；根值／对象／数组／嵌套、设置校验、长度及无 GC 清理见 [F13/F14 验证报告](../verification/f13-f14-encoding.md)。
+- **验收记录：** TEST22 在九种组合中全部通过；根值／对象／数组／嵌套、设置校验、长度及无 GC 清理见 [F13/F14 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f13-f14-encoding.md)。
 
 ### F15：编码缓冲区保留配置
 
@@ -151,7 +154,7 @@
 - **用户决定：** 保留仅用于迁移的兼容配置；当前架构没有跨 `encode()` 调用复用的完整输出缓冲区，不为这个配置引入缓冲池，也不声称能用它控制内存释放。
 - **已实现：** 默认 true；布尔值、原生 on/off 选项、无参数／nil getter、setter 返回新值、额外／非法参数报错。普通／safe 模块及 new 实例独立保存；safe 配置错误仍抛出。对字符串使用原生 C 字符串的首 NUL 前缀。
 - **明确差异：** true／false 均不影响编码、分块输出、GC 或源资源生命周期。普通 encode 仍生成完整结果，临时对象由 GC 回收；兼容 API 通过不代表复刻 cjson 的缓冲区保留策略，也不能证明最坏内存上限。
-- **已验证：** 新增 16 项用例；最终全量 Rust 444 项、Lua 730 项通过。上游 `test.lua:L418/L426/L447` 在九种组合中全部通过，连带恢复 L422；与 F06 记录相比每组新增四项通过，无此前通过项回退。首轮内存阈值失败、复验结果和保留差异见 [F15 验证报告](../verification/f15-keep-buffer.md)。
+- **已验证：** 新增 16 项用例；最终全量 Rust 444 项、Lua 730 项通过。上游 `test.lua:L418/L426/L447` 在九种组合中全部通过，连带恢复 L422；与 F06 记录相比每组新增四项通过，无此前通过项回退。首轮内存阈值失败、复验结果和保留差异见 [F15 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f15-keep-buffer.md)。
 
 ### F16：模块身份与版本字段
 
@@ -159,14 +162,14 @@
 - **证据：** `test.lua:L94` 模块身份断言；报告记录了定义及读取阶段的缺失字段。
 - **用户决定：** `_NAME`、`_VERSION` 使用 LeanJSON 自己的名称和实际版本，无需与 cjson 相同。字段缺失与身份取值不同分别记录。
 - **已实现：** 主模块定义 `_NAME="leanjson"`、`_VERSION="0.1.0"`，版本与当前 `Cargo.toml` 一致。普通／嵌套 new 实例、safe 模块及其普通／嵌套实例沿用现有公共字段复制路径，均暴露相同身份。LuaRocks 的 `scm-1` 是开发 rock 修订号，不作为库版本。不新增运行时文件读取、模块或原生 ABI。
-- **保留差异／验收：** 保持 LeanJSON 品牌与实际版本，不伪造为 cjson 来获得通过；上游 `test.lua:L94` 原身份断言与期望值不改写，结果从 unsupported 变为 behavioral_difference。自身身份和版本一致性测试通过，详细九格结果及首轮内存阈值失败见 [F16 验证报告](../verification/f16-module-identity.md)。
+- **保留差异／验收：** 保持 LeanJSON 品牌与实际版本，不伪造为 cjson 来获得通过；上游 `test.lua:L94` 原身份断言与期望值不改写，结果从 unsupported 变为 behavioral_difference。自身身份和版本一致性测试通过，详细九格结果及首轮内存阈值失败见 [F16 验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f16-module-identity.md)。
 - **验证：** 新增 7 项回归通过；完整复验 Rust 444／Lua 802 通过、Lua lint 89 个文件零警告／错误。table／userdata 完整九格每格 164 条、均无 unsupported；唯一分类变化为 L94 的品牌差异，其余所有分类及原生 exact verdict 不变。首轮 Lua 801 通过／1 项既有内存阈值失败和未确定原因均保留，不以复验覆盖原记录。
 
 ### F17：异常消息与位置格式
 
 - **原问题：** 语法错误只有通用 parse error，缺少原生期望项、token 分类和准确位置；编码及参数错误也有自定义文本。
 - **已实现：** source v2 的伴随 tokenizer 记录有界 token 状态和嵌套上下文，按原生顺序完成意外 token 的分类，覆盖结构错误、数字前缀回退、字符串／Unicode escape、代理对、UTF-16/32 检测、深度和跨 feed 全局位置。原始机器诊断 `code/detail/offset` 保留，公开文本由新增 C formatter 提供；成功后释放诊断工作区。
-- **已验证：** 普通／safe 的参数数量、输入类型、非法值／键、NaN/Infinity、稀疏数组、循环及深度错误；上游原定义不改写。另以独立原生对照语法探针和全部分片点验证位置；详见 [F07/F17 报告](../verification/f07-f17-depth-diagnostics.md)。
+- **已验证：** 普通／safe 的参数数量、输入类型、非法值／键、NaN/Infinity、稀疏数组、循环及深度错误；上游原定义不改写。另以独立原生对照语法探针和全部分片点验证位置；详见 [F07/F17 报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f07-f17-depth-diagnostics.md)。
 - **边界：** 注释支持已由 F10 实现；其他未实现配置仍按原缺陷编号记录；不能将其标成兼容通过。严格 RFC 数字、UTF-8 扩展及控制字节／嵌入 NUL 的较严格拒绝，与原生接受输入的情况保持显式差异。LeanJSON 的 opts、reader／decoder 和代理操作扩展保留自身错误契约；不承诺 VM OOM 或平台调用栈限制下的错误完全相同。
 
 ### F18：lazy 代理与普通 Lua table 的操作边界
@@ -174,7 +177,7 @@
 - **已实现：** `decode`、`decode_file`、`new_decoder` 接受 `proxy_mode="table"|"userdata"`，默认 table。严格模式的实际 Lua 类型为 userdata，原生 raw/table-only 操作拒绝该类型；逻辑访问、修改、遍历、fork、reader 与原有 lease/GC 保留。使用共享 metatable，不增加原生 ABI。
 - **载体规则：** nested/preload、decoder get/finish、脱离子视图和 array-remove 返回值保留载体；跨 codec fork 保留源载体，赋值／插入使用目标父视图载体。`lazyload=false`、`materialize` 返回普通值；非法选项在 safe/eager 也抛错。自有 userdata 优先于 unsupported/skip 判断，外来 userdata 保留原规则。
 - **边界：** 默认 table 的 `next`／raw 操作仍绕过代理，`table.getn` 看到空原始存储；严格模式会拒绝。第三方库可能拒绝、跳过或按自身策略处理 userdata，不能承诺统一报错。需普通 table 的接口使用 eager/materialize；不替换 Lua 内置函数，不隐式物化。F16 身份字段使用自身品牌，不追求 cjson 身份值相同。
-- **证据：** [F18 报告](../verification/f18-userdata-proxies.md)、[迁移文档](../migrating-from-cjson.md)、[proxy API](../source-proxy-api.md)。两种载体分别保留原生 exact verdict 与真实类型，内存门槛不调整；与 F06“由 LeanJSON 编码外部代理”是不同方向的问题。
+- **证据：** [F18 报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f18-userdata-proxies.md)、[迁移文档](../migrating-from-cjson.md)、[proxy API](../source-proxy-api.md)。两种载体分别保留原生 exact verdict 与真实类型，内存门槛不调整；与 F06“由 LeanJSON 编码外部代理”是不同方向的问题。
 
 ## 修复次序建议
 
@@ -205,6 +208,8 @@
 
 ## 修复记录
 
+以下为各次修复当时的历史验收记录，数字不代表当前版本的全量验证。
+
 | 编号 | 决定／实现摘要 | 提交 | 验证命令与结果 | 状态 |
 | --- | --- | --- | --- | --- |
 | F03/F04 | 独立编解码器与 safe 契约 | 已有 main 基线 | 见各项验证报告 | 已验证 |
@@ -217,4 +222,4 @@
 
 本轮 F08/F09/F11/F12 的实现基于 `18ca4c6`；验证、保留差异及证据归档见对应报告。
 
-本轮 F07/F17 的完整验证、内存失败样本及独立审查见 [验证报告](../verification/f07-f17-depth-diagnostics.md)。补充 selective replay 仍用默认普通 codec，未恢复捕获的配置及 safe 路径；其 18 项差异不代替主九格与新回归的配置验证，也不标为通过。
+本轮 F07/F17 的完整验证、内存失败样本及独立审查见 [验证报告](https://github.com/GYWang1983/lua-leanjson/blob/33d00b522d87cc760f757404186488453ffcb498/docs/verification/f07-f17-depth-diagnostics.md)。补充 selective replay 仍用默认普通 codec，未恢复捕获的配置及 safe 路径；其 18 项差异不代替主九格与新回归的配置验证，也不标为通过。

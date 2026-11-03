@@ -158,6 +158,19 @@ local function new_codec()
     local ENCODE_ESCAPE_FORWARD_SLASH = true
     local ENCODE_INDENT = ""
     local ENCODE_SKIP_UNSUPPORTED = false
+    -- Migration-only setting: encoding does not retain a cross-call buffer.
+    local ENCODE_KEEP_BUFFER = true
+
+    function codec.encode_keep_buffer(...)
+        settings.arity(select("#", ...), 1)
+        local value = (...)
+        if type(value) == "string" then
+            local zero = value:find("\0", 1, true)
+            if zero then value = value:sub(1, zero - 1) end
+        end
+        ENCODE_KEEP_BUFFER = settings.boolean(value, ENCODE_KEEP_BUFFER, 1)
+        return ENCODE_KEEP_BUFFER
+    end
 
     function codec.encode_indent(...)
         settings.arity(select("#", ...), 1)
@@ -609,7 +622,7 @@ end
 local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
-    "encode_indent", "encode_skip_unsupported_value_types",
+    "encode_indent", "encode_skip_unsupported_value_types", "encode_keep_buffer",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",
     "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get" }
 local function methods(codec)

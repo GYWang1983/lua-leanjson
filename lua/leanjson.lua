@@ -275,6 +275,7 @@ _M.encode_invalid_numbers = _lazy.encode_invalid_numbers
 _M.encode_escape_forward_slash = _lazy.encode_escape_forward_slash
 _M.encode_indent = _lazy.encode_indent
 _M.encode_skip_unsupported_value_types = _lazy.encode_skip_unsupported_value_types
+_M.encode_keep_buffer = _lazy.encode_keep_buffer
 _M.materialize    = _lazy.materialize
 _M.pairs          = _lazy.pairs
 _M.ipairs         = _lazy.ipairs

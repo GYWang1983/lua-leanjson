@@ -257,6 +257,15 @@ integer coercion/truncation within the declared bounds. It applies to newly
 encoded numbers, including integer-valued doubles and negative zero. Unchanged
 source tokens keep their bytes; readers freeze formatting when constructed.
 
+`encode_keep_buffer([value])` is a compatibility-only setting for migrating
+cjson code. It defaults to true, accepts booleans or `on`/`off`, and returns the
+current setting when called without a value (or with nil). A setter returns the
+new value; invalid or extra arguments raise errors, including on safe codecs.
+Module, normal/safe `new()` instances each own their setting. **It does not
+change allocation or buffer retention:** LeanJSON has no reusable whole-output
+buffer retained between encoding calls. `encode()` still allocates a complete
+result string; `reader()` generates chunks under its existing lifecycle.
+
 `encode_sparse_array([convert[, ratio[, safe]]])` returns all three settings.
 `convert` accepts booleans or exactly `on`/`off`; ratio/safe accept truncated
 integers from 0 through 2147483647. Defaults are false, 2, 10. All arguments are

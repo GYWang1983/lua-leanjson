@@ -130,6 +130,15 @@ body.n = n                 -- replacement now uses Lua number encoding
 
 `leanjson.materialize(value, { keep_origin = true })` remains an explicit full tree conversion with optional memory-source provenance reuse. File/incremental sources reject `keep_origin=true`; default materialization returns independent ordinary values. `leanjson.encode(value)` remains the convenience API that allocates a complete output string.
 
+`encode_keep_buffer([value])` is retained solely for cjson migration. It defaults
+to true and accepts booleans or native `on`/`off` options (C-string prefix before
+the first NUL). No argument or nil reads the current value; a setter returns its
+new value. Invalid/extra arguments throw without changing state, also on safe
+codecs. Each normal/safe module or `new()` instance owns independent state, and
+new instances always start at true. This setting does **not** alter allocation,
+GC or resource lifetimes: neither value creates or retains a cross-call encoding
+buffer. A complete `encode()` result and reader chunks still require memory.
+
 `encode_indent([value])` defaults to `""`; nonempty indentation rebuilds all
 containers, including unchanged source spans and `keep_origin` tables, without
 materializing source values. Raw scalar spellings can remain unchanged. Numbers

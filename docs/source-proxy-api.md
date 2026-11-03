@@ -102,6 +102,24 @@ body.n = n                 -- replacement now uses Lua number encoding
 
 `leanjson.materialize(value, { keep_origin = true })` remains an explicit full tree conversion with optional memory-source provenance reuse. File/incremental sources reject `keep_origin=true`; default materialization returns independent ordinary values. `leanjson.encode(value)` remains the convenience API that allocates a complete output string.
 
+`encode_indent([value])` defaults to `""`; nonempty indentation rebuilds all
+containers, including unchanged source spans and `keep_origin` tables, without
+materializing source values. Raw scalar spellings can remain unchanged. Numbers
+coerce to strings; the first NUL terminates the indentation. Arbitrary
+non-whitespace strings are accepted. The empty/default getter safely returns
+`""` despite a null-pointer bug in the pinned native getter.
+
+`encode_skip_unsupported_value_types([value])` defaults to false and accepts
+booleans and native on/off options. True omits unsupported values, compacts
+arrays and emits an empty string for an unsupported root. Nil/null and supported
+64-bit integer cdata remain encodable. Invalid keys, numeric policy, sparse
+arrays, cycles and depth limits still apply. A container with only skipped
+values retains the native closing newline when indentation is enabled, while
+truly empty containers have no newline. These settings belong to the calling
+normal/safe codec and are frozen by each reader. Indented untouched source
+objects retain lexical duplicates unless `normalize_duplicates=true`; existing
+compact-output reuse and normalization behavior remains unchanged.
+
 ```lua
 local reader = leanjson.reader(body, {
     chunk_size = 65536,

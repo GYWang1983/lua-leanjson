@@ -290,7 +290,8 @@ unmarked empty JSON array becomes a plain empty Lua table and normally re-encode
 as `{}`. **Migration:** enable `decode_array_with_array_mt(true)` to retain eager
 array identity; earlier LeanJSON versions retained it implicitly.
 
-Lazy/preload views always retain source container identity and unchanged bytes.
+Lazy/preload views retain source container identity and, with compact encoding,
+unchanged bytes.
 With marking enabled, `getmetatable(array_view) == codec.array_mt` is observable
 without replacing proxy behavior. Decode settings are snapshotted when memory,
 file or incremental input starts; later children and repeated decoder results
@@ -328,6 +329,46 @@ handles exponent ranges beyond LuaJIT's converter without changing process
 locale. Unchanged finite source tokens retain their original spelling, so
 encoding is not a general JSON canonicalizer. The legacy low-level `parse` ABI
 and zero-mode C source constructors retain their strict defaults.
+
+## Indentation and unsupported values
+
+```lua
+local codec = require("leanjson").new()
+codec.encode_indent("  ") -- default "": compact output
+codec.encode_skip_unsupported_value_types(true) -- default false: raise
+print(codec.encode({ 1, function() end, { n = 2 } }))
+-- [
+--   1,
+--   {
+--     "n": 2
+--   }
+-- ]
+```
+
+`encode_indent([value])` returns the current indentation string; nil leaves it
+unchanged. Numbers convert to strings, and the first NUL byte terminates the
+setting, matching native cjson. Non-whitespace indentation such as `"abc"` is
+accepted, so the resulting output need not be valid JSON. An empty string
+disables indentation. LeanJSON safely returns `""` for the empty/default getter;
+the pinned native cjson getter crashes in that state.
+
+`encode_skip_unsupported_value_types([value])` accepts booleans or native
+`"on"`/`"off"` options, including their NUL-terminated forms. When enabled,
+functions, threads, userdata and unsupported cdata disappear from object members
+and compact out of arrays; an unsupported root encodes as `""`. The existing
+numeric `int64_t`/`uint64_t` cdata support remains available. Nil and `null` still
+encode as `null`. Invalid keys, nonfinite-number policy, sparse arrays, cycles
+and depth limits keep their usual validation. Empty containers stay `{}`/`[]`;
+with indentation, a nonempty container whose values were all skipped still has
+a newline before its closing delimiter.
+
+Both settings are independent on ordinary and safe codecs and fresh `new()`
+instances. Readers freeze them at construction. Nonempty indentation rebuilds
+every source container, including unchanged proxies and `keep_origin` tables,
+through iterative traversal; readers retain bounded source reads and output
+chunks without materializing the source. Eligible source scalar tokens keep
+their original spelling. Indented untouched source objects retain lexical
+duplicate occurrences unless the reader uses `normalize_duplicates=true`.
 
 ## Optional JSON comments
 

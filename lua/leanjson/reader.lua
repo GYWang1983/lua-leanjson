@@ -16,7 +16,8 @@ local function string_length(value, codec)
     return length
 end
 
-local function raw_span(node, normalize, scope)
+local function raw_span(node, normalize, scope, codec)
+    if codec.indent ~= "" and (node.kind == "object" or node.kind == "array") then return end
     if node.backend then
         local flags = node.backend.flags and node.backend:flags(node.handle) or 0
         -- Rebuild affected containers through bounded member iterators. Child
@@ -52,7 +53,7 @@ local function token(node, codec, scope)
     error("Cannot serialise " .. kind .. ": type not supported", 0)
 end
 
-local function output_members(node, scope)
+local function output_members(node, scope, normalize)
     -- Distinct Lua keys can have identical JSON spellings after numeric
     -- formatting. Preserve both fields when encoding that table snapshot;
     -- logical proxy lookups still use the final value for each JSON name.
@@ -64,7 +65,7 @@ local function output_members(node, scope)
             if entry then return entry[1], entry[2] end
         end
     end
-    return proxy.iter(node, scope, true)
+    return proxy.iter(node, scope, normalize)
 end
 
 -- Depth is validated before raw reuse, using one input window and two
@@ -109,22 +110,29 @@ local function count_length(root, normalize, codec, scope)
         if frame.iterator then
             local key, child = frame.iterator()
             leases.check(scope)
-            if key == nil then stack[#stack] = nil
+            if key == nil then
+                if frame.has_items and codec.indent ~= "" then length = length + 1 + (frame.depth - 1) * #codec.indent end
+                stack[#stack] = nil
             else
-                if frame.index > 0 then length = length + 1 end
-                frame.index = frame.index + 1
-                if node.kind == "object" then length = length + string_length(key, codec) + 1 end
-                stack[#stack + 1] = { node = child, depth = frame.depth + 1 }
+                frame.has_items = true
+                if not codec.skip(child) then
+                    if frame.index > 0 then length = length + 1 end
+                    if codec.indent ~= "" then length = length + 1 + frame.depth * #codec.indent end
+                    frame.index = frame.index + 1
+                    if node.kind == "object" then length = length + string_length(key, codec) + (codec.indent ~= "" and 2 or 1) end
+                    stack[#stack + 1] = { node = child, depth = frame.depth + 1 }
+                end
             end
+        elseif codec.skip(node) then stack[#stack] = nil
         else
-            local backend, first, last = raw_span(node, normalize, scope)
+            local backend, first, last = raw_span(node, normalize, scope, codec)
             leases.check(scope)
             check_depth(node, frame.depth, codec, backend, first, last, scope)
             if backend then
                 length = length + last - first
                 stack[#stack] = nil
             elseif node.kind == "object" or node.kind == "array" then
-                frame.iterator = output_members(node, scope)
+                frame.iterator = output_members(node, scope, normalize or codec.indent == "")
                 leases.check(scope)
                 frame.index = 0
                 length = length + 2
@@ -153,6 +161,9 @@ local function literal(value) return { tag = "literal", value = value, pos = 1 }
 local function string_frame(value, chunks)
     return { tag = "string", value = value or "", pos = 1, phase = "open", chunks = chunks }
 end
+local function indent_frame(depth)
+    return { tag = "indent", remaining = depth, pos = 1, newline = true }
+end
 
 local function next_chunk(self)
     local stack, parts, room = self.stack, {}, self.chunk_size
@@ -162,13 +173,14 @@ local function next_chunk(self)
         local tag, fragment = frame.tag
         if tag == "value" then
             local node = frame.node
-            local backend, first, last = raw_span(node, self.normalize, self.scope)
+            local backend, first, last = raw_span(node, self.normalize, self.scope, self.codec)
             if self.closed then return nil end
-            if backend then
+            if self.codec.skip(node) then stack[#stack] = nil
+            elseif backend then
                 if self.closed then return nil end
                 stack[#stack] = { tag = "raw", backend = backend, pos = first, last = last }
             elseif node.kind == "object" or node.kind == "array" then
-                local iterator = output_members(node, self.scope)
+                local iterator = output_members(node, self.scope, self.normalize or self.codec.indent == "")
                 if self.closed then return nil end
                 stack[#stack] = { tag = "container", node = node, iterator = iterator, index = 0, open = true, depth = frame.depth }
             elseif node.kind == "string" then
@@ -187,6 +199,17 @@ local function next_chunk(self)
                 if #chunk > wanted then error("leanjson.reader: source exceeded read bound", 0) end
                 frame.pos = frame.pos + #chunk
                 fragment = chunk
+            end
+        elseif tag == "indent" then
+            if frame.newline then fragment, frame.newline = "\n", false
+            elseif frame.remaining == 0 then stack[#stack] = nil
+            else
+                local indent = self.codec.indent
+                local last = math.min(#indent, frame.pos + room - 1)
+                fragment = indent:sub(frame.pos, last)
+                frame.pos = last + 1
+                if frame.pos > #indent then frame.remaining, frame.pos = frame.remaining - 1, 1 end
+                if frame.remaining == 0 then stack[#stack] = nil end
             end
         elseif tag == "literal" then
             local last = math.min(#frame.value, frame.pos + room - 1)
@@ -225,17 +248,21 @@ local function next_chunk(self)
             else
                 local key, child = frame.iterator()
                 if self.closed then return nil end
-                frame.index = frame.index + 1
                 if key == nil then
-                    fragment = frame.node.kind == "array" and "]" or "}"
-                    stack[#stack] = nil
+                    stack[#stack] = literal(frame.node.kind == "array" and "]" or "}")
+                    if frame.has_items and self.codec.indent ~= "" then stack[#stack + 1] = indent_frame(frame.depth - 1) end
                 else
-                    stack[#stack + 1] = { tag = "value", node = child, depth = frame.depth + 1 }
-                    if frame.node.kind == "object" then
-                        stack[#stack + 1] = literal(":")
-                        stack[#stack + 1] = string_frame(key)
+                    frame.has_items = true
+                    if not self.codec.skip(child) then
+                        stack[#stack + 1] = { tag = "value", node = child, depth = frame.depth + 1 }
+                        if frame.node.kind == "object" then
+                            stack[#stack + 1] = literal(self.codec.indent ~= "" and ": " or ":")
+                            stack[#stack + 1] = string_frame(key)
+                        end
+                        if self.codec.indent ~= "" then stack[#stack + 1] = indent_frame(frame.depth) end
+                        if frame.index > 0 then stack[#stack + 1] = literal(",") end
+                        frame.index = frame.index + 1
                     end
-                    if frame.index > 1 then stack[#stack + 1] = literal(",") end
                 end
             end
         end

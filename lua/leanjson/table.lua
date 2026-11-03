@@ -139,6 +139,10 @@ local string_byte = string.byte
 local string_format = string.format
 local int64_ct = ffi.typeof("int64_t")
 local uint64_ct = ffi.typeof("uint64_t")
+local function unsupported(kind, value)
+    return kind == "function" or kind == "thread" or kind == "userdata"
+        or kind == "cdata" and not (ffi.istype(int64_ct, value) or ffi.istype(uint64_ct, value))
+end
 -- Each codec owns its mutable settings and closures. Proxy/loading sentinels
 -- and origin/type metadata remain shared so values cross codec boundaries.
 local function new_codec()
@@ -152,6 +156,34 @@ local function new_codec()
     local DECODE_MAX_DEPTH = 1000
     local ENCODE_INVALID_NUMBERS = false
     local ENCODE_ESCAPE_FORWARD_SLASH = true
+    local ENCODE_INDENT = ""
+    local ENCODE_SKIP_UNSUPPORTED = false
+
+    function codec.encode_indent(...)
+        settings.arity(select("#", ...), 1)
+        local value = (...)
+        if value ~= nil then
+            local kind = type(value)
+            if kind == "number" then value = tostring(value)
+            elseif kind ~= "string" then
+                error("bad argument #1 to '?' (string expected, got " .. kind .. ")", 0)
+            end
+            local zero = value:find("\0", 1, true)
+            ENCODE_INDENT = zero and value:sub(1, zero - 1) or value
+        end
+        return ENCODE_INDENT
+    end
+
+    function codec.encode_skip_unsupported_value_types(...)
+        settings.arity(select("#", ...), 1)
+        local value = (...)
+        if type(value) == "string" then
+            local zero = value:find("\0", 1, true)
+            if zero then value = value:sub(1, zero - 1) end
+        end
+        ENCODE_SKIP_UNSUPPORTED = settings.boolean(value, ENCODE_SKIP_UNSUPPORTED, 1)
+        return ENCODE_SKIP_UNSUPPORTED
+    end
 
     function codec.decode_max_depth(...)
         settings.arity(select("#", ...), 1)
@@ -416,20 +448,34 @@ local function new_codec()
     local function encode_iterative(value)
         local parts, active, stack = {}, {}, { { value = value, depth = 1 } }
         local function emit(text) parts[#parts + 1] = text end
+        local function newline(depth)
+            if ENCODE_INDENT ~= "" then emit("\n"); emit(string.rep(ENCODE_INDENT, depth)) end
+        end
+        local function skip(v)
+            return ENCODE_SKIP_UNSUPPORTED and not rawequal(v, _M.null) and not rawequal(v, _M.empty_array)
+                and unsupported(type(v), v)
+        end
         while #stack > 0 do
             local frame = stack[#stack]
             if frame.iterator then
                 local key, child = frame.iterator()
                 if key == nil then
+                    if frame.has_items then newline(frame.depth - 1) end
                     emit(frame.kind == "array" and "]" or "}")
                     active[frame.value] = nil; stack[#stack] = nil
                 else
-                    if frame.count > 0 then emit(",") end
-                    frame.count = frame.count + 1
-                    if frame.kind == "object" then emit(encode_string(codec.key(key))); emit(":") end
-                    local record = frame.origin and frame.origin.records[key]
-                    if record and record.tag == "string" and type(child) == "string" and child == record.value then emit(record.raw)
-                    else stack[#stack + 1] = { value = child, depth = frame.depth + 1 } end
+                    frame.has_items = true
+                    -- Native validates object keys even when the value will be skipped.
+                    local name = frame.kind == "object" and codec.key(key)
+                    if not skip(child) then
+                        if frame.count > 0 then emit(",") end
+                        newline(frame.depth)
+                        frame.count = frame.count + 1
+                        if name then emit(encode_string(name)); emit(ENCODE_INDENT ~= "" and ": " or ":") end
+                        local record = frame.origin and frame.origin.records[key]
+                        if record and record.tag == "string" and type(child) == "string" and child == record.value then emit(record.raw)
+                        else stack[#stack + 1] = { value = child, depth = frame.depth + 1 } end
+                    end
                 end
             else
                 local v, depth = frame.value, frame.depth
@@ -439,6 +485,7 @@ local function new_codec()
                 elseif tv == "string" then emit(encode_string(v)); stack[#stack] = nil
                 elseif tv == "number" then emit(encode_number(v)); stack[#stack] = nil
                 elseif tv == "boolean" then emit(v and "true" or "false"); stack[#stack] = nil
+                elseif skip(v) then stack[#stack] = nil
                 elseif tv == "cdata" then emit(encode_cdata(v)); stack[#stack] = nil
                 elseif tv ~= "table" then error("Cannot serialise " .. tv .. ": type not supported", 0)
                 elseif proxy.is_proxy(v) then emit(encode_proxy(v, depth)); stack[#stack] = nil
@@ -448,7 +495,7 @@ local function new_codec()
                     local kind, length, raw = classify_table(v)
                     local origin = TABLE_ORIGIN[v]
                     if origin and origin.kind ~= kind then origin = nil end
-                    if origin and origin_fully_matches(v, origin, depth, active) then
+                    if ENCODE_INDENT == "" and origin and origin_fully_matches(v, origin, depth, active) then
                         emit(read_all(origin.backend, origin.bs, origin.be)); stack[#stack] = nil
                     else
                         active[v] = true
@@ -492,12 +539,15 @@ local function new_codec()
         local fmt = _ENCODE_NUMBER_FMT
         local invalid_mode = ENCODE_INVALID_NUMBERS
         local escape_slash = ENCODE_ESCAPE_FORWARD_SLASH
+        local skip_unsupported = ENCODE_SKIP_UNSUPPORTED
         return bounded_reader.new(value, options, {
             number = function(n) return encode_number(n, fmt, invalid_mode) end,
             key = function(key) return encode_key(key, fmt, invalid_mode) end,
             escape = function(byte) return escape_byte(byte, escape_slash) end,
             cdata = encode_cdata,
             classify = classify_table,
+            indent = ENCODE_INDENT,
+            skip = function(node) return skip_unsupported and unsupported(node.kind, node.value) end,
             depth = depth, max_depth = ENCODE_MAX_DEPTH,
         })
     end
@@ -531,6 +581,7 @@ end
 local default = new_codec()
 local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
+    "encode_indent", "encode_skip_unsupported_value_types",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",
     "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get" }
 local function methods(codec)

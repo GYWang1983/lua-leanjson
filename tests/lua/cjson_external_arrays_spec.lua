@@ -68,7 +68,10 @@ describe("cjson external arrays", function()
         { "whitespace", " 2 ", '["a","b"]' }, { "exponent", "2e0", '["a","b"]' },
         { "hexadecimal", "0x2", '["a","b"]' }, { "hex fraction", "0x1p1", '["a","b"]' },
         { "binary", "0b10", '["a","b"]' }, { "plus", "+2", '["a","b"]' },
-        { "trailing text", "2x", '[]' }, { "embedded NUL", "2\0bad", '[]' },
+        -- lua_tointeger in native cjson follows this VM's numeric scanner:
+        -- older LuaJIT accepts the prefix before NUL, newer builds reject it.
+        { "trailing text", "2x", '[]' },
+        { "embedded NUL", "2\0bad", tonumber("2\0bad") == 2 and '["a","b"]' or '[]' },
         { "empty string", "", '[]' }, { "nonnumeric", "invalid", '[]' },
         { "false", false, '[]' }, { "true", true, '[]' }, { "table", {}, '[]' },
         { "integer cdata", ffi.new("int", 2), '[]' }, { "nil", nil, '[]' },

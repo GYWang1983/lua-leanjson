@@ -2,7 +2,7 @@ local json=require("leanjson")
 describe("native numeric conversion limits",function()
     it("converts huge decimal and hexadecimal exponents in all loading modes",function()
         local cases={{"1e99999999",math.huge},{"0e9999999999999999999999",0},
-            {"1e-9999999999999999999999",0},{"-1e-9999999999999999999999",-0.0},
+            {"1e-9999999999999999999999",0},{"-1e-9999999999999999999999",-1/math.huge},
             {"0x1p99999999999999999999",math.huge},{"0x1p-99999999999999999999",0},
             {"0x0p99999999999999999999",0}}
         for _,mode in ipairs({"lazy","eager","preload"}) do

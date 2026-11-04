@@ -20,7 +20,7 @@ describe("source number and byte-string compatibility", function()
         for _, path in ipairs(files) do os.remove(path) end
     end)
     local function hold(c, value)
-        if type(value) == "table" then held[#held + 1] = {c, value} end
+        if type(value) == "table" or type(value) == "userdata" then held[#held + 1] = {c, value} end
         return value
     end
     local function load(c, source, raw, opts)
@@ -128,6 +128,26 @@ describe("source number and byte-string compatibility", function()
             assert.equal(-math.huge,1/value[10])
         end
     end)
+
+    for _, source in ipairs({ "memory", "file", "feed" }) do
+      for _, mode in ipairs({ "lazy", "eager", "preload" }) do
+        for _, carrier in ipairs({ "table", "userdata" }) do
+            it("preserves native signed zero in " .. source .. "/" .. mode .. "/" .. carrier, function()
+                local c = json.new()
+                local value = load(c, source, '[-0,-000,-0.0,-0e0,-0x0p0,-1e-9999,0.0,1e-9999]', {
+                    lazyload = mode ~= "eager", proxy_mode = carrier,
+                    preload_paths = mode == "preload" and { "$[*]" } or nil,
+                })
+                for _, index in ipairs({ 1, 2, 7, 8 }) do assert.equal(math.huge, 1 / value[index]) end
+                for _, index in ipairs({ 3, 4, 5, 6 }) do assert.equal(-math.huge, 1 / value[index]) end
+                c.decode_invalid_numbers(false)
+                assert.has_error(function() load(c, source, '[-0x0p0]', { lazyload = false }) end)
+                local strict = load(c, source, '[-0.0,-0e0,-1e-9999]', { lazyload = false })
+                for index = 1, 3 do assert.equal(-math.huge, 1 / strict[index]) end
+            end)
+        end
+      end
+    end
 
     it("rejects malformed Unicode escapes and control bytes even in byte mode", function()
         for _, source in ipairs({"memory","file","feed"}) do

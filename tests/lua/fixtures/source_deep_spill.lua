@@ -1,4 +1,19 @@
 package.path = "./lua/?.lua;" .. package.path
+local ffi = require("ffi")
+ffi.cdef[[
+struct leanjson_test_rlimit { unsigned long current; unsigned long maximum; };
+int getrlimit(int resource, struct leanjson_test_rlimit *limit);
+int setrlimit(int resource, const struct leanjson_test_rlimit *limit);
+]]
+local limit = ffi.new("struct leanjson_test_rlimit[1]")
+local resource = ffi.os == "OSX" and 8 or 7
+assert(ffi.C.getrlimit(resource, limit) == 0)
+-- Set the soft limit in this VM: Valgrind's traced exec can reset an inherited
+-- shell limit, and lowering the hard limit conflicts with its reserved FDs.
+limit[0].current = 64
+assert(ffi.C.setrlimit(resource, limit) == 0, "cannot set deep spill descriptor limit")
+assert(ffi.C.getrlimit(resource, limit) == 0)
+assert(tonumber(limit[0].current) == 64, "deep spill fixture requires a 64-descriptor soft limit")
 local json = require("leanjson")
 local raw, expected = 'null', 'null'
 for _ = 1, 48 do

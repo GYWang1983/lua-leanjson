@@ -4,6 +4,11 @@ local proxy = require("leanjson.proxy")
 local lfs = require("lfs")
 local ffi = require("ffi")
 ffi.cdef[[int fcntl(int, int, ...);]]
+local native_ipairs_metamethod = false
+for _ in ipairs(setmetatable({}, { __ipairs = function()
+    native_ipairs_metamethod = true
+    return function() end
+end })) do end
 
 describe("strict userdata carriers", function()
     local held, files
@@ -146,28 +151,57 @@ describe("strict userdata carriers", function()
 
     for _, mode in ipairs({ "table", "userdata" }) do
         for _, raw in ipairs({ "{}", '{"1":"string-key"}' }) do
-            it("keeps native ipairs empty for " .. mode .. " object " .. raw, function()
+            it("preserves portable and native ipairs behavior for " .. mode .. " object " .. raw, function()
                 local value = keep(json.decode(raw, { proxy_mode = mode }))
                 local count = 0
+                for _ in json.ipairs(value) do count = count + 1 end
+                assert.are.equal(0, count)
                 local ok, err = pcall(function()
                     for _ in ipairs(value) do count = count + 1 end
                 end)
-                assert.is_true(ok, tostring(err))
+                if native_ipairs_metamethod or mode == "table" then
+                    assert.is_true(ok, tostring(err))
+                else
+                    assert.is_false(ok)
+                    assert.matches("table expected, got userdata", tostring(err), 1, true)
+                end
                 assert.are.equal(0, count)
                 assert.are.equal("object", json.type(value))
             end)
         end
-        it("checks closed " .. mode .. " object ownership in native ipairs", function()
+        it("checks closed " .. mode .. " object ownership with portable and native ipairs", function()
             local value = keep(json.decode('{"1":"string-key"}', { proxy_mode = mode }))
-            local ok, iterator, state, initial = pcall(ipairs, value)
-            assert.is_true(ok, tostring(iterator))
+            local iterator, state, initial = json.ipairs(value)
+            local native_ok, native_iterator, native_state, native_initial = pcall(ipairs, value)
+            if native_ipairs_metamethod or mode == "table" then
+                assert.is_true(native_ok, tostring(native_iterator))
+            else
+                assert.is_false(native_ok)
+                assert.matches("table expected, got userdata", tostring(native_iterator), 1, true)
+            end
             json.close(value)
             local resumed, err = pcall(iterator, state, initial)
             assert.is_false(resumed)
             assert.matches("closed", tostring(err), 1, true)
-            local started, start_error = pcall(ipairs, value)
+            local started, start_error = pcall(json.ipairs, value)
             assert.is_false(started)
             assert.matches("closed", tostring(start_error), 1, true)
+            if native_ipairs_metamethod then
+                resumed, err = pcall(native_iterator, native_state, native_initial)
+                assert.is_false(resumed)
+                assert.matches("closed", tostring(err), 1, true)
+                started, start_error = pcall(ipairs, value)
+                assert.is_false(started)
+                assert.matches("closed", tostring(start_error), 1, true)
+            elseif mode == "table" then
+                assert.is_nil(native_iterator(native_state, native_initial))
+                local next_item, closed_state, first_item = ipairs(value)
+                assert.is_nil(next_item(closed_state, first_item))
+            else
+                started, start_error = pcall(ipairs, value)
+                assert.is_false(started)
+                assert.matches("table expected, got userdata", tostring(start_error), 1, true)
+            end
         end)
     end
 

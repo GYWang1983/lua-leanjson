@@ -39,7 +39,10 @@ function M.decode(raw)
         end
     end
     local number = tonumber(raw)
-    if number == nil then return extended_number(raw) end
+    -- Older LuaJIT scanners discard the sign of fractional zero and negative
+    -- underflow. cjson's strtod preserves it; integer zero returned above
+    -- deliberately retains strtoll's positive-zero behavior.
+    if number == nil or negative and number == 0 then return extended_number(raw) end
     return number
 end
 return M

@@ -44,6 +44,7 @@ build = {
         cp lua/leanjson/source.lua "$(LUADIR)/leanjson/source.lua"
         cp lua/leanjson/source_io.lua "$(LUADIR)/leanjson/source_io.lua"
         cp lua/leanjson/path.lua "$(LUADIR)/leanjson/path.lua"
+        cp lua/leanjson/query.lua "$(LUADIR)/leanjson/query.lua"
         cp lua/leanjson/leases.lua "$(LUADIR)/leanjson/leases.lua"
         cp lua/leanjson/options.lua "$(LUADIR)/leanjson/options.lua"
         cp lua/leanjson/loading.lua "$(LUADIR)/leanjson/loading.lua"

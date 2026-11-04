@@ -73,6 +73,60 @@ Preloading is source data rather than an edit: untouched spans preserve lexical
 tokens (including large integers), while writes, forks, held children and
 duplicate snapshots keep the usual proxy semantics.
 
+## Path length, presence and Lua falsiness
+
+`leanjson.len(value[, path])`, `leanjson.exists(value[, path])` and
+`leanjson.is_empty(value[, path])` resolve lazy nodes directly and preserve
+source leases without exposing child proxies or materializing string contents.
+
+```lua
+local bytes = leanjson.len(body, "$.prompt")
+local elements = leanjson.len(body, "messages")
+if leanjson.exists(body, "$.model") then
+    -- The field exists, even if its value is false or JSON null.
+end
+if leanjson.is_empty(body, "$.stream") then
+    -- Equivalent to Lua `not` on the logical value: missing/nil or false.
+end
+```
+
+| Resolved value | `exists` | `is_empty` |
+| --- | --- | --- |
+| Missing / nil | false | true |
+| false | true | true |
+| JSON null sentinel | true | false |
+| Empty string, array or object | true | false |
+| Zero, whitespace or any other truthy value | true | false |
+
+Paths use the existing `get` grammar (dot-separated keys and zero-based uint32
+bracket indexes), additionally accepting `$`, `$.key` and `$[0]`. Empty string
+selects the root; omitted/nil paths also select the root. There are no wildcard
+or quoted-key selectors. A literal `$` key is accessible as `.$`; `$field`
+remains a literal key. Existing `get` parsing is unchanged. A missing member or
+non-container intermediate is unresolved; malformed paths and operational
+errors raise. In particular, a closed/I/O-failing source is never reported as
+a missing value.
+
+Path-based length counts decoded string bytes (not Unicode code points), array
+elements, or distinct object keys after last-key-wins and current edits. An
+unresolved path returns nil; a resolved null, boolean or number raises a type
+error. The existing one-argument `len(value)` behavior is retained, including
+Lua's ordinary-table length; an explicit root path requests logical key/element
+counting for ordinary/eager values too.
+
+Preloaded, edited and plain Lua strings use `#value`. Other source strings use
+the bounded native scalar decoder and add chunk byte counts without concatenating
+the payload. Object counts may scan/de-duplicate keys; no member values are
+decoded. `exists` and `is_empty` never decode strings or inspect string contents;
+only a source boolean may need a small value read for its truthiness. No new
+per-field metadata or cache is retained. Queries capture the immutable logical
+snapshot and release temporary operations on success, error and cancellation.
+
+Normal/new/safe codecs export all three helpers. They throw on inspection
+errors, like `get`, and do not change safe conversion error handling. Use the
+path argument rather than `len(body.prompt)` / `is_empty(body.prompt)`, which
+would evaluate the ordinary getter first.
+
 The source options `index_depth`, `index_array_limit`, and `index_budget_bytes` default to `3`, `3`, and `1048576`. Each accepts an integer from 0 through 4294967295; negative, fractional, nonfinite, nonnumeric and overflowing values are rejected before FFI conversion. Zero disables the corresponding optional preindexing/cache allocation. Root is depth 0, so `a.b.c` is the default retained frontier. Every array retains at most the configured prefix while its length remains exact. `max_depth` independently limits actual nesting; zero/absent inherits the creating codec's `decode_max_depth()` (default 1000), and a nonzero value overrides it. This policy is frozen per source, and applies beyond the retained frontier. `encode_max_depth()` independently checks actual output nesting, including unchanged spans; readers freeze it at construction. See [depth settings](../README.md#depth-limits-and-diagnostics).
 
 The byte budget covers native rebuildable index capacities per immutable source, shared by its forks. It applies throughout the source lifetime: later scans do not build another retained sibling tree. A root span and the validation stack, active traversal/string/duplicate workspace, mutation payloads, live public views and explicitly requested strings or output are separate storage. This is a metadata limit, not a process RSS guarantee. Missing or discarded indexes fall back to source scans. Held views/readers use immutable spans and remain valid after index removal.

@@ -3,23 +3,24 @@
 local proxy = require("leanjson.proxy")
 local M = {}
 
-function M.parse(path)
-    if type(path) ~= "string" then error("leanjson.get: path must be a string", 0) end
+function M.parse(path, label)
+    label = label or "leanjson.get"
+    if type(path) ~= "string" then error(label .. ": path must be a string", 0) end
     local segments, pos = {}, 1
     while pos <= #path do
         local byte = path:byte(pos)
         if byte == 46 then
             pos = pos + 1
-            if pos > #path then error("leanjson.get: invalid path", 0) end
+            if pos > #path then error(label .. ": invalid path", 0) end
         elseif byte == 91 then
             local last = path:find("]", pos + 1, true)
-            if not last or last == pos + 1 then error("leanjson.get: invalid path", 0) end
+            if not last or last == pos + 1 then error(label .. ": invalid path", 0) end
             local index = 0
             for i = pos + 1, last - 1 do
                 local digit = path:byte(i) - 48
-                if digit < 0 or digit > 9 then error("leanjson.get: invalid path", 0) end
+                if digit < 0 or digit > 9 then error(label .. ": invalid path", 0) end
                 index = index * 10 + digit
-                if index > 4294967295 then error("leanjson.get: invalid path", 0) end
+                if index > 4294967295 then error(label .. ": invalid path", 0) end
             end
             segments[#segments + 1] = { kind = "array", key = index + 1 }
             pos = last + 1

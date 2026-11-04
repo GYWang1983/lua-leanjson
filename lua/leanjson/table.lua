@@ -616,6 +616,9 @@ local function new_codec()
     codec.fork = function(value) return proxy.fork(value, codec) end
     codec.type = function(value) return proxy.type(value, classify_table) end
     codec.get = function(value, path) return require("leanjson.path").get(value, path, codec) end
+    codec.len = function(...) return require("leanjson.query").len(codec, ...) end
+    codec.exists = function(...) return require("leanjson.query").exists(codec, ...) end
+    codec.is_empty = function(...) return require("leanjson.query").is_empty(codec, ...) end
     return codec
 end
 
@@ -624,7 +627,7 @@ local public_methods = { "encode", "decode", "decode_file", "new_decoder", "read
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
     "encode_indent", "encode_skip_unsupported_value_types", "encode_keep_buffer",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",
-    "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get" }
+    "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get", "len", "exists", "is_empty" }
 local function methods(codec)
     local out = {}
     for _, key in ipairs(public_methods) do out[key] = codec[key] end

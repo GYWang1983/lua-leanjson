@@ -212,6 +212,41 @@ adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
 option concerns validation and does not disable source validation. See the
 [source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
 
+## Inspect fields without loading their contents
+
+Use optional paths to query lazy values directly:
+
+```lua
+local json = require "leanjson"
+local body = json.decode_file("/tmp/request.json")
+local bytes = json.len(body, "$.prompt")       -- decoded string bytes
+local count = json.len(body, "$.messages")    -- array elements / object keys
+local present = json.exists(body, "$.prompt")
+local falsy = json.is_empty(body, "$.prompt")
+json.close(body)
+```
+
+`exists` tests presence: JSON null and boolean false both exist. `is_empty`
+uses **Lua truthiness**, as requested by this API's contract: only missing/nil
+and false are empty. Empty strings/containers, zero, whitespace and the
+`json.null` sentinel are truthy. It does not trim strings or count contents.
+
+`len(value, path)` returns decoded string byte length, array size or distinct
+logical object-key count. Preloaded, edited and ordinary Lua strings use their
+existing length; other strings are counted in bounded decoded chunks, without
+constructing a complete string. Sparse paths may require source scans. Paths
+use `get`'s dot and zero-based array-index syntax, with an optional `$` root
+prefix; `$` or `""` selects the root. Wildcard/quoted-key selectors are not
+supported. Missing/non-traversable paths return nil for `len`, false for
+`exists`, and true for `is_empty`. Resolved number/bool/null values have no
+length and raise; invalid paths, closed sources and I/O errors also raise.
+
+`len(value)` retains its existing behavior, including ordinary Lua table
+length. Supplying `path` is essential for long strings: `len(body.prompt)`
+evaluates and loads `body.prompt` before calling the helper. The query family
+is also available on independent and safe codecs; inspection errors are
+thrown rather than protected conversion results.
+
 ## Independent codec instances
 
 `leanjson.new()` returns an independent encoder/decoder API table, like

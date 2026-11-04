@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Add optional-path `len`, `exists` and `is_empty` queries over memory/file/feed proxies and eager values, preserving Lua truthiness and counting lazy string bytes without full materialization.
+
 ## [0.1.0] - 2026-11-03
 
 First release of the lua-leanjson fork. Release notes:

@@ -10,6 +10,8 @@ int64_t pwrite(int, const void *, size_t, int64_t);
 char *strerror(int);
 ]]
 local M = {}
+local read_buffer, read_capacity = nil, 0
+local REUSABLE_READ_LIMIT = 65536
 
 local function failure(operation)
     return "leanjson: " .. operation .. ": " .. ffi.string(ffi.C.strerror(ffi.errno()))
@@ -35,7 +37,17 @@ function M.close(fd, path)
 end
 
 function M.read(fd, offset, length)
-    local buffer = ffi.new("uint8_t[?]", length)
+    -- pread and ffi.string never yield or expose this buffer. One worker can
+    -- reuse it across independent Sources; the returned Lua string is a copy.
+    -- Large caller-selected windows do not become permanently retained storage.
+    local buffer
+    if length <= REUSABLE_READ_LIMIT then
+        if not read_buffer or length > read_capacity then
+            read_buffer = ffi.new("uint8_t[?]", length)
+            read_capacity = length
+        end
+        buffer = read_buffer
+    else buffer = ffi.new("uint8_t[?]", length) end
     local n
     repeat n = tonumber(ffi.C.pread(fd, buffer, length, offset)) until n >= 0 or ffi.errno() ~= 4
     if n < 0 then return nil, failure("read") end

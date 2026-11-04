@@ -27,3 +27,6 @@ pub mod __bench_api {
     pub use crate::doc::Document;
     pub use crate::options::{Options, LEANJSON_MODE_LAZY};
 }
+
+pub mod schema;
+pub mod schema_ffi;

@@ -28,6 +28,8 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 | `index_depth` | `3` | Nonnegative uint32 integer; root depth is 0 and `a.b.c` is the default span frontier. Zero retains no optional children. |
 | `index_array_limit` | `3` | Nonnegative uint32 integer; optional retained prefix per array, with exact full length and scanning for farther elements. Zero disables the prefix. |
 | `index_budget_bytes` | `1048576` | Nonnegative uint32 integer; shared native index-capacity budget per source across parse and later operations. Zero disables optional cached indexes. |
+| `structural_index` | `true` | Boolean; retain optional validated value-string boundaries to skip bodies during later member walks. False disables this store only; JSON/Schema validation, prefix indexing and demand caching remain correct. |
+| `schema` | absent | A reusable `compile_schema` plan or boolean/table Schema; validate during the original scan before returning values. See [Schema assertions and costs](schema-validation.md). |
 | `lazy` | `false` | High-level sources support eager validation only; `true` is rejected. |
 | `lazyload` | `true` | Boolean. `false` builds complete ordinary tables/scalars during the scan, without proxy descendants or hidden source ownership. |
 | `preload_paths` | absent | Dense array of JSONPath-subset strings. Selected values/subtrees and their required route metadata load during scanning independently of every index bound. All remaining fields remain lazy/readable. Syntax is checked even when `lazyload=false`. |
@@ -35,6 +37,24 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 | `on_chunk(bytes_sofar)` | absent | Runs between bounded file/feed source steps and may yield; not invoked by memory decoding. The argument is the received/scanned byte total and stays fixed during later value reads. |
 
 The same loading options and bounds propagate through OpenResty `read_body`/`start_body` in `opts.decode`; HTTP chunk/callback overrides preserve them. Metadata bounds do not weaken full eager JSON validation or the independent nesting limit. See [loading modes and selector syntax](source-proxy-api.md) for wildcards, escaping, duplicates and the separate selected-data diagnostic units. Preloading never produces a projection; unmodified semantic values remain available. With `decode_allow_comment(true)`, source/decoder creation freezes comment acceptance, and all output paths omit actual comments while preserving eligible clean child spans. The codec setter is independent of the loading options and defaults to false.
+
+The index byte budget covers automatic prefixes, structural spans and confirmed
+demand results, including unused allocation capacity. Reading a path can retain
+its ancestors and a final positive or negative result, beyond automatic depth or
+array-prefix bounds. It does not index every scanned sibling. A confirmed result
+is usable without a complete object index; unconfirmed prefix occurrences still
+require scanning for later duplicates. Saturation falls back to correct reads,
+and admission can release rebuildable prefix/structural metadata. Shared source
+identities preserve results across forks while each branch's patches take
+precedence. Diagnostic counters are lifetime cumulative; `index_bytes` can grow
+or shrink after reads. `source_stats` additionally exposes
+`structural_index_bytes`, `lookup_cache_bytes`, `lookup_cache_hits` and
+`lookup_cache_misses` without changing the existing C stats layout.
+
+Synchronous file reads reuse one worker-local buffer up to 64 KiB. Larger
+caller-selected windows are not retained in that pool. Returned Lua strings are
+copies; this bounds reusable I/O storage without changing pointer lifetimes or
+making a full-request memory guarantee.
 
 No Lua callback runs inside Rust. Every native output pointer is copied before the callback. A callback error propagates as a source failure and releases the failing operation's resources. The caller should close its holders on cancellation. The OpenResty adapter handles request cleanup separately.
 

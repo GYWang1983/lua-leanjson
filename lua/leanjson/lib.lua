@@ -143,6 +143,17 @@ typedef struct {
     uint64_t spill_file_bytes, spill_live_regions, spill_free_regions;
 } leanjson_source_v2_workspace_stats;
 int leanjson_source_v2_get_workspace_stats(const leanjson_source_v1 *, leanjson_source_v2_workspace_stats *, leanjson_source_v1_result *);
+typedef struct {
+    uint64_t structural_index_bytes, lookup_cache_bytes;
+    uint64_t lookup_cache_hits, lookup_cache_misses;
+} leanjson_source_v2_index_stats;
+int leanjson_source_v2_set_structural_index(const leanjson_source_v1 *, uint32_t, leanjson_source_v1_result *);
+int leanjson_source_v2_get_index_stats(const leanjson_source_v1 *, leanjson_source_v2_index_stats *, leanjson_source_v1_result *);
+
+typedef struct leanjson_schema_v1 leanjson_schema_v1;
+leanjson_schema_v1 *leanjson_schema_v1_new(const uint8_t *, size_t, uint8_t *, size_t);
+void leanjson_schema_v1_release(leanjson_schema_v1 *);
+int leanjson_source_v2_set_schema(const leanjson_source_v1 *, const leanjson_schema_v1 *, leanjson_source_v1_result *);
 
 /* normalize=0 yields every lexical occurrence; normalize=1 yields first-key
  * position with final whole value; normalize=2 preserves lexical occurrences
@@ -224,6 +235,8 @@ local required_symbols = {
     "leanjson_source_v2_root",
     "leanjson_source_v2_get_stats",
     "leanjson_source_v2_get_workspace_stats",
+    "leanjson_source_v2_set_structural_index", "leanjson_source_v2_get_index_stats",
+    "leanjson_schema_v1_new", "leanjson_schema_v1_release", "leanjson_source_v2_set_schema",
     "leanjson_source_v2_clear_indexes",
     "leanjson_source_v2_iter_begin",
     "leanjson_source_v2_lookup_begin",

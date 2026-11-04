@@ -18,6 +18,13 @@ function M.normalize(opts)
     if opts.lazy ~= nil and type(opts.lazy) ~= "boolean" then error("leanjson: opts.lazy must be a boolean", 0) end
     if opts.lazy then error("leanjson: source v1 supports eager validation only", 0) end
     if opts.lazyload ~= nil and type(opts.lazyload) ~= "boolean" then error("leanjson: lazyload must be a boolean", 0) end
+    if opts.structural_index ~= nil and type(opts.structural_index) ~= "boolean" then
+        error("leanjson: structural_index must be a boolean", 0)
+    end
+    if opts.schema ~= nil and type(opts.schema) ~= "table" and type(opts.schema) ~= "boolean"
+        and not require("leanjson.schema").is_compiled(opts.schema) then
+        error("leanjson: schema must be a boolean, table or compiled schema", 0)
+    end
     if opts.proxy_mode ~= nil and opts.proxy_mode ~= "table" and opts.proxy_mode ~= "userdata" then
         error('leanjson: proxy_mode must be "table" or "userdata"', 0)
     end
@@ -34,6 +41,8 @@ function M.normalize(opts)
         index_depth = integer(opts.index_depth, "index_depth", 3, 0, 4294967295),
         index_array_limit = integer(opts.index_array_limit, "index_array_limit", 3, 0, 4294967295),
         index_budget_bytes = integer(opts.index_budget_bytes, "index_budget_bytes", 1048576, 0, 4294967295),
+        structural_index = opts.structural_index ~= false,
+        schema = opts.schema,
         lazyload = opts.lazyload ~= false,
         proxy_mode = opts.proxy_mode or "table",
         selector = require("leanjson.loading").compile(opts.preload_paths),

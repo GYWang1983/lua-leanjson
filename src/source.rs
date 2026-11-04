@@ -7,6 +7,8 @@ mod validate;
 mod diagnostic;
 mod comment;
 mod window;
+mod structural;
+mod index_cache;
 pub mod loading;
 pub(crate) mod duplicates;
 pub(crate) mod sparse;
@@ -92,9 +94,12 @@ pub struct Source {
     nodes: Vec<Node>, frames: Vec<Frame>, token: Option<Token>, next_offset: u64,
     finished: bool, failure: Option<SourceError>, max_depth: u32, window_size: usize,
     indexes: Option<IndexOptions>, index_bytes: usize, indexed_depth: u32,
+    structural_enabled: bool, feed_started: bool, structural: structural::SharedIndex, lookup_cache: index_cache::LookupCache,
+    structural_reader: Option<structural::SharedIndex>, string_jump: Option<structural::StringSpan>,
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
     loading: Option<loading::Loading>, policy: SourcePolicy,
     diagnostic: Option<diagnostic::Diagnostics>, pending_failure: Option<SourceError>,
+    schema: Option<crate::schema::Validator>, schema_failure: Option<String>,
 }
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
@@ -104,8 +109,11 @@ impl Source {
             max_depth: if max_depth == 0 { LEANJSON_DEFAULT_MAX_DEPTH } else { max_depth.min(LEANJSON_MAX_MAX_DEPTH) },
             window_size: if window_size == 0 { 65536 } else { window_size },
             indexes: None, index_bytes: 0, indexed_depth: 0, events: false,
+            structural_enabled: true, feed_started: false, structural: Default::default(), lookup_cache: Default::default(),
+            structural_reader: None, string_jump: None,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
             loading: None, policy: SourcePolicy::default(), diagnostic: None, pending_failure: None,
+            schema: None, schema_failure: None,
         }
     }
     pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
@@ -119,7 +127,17 @@ impl Source {
         self.diagnostic = Some(diagnostic::Diagnostics::new(self.max_depth, policy.invalid_numbers, policy.comments));
         self.policy = policy; self
     }
-    pub(crate) fn public_error(&self) -> Option<String> { self.diagnostic.as_ref().and_then(|diagnostic| diagnostic.message()) }
+    pub(crate) fn public_error(&self) -> Option<String> {
+        self.schema_failure.clone().or_else(|| self.diagnostic.as_ref().and_then(|diagnostic| diagnostic.message()))
+    }
+    pub fn set_schema(&mut self, plan: Option<std::rc::Rc<crate::schema::CompiledSchema>>) -> Result<(), SourceError> {
+        if self.feed_started || self.next_offset != 0 || !self.nodes.is_empty() || self.finished || self.failure.is_some() {
+            return Err(SourceError::argument(DETAIL_BAD_OPTIONS, self.next_offset));
+        }
+        self.schema = plan.map(crate::schema::Validator::new);
+        self.schema_failure = None;
+        Ok(())
+    }
     pub(crate) fn policy(&self) -> SourcePolicy { self.policy }
     pub(crate) fn walker(start: u64, window_size: usize, detect: bool, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool, policy: SourcePolicy) -> Self {
         let mut source = Self::new_sparse(LEANJSON_MAX_MAX_DEPTH, window_size,
@@ -169,14 +187,51 @@ impl Source {
         Ok(self.loading.as_mut().and_then(|loading| loading.next(self.finished)))
     }
     pub fn offset(&self) -> u64 { self.next_offset }
-    pub fn index_bytes(&self) -> usize { self.index_bytes }
+    pub fn index_bytes(&self) -> usize { self.index_bytes + self.structural_index_bytes() + self.lookup_cache.bytes() }
+    pub fn structural_index_bytes(&self) -> usize { self.structural.borrow().bytes() }
+    pub fn lookup_cache_bytes(&self) -> usize { self.lookup_cache.bytes() }
+    pub fn lookup_cache_hits(&self) -> u64 { self.lookup_cache.hits }
+    pub fn lookup_cache_misses(&self) -> u64 { self.lookup_cache.misses }
+    pub fn set_structural_index(&mut self, enabled: bool) -> Result<(), SourceError> {
+        if self.feed_started || self.next_offset != 0 || !self.nodes.is_empty() || self.finished || self.indexes.is_none() || self.failure.is_some() {
+            return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX));
+        }
+        self.structural_enabled = enabled; Ok(())
+    }
+    pub(crate) fn structural_index(&self) -> structural::SharedIndex { self.structural.clone() }
+    pub(crate) fn use_structural_index(&mut self, index: structural::SharedIndex) { self.structural_reader = Some(index); }
+    pub(crate) fn indexed_read_length(&self, length: usize) -> usize {
+        self.structural_reader.as_ref().map_or(length, |index| index.borrow().read_length(self.next_offset, length))
+    }
+    pub(crate) fn skip_indexed_string(&mut self) -> Option<Option<SpanMember>> {
+        let jump = self.string_jump.take()?;
+        if let Some(Token::String { value: Some(value), .. }) = self.token.take() {
+            self.complete(value, jump.end, 0, jump.flags);
+            self.next_offset = jump.end;
+            Some(self.member.take())
+        } else { unreachable!("only validated value strings have a pending jump") }
+    }
+    pub(crate) fn lookup_cached(&mut self, container: u64, lookup: &sparse::Lookup) -> Option<Option<SpanMember>> {
+        self.lookup_cache.get(container, lookup)
+    }
+    pub(crate) fn cache_lookup(&mut self, container: u64, lookup: &sparse::Lookup, member: Option<&SpanMember>) {
+        let Some(options) = self.indexes else { return; };
+        if self.lookup_cache.contains(container, lookup) { return; }
+        let cost = self.lookup_cache.insertion_cost(lookup);
+        // Prefer a confirmed demand result to rebuildable automatic prefixes.
+        if cost > options.budget_bytes.saturating_sub(self.lookup_cache.bytes()) { return; }
+        if cost > options.budget_bytes.saturating_sub(self.index_bytes()) { self.clear_automatic_indexes(); }
+        if cost > options.budget_bytes.saturating_sub(self.index_bytes()) { self.structural.borrow_mut().clear(); }
+        self.lookup_cache.insert(container, lookup, member);
+    }
+    fn clear_automatic_indexes(&mut self) {
+        let mut root = self.nodes.remove(0); root.members = Vec::new(); self.nodes = vec![root];
+        self.index_bytes = 0; self.indexed_depth = 0;
+    }
     pub fn clear_indexes(&mut self) -> Result<(), SourceError> {
         if !self.ready()? || self.indexes.is_none() { return Err(SourceError::argument(DETAIL_NONE, self.next_offset)); }
-        let mut root = self.nodes.remove(0);
-        root.members = Vec::new();
-        self.nodes = vec![root];
-        self.index_bytes = 0;
-        self.indexed_depth = 0;
+        self.clear_automatic_indexes();
+        self.structural.borrow_mut().clear(); self.lookup_cache.clear();
         Ok(())
     }
     pub fn indexed_nodes(&self) -> usize { self.nodes.len().saturating_sub(1) }
@@ -186,6 +241,7 @@ impl Source {
     fn fail<T>(&mut self, error: SourceError) -> Result<T, SourceError> { self.failure = Some(error); Err(error) }
 
     pub fn feed(&mut self, base: u64, bytes: &[u8]) -> Result<(), SourceError> {
+        self.feed_started = true;
         self.consume(base, bytes, false).map(|_| ())
     }
     pub(crate) fn feed_member(&mut self, base: u64, bytes: &[u8]) -> Result<(usize, Option<SpanMember>), SourceError> {
@@ -228,7 +284,7 @@ impl Source {
                     self.next_offset = offset; return self.fail(error);
                 }
             }
-            if stop && self.member.is_some() { break; }
+            if stop && (self.member.is_some() || self.string_jump.is_some()) { break; }
         }
         self.next_offset = base + i as u64;
         Ok(i)
@@ -257,6 +313,13 @@ impl Source {
         if self.nodes.is_empty() || !self.frames.is_empty() || !self.nodes[0].complete {
             return self.fail(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len));
         }
+        if let Some(schema) = &mut self.schema {
+            if let Err(message) = schema.finish() {
+                self.schema_failure = Some(message);
+                return self.fail(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, total_len));
+            }
+        }
+        self.schema = None;
         self.finished = true;
         self.frames = Vec::new();
         self.diagnostic = None;
@@ -271,6 +334,7 @@ impl Source {
         *self.failure.get_or_insert(SourceError { code: leanjson_err::LEANJSON_OK, detail, offset: self.next_offset })
     }
     fn complete(&mut self, value: Value, end: u64, count: u64, flags: u32) {
+        if let Some(schema) = &mut self.schema { schema.end(value.kind, end); }
         if let Some(loading) = &mut self.loading { loading.end(&value, end, count, flags); }
         if let Some(id) = value.id {
             self.nodes[id].raw_end = end;
@@ -285,6 +349,10 @@ impl Source {
                 value: Span { kind: value.kind, flags, raw_start: value.start, raw_end: end, child_count: count } });
         }
     }
+    fn scalar_data(&mut self, value: &Value, bytes: &[u8]) {
+        if let Some(loading) = &mut self.loading { loading.data(value, bytes); }
+        if let Some(schema) = &mut self.schema { schema.data(bytes); }
+    }
     fn optional_index(&mut self) -> Option<usize> {
         if self.loading.as_ref().is_some_and(|loading| loading.eager) { return None; }
         if self.frames.is_empty() { return None; }
@@ -298,7 +366,7 @@ impl Source {
             let member_growth = if members.len() == members.capacity() { members.capacity().max(1) } else { 0 };
             let cost = node_growth.checked_mul(std::mem::size_of::<Node>())?
                 .checked_add(member_growth.checked_mul(std::mem::size_of::<Member>())?)?;
-            if cost > options.budget_bytes.saturating_sub(self.index_bytes) { return None; }
+            if cost > options.budget_bytes.saturating_sub(self.index_bytes()) { return None; }
             if node_growth > 0 { self.nodes.reserve_exact(node_growth); }
             if member_growth > 0 { self.nodes[parent_id].members.reserve_exact(member_growth); }
             self.index_bytes += cost;
@@ -307,6 +375,11 @@ impl Source {
         Some(parent_id)
     }
     fn allocate(&mut self, kind: leanjson_type, offset: u64) -> Value {
+        if let Some(schema) = &mut self.schema {
+            let (key, ordinal) = self.frames.last().map_or((&[][..], 0), |frame|
+                (frame.decoded_key.as_slice(), frame.count));
+            schema.begin(kind, key, ordinal, offset);
+        }
         let parent_id = self.optional_index();
         let id = if self.frames.is_empty() || parent_id.is_some() {
             let id = self.nodes.len();
@@ -360,13 +433,16 @@ impl Source {
                 self.frames.push(Frame { value, key: (0, 0), key_hash: 0, decoded_key: Vec::new(), count: 0,
                     state: if byte == b'{' { FrameState::ObjectFirst } else { FrameState::ArrayFirst }, duplicates, flags: 0 });
             },
-            b'"' => self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::with_bytes(self.policy.raw_bytes), key: None, key_hash: 0xcbf29ce484222325, key_limit: 0 }),
+            b'"' => {
+                self.string_jump = self.structural_reader.as_ref().and_then(|index| index.borrow().get(offset));
+                self.token = Some(Token::String { start: offset, value: Some(value), state: StringState::with_bytes(self.policy.raw_bytes), key: None, key_hash: 0xcbf29ce484222325, key_limit: 0 });
+            },
             b't' | b'f' | b'n' => {
-                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
+                self.scalar_data(&value, &[byte]);
                 self.token = Some(Token::Literal { value, expected: match byte { b't' => b"true", b'f' => b"false", _ => b"null" }, matched: 1 });
             },
             _ => { let mut state = NumberState::new(self.policy.invalid_numbers); state.feed(byte).map_err(|code| SourceError::json(code, offset))?;
-                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
+                self.scalar_data(&value, &[byte]);
                 self.token = Some(Token::Number { value, state }); },
         }
         Ok(())
@@ -384,7 +460,7 @@ impl Source {
             Some(ArrayFirst | ArrayValue | ObjectValue) => self.start_value(byte, offset),
             Some(ObjectFirst) if byte == b'}' => self.close_container(offset),
             Some(ObjectFirst | ObjectKey) if byte == b'"' => {
-                let capture = self.events && self.frames.len() == 1 || self.frames.last().unwrap().duplicates.is_some();
+                let capture = self.schema.is_some() || self.events && self.frames.len() == 1 || self.frames.last().unwrap().duplicates.is_some();
                 let key_limit = if capture { usize::MAX } else { self.loading.as_ref().map_or(0, |loading|
                     loading.key_limit(self.frames.last().unwrap().value.loading.as_ref().unwrap())) };
                 self.token = Some(Token::String { start: offset, value: None, state: StringState::with_bytes(self.policy.raw_bytes), key: (key_limit != 0).then(Vec::new), key_hash: 0xcbf29ce484222325, key_limit }); Ok(())
@@ -421,20 +497,29 @@ impl Source {
             Token::PendingNull { start } => {
                 if byte == b'u' {
                     let value = self.allocate(leanjson_type::LEANJSON_T_NULL, start);
-                    if let Some(loading) = &mut self.loading { loading.data(&value, b"nu"); }
+                    self.scalar_data(&value, b"nu");
                     self.token = Some(Token::Literal { value, expected: b"null", matched: 2 });
                 } else if matches!(byte, b'a' | b'A') {
                     let value = self.allocate(leanjson_type::LEANJSON_T_NUM, start);
                     let mut state = NumberState::new(true);
                     state.feed(b'n').unwrap(); state.feed(byte).unwrap();
-                    if let Some(loading) = &mut self.loading { loading.data(&value, &[b'n', byte]); }
+                    self.scalar_data(&value, &[b'n', byte]);
                     self.token = Some(Token::Number { value, state });
                 } else { return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)); }
             },
             Token::String { start, value, mut state, mut key, mut key_hash, key_limit } => {
                 if byte == b'"' && state.at_boundary() {
                     match value {
-                        Some(value) => self.complete(value, offset + 1, 0, SPAN_CLEAN | if state.needs_escape() { SPAN_STRING_ESCAPE } else { 0 }),
+                        Some(value) => {
+                            let flags = SPAN_CLEAN | if state.needs_escape() { SPAN_STRING_ESCAPE } else { 0 };
+                            if self.structural_enabled {
+                                if let Some(options) = self.indexes {
+                                    let available = options.budget_bytes.saturating_sub(self.index_bytes());
+                                    self.structural.borrow_mut().insert(structural::StringSpan { start, end: offset + 1, flags }, available);
+                                }
+                            }
+                            self.complete(value, offset + 1, 0, flags);
+                        },
                         None => {
                             let frame = self.frames.last_mut().unwrap();
                             if state.needs_escape() { frame.flags |= SPAN_STRING_ESCAPE; }
@@ -452,7 +537,7 @@ impl Source {
                     if value.is_none() {
                         for byte in &decoded.bytes[..decoded.len] { key_hash ^= *byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
                     }
-                    if let Some(value) = &value { if let Some(loading) = &mut self.loading { loading.data(value, &decoded.bytes[..decoded.len]); } }
+                    if let Some(value) = &value { self.scalar_data(value, &decoded.bytes[..decoded.len]); }
                     if let Some(key) = key.as_mut() {
                         let count = decoded.len.min(key_limit.saturating_sub(key.len()));
                         key.extend_from_slice(&decoded.bytes[..count]);
@@ -466,12 +551,12 @@ impl Source {
                     self.complete(value, offset, 0, SPAN_CLEAN | if nonfinite { SPAN_NONFINITE } else { 0 }); return Ok(false);
                 }
                 state.feed(byte).map_err(|code| SourceError::json(code, value.start))?;
-                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
+                self.scalar_data(&value, &[byte]);
                 self.token = Some(Token::Number { value, state });
             },
             Token::Literal { value, expected, mut matched } => {
                 if byte != expected[matched] { return Err(SourceError::json(leanjson_err::LEANJSON_PARSE_ERROR, offset)); }
-                if let Some(loading) = &mut self.loading { loading.data(&value, &[byte]); }
+                self.scalar_data(&value, &[byte]);
                 matched += 1;
                 if matched == expected.len() { self.complete(value, offset + 1, 0, SPAN_CLEAN); }
                 else { self.token = Some(Token::Literal { value, expected, matched }); }

@@ -81,7 +81,9 @@ describe("consistent source decode policy", function()
                     assert.are.equal(7, body.a.b.c.d)
                     assert.are.equal(5, leanjson.len(body.items))
                     assert.are.equal(4, body.items[5])
-                    assert.are.equal(stats.index_bytes, leanjson.source_stats(body).index_bytes)
+                    -- Demand lookups may retain results beyond the automatic
+                    -- prefix. Their allocation must still fit the same budget.
+                    assert.is_true(leanjson.source_stats(body).index_bytes <= budget)
                     leanjson.close(body)
                 end
             end

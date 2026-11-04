@@ -103,14 +103,17 @@ function Backend:read(offset, length, scope)
     return chunk
 end
 
-local function backend_new(fd, spool_path, opts)
+local function backend_new(fd, spool_path, opts, codec)
     local result = ffi.new("leanjson_source_v1_result[1]")
     local source = C.leanjson_source_v2_new(native_options(opts), result)
     if source == nil then io_source.close(fd, spool_path); error(result_error(result), 0) end
     local backend = setmetatable({ state = { fd = fd, path = spool_path, source = source, leases = 0 },
         total = 0, opts = opts }, Backend)
     local owner = backend:retain()
-    local ok, builder = pcall(loading.new, backend)
+    local ok, builder = pcall(function()
+        shared.configure_source(backend, codec)
+        return loading.new(backend)
+    end)
     if not ok then backend:release(owner); error(builder, 0) end
     backend.loading = builder
     return backend, owner
@@ -148,7 +151,7 @@ function M.decode_file(filename, opts, codec)
     if type(filename) ~= "string" or filename:find("\0", 1, true) then error("leanjson: file path must be a string without NUL", 0) end
     local fd, open_error = io_source.open(filename)
     if fd == nil then error(open_error, 0) end
-    local backend, owner = backend_new(fd, nil, opts)
+    local backend, owner = backend_new(fd, nil, opts, codec)
     local ok, value = pcall(function()
         while true do
             local chunk, err = io_source.read(fd, backend.total, opts.chunk_size)
@@ -170,7 +173,7 @@ function M.new_decoder(opts, codec)
     opts = options(opts, codec)
     local fd, spool_path = io_source.spool(opts.temp_dir)
     if fd == nil then error(spool_path, 0) end
-    local backend, owner = backend_new(fd, spool_path, opts)
+    local backend, owner = backend_new(fd, spool_path, opts, codec)
     local scope = leases.acquire()
     scope.entries = { { backend, owner } }
     return setmetatable({ backend = backend, scope = scope, codec = codec }, Decoder)

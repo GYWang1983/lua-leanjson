@@ -1,0 +1,823 @@
+{
+  "scope": "Local ARM64 Kong real HTTP fixtures, complete original Chat Schema, local provider only; no production deployment or billed calls.",
+  "base_commit": "c913c2b9219c8198e5855d4418abe647c5200980",
+  "kong_image": "llm-router-kong:leanjson-final",
+  "kong_image_id": "sha256:e536f43fe880ace93fafbf01322d792024c89ec87b4fa46fd2f635c6e005bcf5",
+  "optimized_library_sha256": "62257a52c11db3f4836da4a6519b0888a6a984b925c87413f9db8e4549738008",
+  "schema_fixture_sha256": "307d7c328dce5e9fae77439d73fbe9fb643127a9147935e3eaec7eb850028667",
+  "method": "Each variant uses a fresh single worker, one tiny warmup, normal GC and default abort yields. Identical input SHA per size; all upstream messages verified. Four single measured requests, sequential, exploratory not a production SLO.",
+  "inline_schema": "Full original ChatRequest/Message schema converted only from component refs to local $defs and compiled once. Decode performs native assertions; fixture substitutes only the matching old body validator, preserving other request checks. No permanent Kong source edits.",
+  "prior_cjson_reference": {
+    "batch": "Prior Kong validation report final-acceptance, not the same current measurement batch",
+    "8MiB": {
+      "elapsed_seconds": 0.06667329199999994,
+      "worker_hwm_kib": 147968
+    },
+    "64MiB": {
+      "elapsed_seconds": 0.6071680830000004,
+      "worker_hwm_kib": 419248
+    }
+  },
+  "runs": [
+    {
+      "method": "leanjson",
+      "image": "llm-router-kong:leanjson-final",
+      "input_sha256": "65620968b72d175fa7e954bfa9ce6bf4d1594aa37b7006017ec7aeb9c8cd5037",
+      "elapsed_seconds": 1.4298150840000003,
+      "wire_bytes": 8392969,
+      "process_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59800 kB\nVmRSS:\t   58900 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t  162084 kB\nVmRSS:\t  162084 kB\n",
+      "before_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59800 kB\nVmRSS:\t   58900 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t   93828 kB\nVmRSS:\t   93828 kB\n",
+      "warmup": 1,
+      "messages": 128,
+      "profile": {
+        "admit": {
+          "elapsed": 0.0029997825622559,
+          "heap_kib": 70559.951171875,
+          "cpu": 0.00089099999999998,
+          "calls": 4
+        },
+        "sync_begin": {
+          "elapsed": 0,
+          "heap_kib": 70250.270507812,
+          "cpu": 8.9999999999923e-05,
+          "calls": 2
+        },
+        "candidates": {
+          "elapsed": 0.00099992752075195,
+          "heap_kib": 70528.599609375,
+          "cpu": 0.0011069999999997,
+          "calls": 4
+        },
+        "transport": {
+          "elapsed": 0.25800013542175,
+          "heap_kib": 128571.9375,
+          "cpu": 0.242692,
+          "calls": 2
+        },
+        "extract": {
+          "elapsed": 0,
+          "heap_kib": 128589.06347656,
+          "cpu": 0.00029299999999988,
+          "calls": 2
+        },
+        "strip_reserved": {
+          "elapsed": 0.10899996757507,
+          "heap_kib": 91167.750976562,
+          "cpu": 0.109219,
+          "calls": 2
+        },
+        "client_schema": {
+          "elapsed": 0.89800000190735,
+          "heap_kib": 70236.138671875,
+          "cpu": 0.896743,
+          "calls": 2
+        },
+        "dimensions": {
+          "elapsed": 0,
+          "heap_kib": 70536.852539062,
+          "cpu": 7.0000000000903e-06,
+          "calls": 4
+        },
+        "request_factors": {
+          "elapsed": 0,
+          "heap_kib": 70536.938476562,
+          "cpu": 2.9999999997532e-06,
+          "calls": 4
+        },
+        "decode": {
+          "elapsed": 0.14800024032593,
+          "heap_kib": 82824.782226562,
+          "cpu": 0.146265,
+          "calls": 2
+        },
+        "authorize": {
+          "elapsed": 0,
+          "heap_kib": 70241.0859375,
+          "cpu": 1.4999999999876e-05,
+          "calls": 2
+        }
+      },
+      "diagnose": {
+        "readers": 2,
+        "max_chunk": 65536,
+        "files": 1,
+        "output_paused": false,
+        "gc_stopped": false,
+        "profile": {
+          "admit": {
+            "elapsed": 0.0029997825622559,
+            "heap_kib": 70559.951171875,
+            "cpu": 0.00089099999999998,
+            "calls": 4
+          },
+          "sync_begin": {
+            "elapsed": 0,
+            "heap_kib": 70250.270507812,
+            "cpu": 8.9999999999923e-05,
+            "calls": 2
+          },
+          "candidates": {
+            "elapsed": 0.00099992752075195,
+            "heap_kib": 70528.599609375,
+            "cpu": 0.0011069999999997,
+            "calls": 4
+          },
+          "transport": {
+            "elapsed": 0.25800013542175,
+            "heap_kib": 128571.9375,
+            "cpu": 0.242692,
+            "calls": 2
+          },
+          "extract": {
+            "elapsed": 0,
+            "heap_kib": 128589.06347656,
+            "cpu": 0.00029299999999988,
+            "calls": 2
+          },
+          "strip_reserved": {
+            "elapsed": 0.10899996757507,
+            "heap_kib": 91167.750976562,
+            "cpu": 0.109219,
+            "calls": 2
+          },
+          "client_schema": {
+            "elapsed": 0.89800000190735,
+            "heap_kib": 70236.138671875,
+            "cpu": 0.896743,
+            "calls": 2
+          },
+          "dimensions": {
+            "elapsed": 0,
+            "heap_kib": 70536.852539062,
+            "cpu": 7.0000000000903e-06,
+            "calls": 4
+          },
+          "request_factors": {
+            "elapsed": 0,
+            "heap_kib": 70536.938476562,
+            "cpu": 2.9999999997532e-06,
+            "calls": 4
+          },
+          "decode": {
+            "elapsed": 0.14800024032593,
+            "heap_kib": 82824.782226562,
+            "cpu": 0.146265,
+            "calls": 2
+          },
+          "authorize": {
+            "elapsed": 0,
+            "heap_kib": 70241.0859375,
+            "cpu": 1.4999999999876e-05,
+            "calls": 2
+          }
+        },
+        "hooks": 3730,
+        "closed": 2,
+        "index_stats": {
+          "preloaded_nodes": 2,
+          "preloaded_payload_bytes": 19,
+          "preload_path_nodes": 1,
+          "preloaded_key_bytes": 11,
+          "budget_bytes": 1048576,
+          "index_bytes": 2560,
+          "indexed_nodes": 16,
+          "indexed_depth": 3,
+          "spill_free_regions": 0,
+          "spill_file_bytes": 0,
+          "spill_live_regions": 0,
+          "index_depth": 3,
+          "index_array_limit": 3
+        },
+        "source_io": {
+          "client_schema": {
+            "bytes": 65761069,
+            "calls": 2021
+          },
+          "decode": {
+            "bytes": 8392981,
+            "calls": 130
+          },
+          "candidates": {
+            "bytes": 32,
+            "calls": 4
+          },
+          "strip_reserved": {
+            "bytes": 8392981,
+            "calls": 129
+          },
+          "transport": {
+            "bytes": 33571643,
+            "calls": 521
+          }
+        },
+        "memory": 1
+      },
+      "variant": "released-leanjson",
+      "batch": "final-controlled",
+      "wall_time_utc": "2026-11-04T07:37:01Z",
+      "worker_hwm_kib": 162084,
+      "source_read_bytes": 116118706,
+      "source_read_calls": 2805
+    },
+    {
+      "method": "leanjson",
+      "image": "llm-router-kong:leanjson-final",
+      "input_sha256": "65620968b72d175fa7e954bfa9ce6bf4d1594aa37b7006017ec7aeb9c8cd5037",
+      "elapsed_seconds": 0.20268141699999997,
+      "wire_bytes": 8392969,
+      "process_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59640 kB\nVmRSS:\t   58848 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t  119536 kB\nVmRSS:\t  119536 kB\n",
+      "before_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59640 kB\nVmRSS:\t   58848 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t   95960 kB\nVmRSS:\t   95960 kB\n",
+      "warmup": 1,
+      "messages": 128,
+      "profile": {
+        "decode": {
+          "calls": 2,
+          "heap_kib": 75146.323242188,
+          "elapsed": 0.16000008583069,
+          "cpu": 0.160298
+        },
+        "admit": {
+          "calls": 4,
+          "heap_kib": 75755.930664062,
+          "elapsed": 0.002000093460083,
+          "cpu": 0.00079499999999999
+        },
+        "extract": {
+          "calls": 2,
+          "heap_kib": 93060.604492188,
+          "elapsed": 0.00099992752075195,
+          "cpu": 0.00017500000000004
+        },
+        "sync_begin": {
+          "calls": 2,
+          "heap_kib": 75441.956054688,
+          "elapsed": 0,
+          "cpu": 0.00010199999999999
+        },
+        "candidates": {
+          "calls": 4,
+          "heap_kib": 75726.665039062,
+          "elapsed": 0.0019998550415039,
+          "cpu": 0.002004
+        },
+        "transport": {
+          "calls": 2,
+          "heap_kib": 93043.771484375,
+          "elapsed": 0.024999856948853,
+          "cpu": 0.01482
+        },
+        "strip_reserved": {
+          "calls": 2,
+          "heap_kib": 75410.045898438,
+          "elapsed": 0.00099992752075195,
+          "cpu": 0.001274
+        },
+        "authorize": {
+          "calls": 2,
+          "heap_kib": 75433.396484375,
+          "elapsed": 0,
+          "cpu": 1.7000000000045e-05
+        },
+        "dimensions": {
+          "calls": 4,
+          "heap_kib": 75735.99609375,
+          "elapsed": 0,
+          "cpu": 7.9999999999525e-06
+        },
+        "request_factors": {
+          "calls": 4,
+          "heap_kib": 75736.08203125,
+          "elapsed": 0,
+          "cpu": 2.9999999999752e-06
+        },
+        "client_schema": {
+          "calls": 2,
+          "heap_kib": 75427.8125,
+          "elapsed": 0,
+          "cpu": 6.000000000006e-06
+        }
+      },
+      "diagnose": {
+        "closed": 2,
+        "gc_stopped": false,
+        "profile": {
+          "decode": {
+            "calls": 2,
+            "heap_kib": 75146.323242188,
+            "elapsed": 0.16000008583069,
+            "cpu": 0.160298
+          },
+          "admit": {
+            "calls": 4,
+            "heap_kib": 75755.930664062,
+            "elapsed": 0.002000093460083,
+            "cpu": 0.00079499999999999
+          },
+          "extract": {
+            "calls": 2,
+            "heap_kib": 93060.604492188,
+            "elapsed": 0.00099992752075195,
+            "cpu": 0.00017500000000004
+          },
+          "sync_begin": {
+            "calls": 2,
+            "heap_kib": 75441.956054688,
+            "elapsed": 0,
+            "cpu": 0.00010199999999999
+          },
+          "candidates": {
+            "calls": 4,
+            "heap_kib": 75726.665039062,
+            "elapsed": 0.0019998550415039,
+            "cpu": 0.002004
+          },
+          "transport": {
+            "calls": 2,
+            "heap_kib": 93043.771484375,
+            "elapsed": 0.024999856948853,
+            "cpu": 0.01482
+          },
+          "strip_reserved": {
+            "calls": 2,
+            "heap_kib": 75410.045898438,
+            "elapsed": 0.00099992752075195,
+            "cpu": 0.001274
+          },
+          "authorize": {
+            "calls": 2,
+            "heap_kib": 75433.396484375,
+            "elapsed": 0,
+            "cpu": 1.7000000000045e-05
+          },
+          "dimensions": {
+            "calls": 4,
+            "heap_kib": 75735.99609375,
+            "elapsed": 0,
+            "cpu": 7.9999999999525e-06
+          },
+          "request_factors": {
+            "calls": 4,
+            "heap_kib": 75736.08203125,
+            "elapsed": 0,
+            "cpu": 2.9999999999752e-06
+          },
+          "client_schema": {
+            "calls": 2,
+            "heap_kib": 75427.8125,
+            "elapsed": 0,
+            "cpu": 6.000000000006e-06
+          }
+        },
+        "output_paused": false,
+        "hooks": 1194,
+        "source_io": {
+          "decode": {
+            "calls": 130,
+            "bytes": 8392981
+          },
+          "transport": {
+            "calls": 779,
+            "bytes": 16792853
+          },
+          "candidates": {
+            "calls": 1,
+            "bytes": 8
+          },
+          "strip_reserved": {
+            "calls": 258,
+            "bytes": 3586
+          }
+        },
+        "index_stats": {
+          "indexed_depth": 3,
+          "spill_file_bytes": 0,
+          "spill_live_regions": 0,
+          "spill_free_regions": 0,
+          "index_depth": 3,
+          "structural_index_bytes": 12288,
+          "lookup_cache_bytes": 0,
+          "lookup_cache_hits": 0,
+          "lookup_cache_misses": 0,
+          "budget_bytes": 1048576,
+          "index_bytes": 14848,
+          "indexed_nodes": 16,
+          "preloaded_nodes": 2,
+          "preloaded_payload_bytes": 19,
+          "preload_path_nodes": 1,
+          "preloaded_key_bytes": 11,
+          "index_array_limit": 3
+        },
+        "readers": 2,
+        "max_chunk": 65536,
+        "files": 1,
+        "memory": 1
+      },
+      "variant": "optimized-inline-schema",
+      "batch": "final-controlled",
+      "wall_time_utc": "2026-11-04T07:37:08Z",
+      "worker_hwm_kib": 119536,
+      "source_read_bytes": 25189428,
+      "source_read_calls": 1168
+    },
+    {
+      "method": "leanjson",
+      "image": "llm-router-kong:leanjson-final",
+      "input_sha256": "f96626cc1e8ae885751b239990a9952f86363ed900ce8a641927fda7f7d9c646",
+      "elapsed_seconds": 10.812936958,
+      "wire_bytes": 67142793,
+      "process_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59028 kB\nVmRSS:\t   58096 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t  256976 kB\nVmRSS:\t  252704 kB\n",
+      "before_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59028 kB\nVmRSS:\t   58096 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t   94544 kB\nVmRSS:\t   94544 kB\n",
+      "warmup": 1,
+      "messages": 1024,
+      "profile": {
+        "authorize": {
+          "cpu": 1.4999999999432e-05,
+          "elapsed": 0,
+          "heap_kib": 97239.279296875,
+          "calls": 2
+        },
+        "candidates": {
+          "cpu": 0.00098700000000029,
+          "elapsed": 0.00099992752075195,
+          "heap_kib": 97528.09375,
+          "calls": 4
+        },
+        "admit": {
+          "cpu": 0.00061499999999981,
+          "elapsed": 0.0019998550415039,
+          "heap_kib": 97557.18359375,
+          "calls": 4
+        },
+        "decode": {
+          "cpu": 1.217874,
+          "elapsed": 1.2220001220703,
+          "heap_kib": 197764.42871094,
+          "calls": 2
+        },
+        "extract": {
+          "cpu": 0.00039700000000131,
+          "elapsed": 0.0010001659393311,
+          "heap_kib": 181065.45703125,
+          "calls": 2
+        },
+        "transport": {
+          "cpu": 1.892385,
+          "elapsed": 1.9960000514984,
+          "heap_kib": 181045.75683594,
+          "calls": 2
+        },
+        "client_schema": {
+          "cpu": 6.558865,
+          "elapsed": 6.5680000782013,
+          "heap_kib": 97234.33203125,
+          "calls": 2
+        },
+        "strip_reserved": {
+          "cpu": 0.89076,
+          "elapsed": 0.89199995994568,
+          "heap_kib": 150977.88476562,
+          "calls": 2
+        },
+        "sync_begin": {
+          "cpu": 7.1000000000154e-05,
+          "elapsed": 0,
+          "heap_kib": 97248.409179688,
+          "calls": 2
+        },
+        "dimensions": {
+          "cpu": 6.0000000008387e-06,
+          "elapsed": 0,
+          "heap_kib": 97536.346679688,
+          "calls": 4
+        },
+        "request_factors": {
+          "cpu": 2.9999999995312e-06,
+          "elapsed": 0,
+          "heap_kib": 97536.432617188,
+          "calls": 4
+        }
+      },
+      "diagnose": {
+        "readers": 2,
+        "max_chunk": 65536,
+        "output_paused": false,
+        "gc_stopped": false,
+        "profile": {
+          "authorize": {
+            "cpu": 1.4999999999432e-05,
+            "elapsed": 0,
+            "heap_kib": 97239.279296875,
+            "calls": 2
+          },
+          "candidates": {
+            "cpu": 0.00098700000000029,
+            "elapsed": 0.00099992752075195,
+            "heap_kib": 97528.09375,
+            "calls": 4
+          },
+          "admit": {
+            "cpu": 0.00061499999999981,
+            "elapsed": 0.0019998550415039,
+            "heap_kib": 97557.18359375,
+            "calls": 4
+          },
+          "decode": {
+            "cpu": 1.217874,
+            "elapsed": 1.2220001220703,
+            "heap_kib": 197764.42871094,
+            "calls": 2
+          },
+          "extract": {
+            "cpu": 0.00039700000000131,
+            "elapsed": 0.0010001659393311,
+            "heap_kib": 181065.45703125,
+            "calls": 2
+          },
+          "transport": {
+            "cpu": 1.892385,
+            "elapsed": 1.9960000514984,
+            "heap_kib": 181045.75683594,
+            "calls": 2
+          },
+          "client_schema": {
+            "cpu": 6.558865,
+            "elapsed": 6.5680000782013,
+            "heap_kib": 97234.33203125,
+            "calls": 2
+          },
+          "strip_reserved": {
+            "cpu": 0.89076,
+            "elapsed": 0.89199995994568,
+            "heap_kib": 150977.88476562,
+            "calls": 2
+          },
+          "sync_begin": {
+            "cpu": 7.1000000000154e-05,
+            "elapsed": 0,
+            "heap_kib": 97248.409179688,
+            "calls": 2
+          },
+          "dimensions": {
+            "cpu": 6.0000000008387e-06,
+            "elapsed": 0,
+            "heap_kib": 97536.346679688,
+            "calls": 4
+          },
+          "request_factors": {
+            "cpu": 2.9999999995312e-06,
+            "elapsed": 0,
+            "heap_kib": 97536.432617188,
+            "calls": 4
+          }
+        },
+        "files": 1,
+        "closed": 2,
+        "index_stats": {
+          "budget_bytes": 1048576,
+          "index_bytes": 2560,
+          "indexed_nodes": 16,
+          "indexed_depth": 3,
+          "preloaded_key_bytes": 11,
+          "spill_file_bytes": 0,
+          "spill_live_regions": 0,
+          "index_depth": 3,
+          "index_array_limit": 3,
+          "preload_path_nodes": 1,
+          "preloaded_payload_bytes": 19,
+          "preloaded_nodes": 2,
+          "spill_free_regions": 0
+        },
+        "source_io": {
+          "candidates": {
+            "bytes": 32,
+            "calls": 4
+          },
+          "client_schema": {
+            "bytes": 535726509,
+            "calls": 16357
+          },
+          "strip_reserved": {
+            "bytes": 67142805,
+            "calls": 1025
+          },
+          "decode": {
+            "bytes": 67142805,
+            "calls": 1026
+          },
+          "transport": {
+            "bytes": 268570939,
+            "calls": 4105
+          }
+        },
+        "hooks": 29714,
+        "memory": 1
+      },
+      "variant": "released-leanjson",
+      "batch": "final-controlled",
+      "wall_time_utc": "2026-11-04T07:37:28Z",
+      "worker_hwm_kib": 256976,
+      "source_read_bytes": 938583090,
+      "source_read_calls": 22517
+    },
+    {
+      "method": "leanjson",
+      "image": "llm-router-kong:leanjson-final",
+      "input_sha256": "f96626cc1e8ae885751b239990a9952f86363ed900ce8a641927fda7f7d9c646",
+      "elapsed_seconds": 1.690796583,
+      "wire_bytes": 67142794,
+      "process_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59364 kB\nVmRSS:\t   58768 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t  159756 kB\nVmRSS:\t  159756 kB\n",
+      "before_memory": "PID 1\nnginx: master process /usr/local/openresty/nginx/sbin/nginx -p /usr/local/kong -c nginx.conf \nVmHWM:\t   59364 kB\nVmRSS:\t   58768 kB\nPID 1404\nnginx: worker process                                                  \nVmHWM:\t   95516 kB\nVmRSS:\t   95516 kB\n",
+      "warmup": 1,
+      "messages": 1024,
+      "profile": {
+        "decode": {
+          "cpu": 1.341956,
+          "elapsed": 1.3439998626709,
+          "heap_kib": 132834.70117188,
+          "calls": 2
+        },
+        "request_factors": {
+          "cpu": 3.999999999893e-06,
+          "elapsed": 0,
+          "heap_kib": 66471.981445312,
+          "calls": 4
+        },
+        "authorize": {
+          "cpu": 2.7000000000221e-05,
+          "elapsed": 0,
+          "heap_kib": 66171.405273438,
+          "calls": 2
+        },
+        "admit": {
+          "cpu": 0.0012259999999999,
+          "elapsed": 0.0030002593994141,
+          "heap_kib": 66529.801757812,
+          "calls": 4
+        },
+        "sync_begin": {
+          "cpu": 0.00013400000000008,
+          "elapsed": 0,
+          "heap_kib": 66180.735351562,
+          "calls": 2
+        },
+        "candidates": {
+          "cpu": 0.0022710000000001,
+          "elapsed": 0.0019998550415039,
+          "heap_kib": 66463.719726562,
+          "calls": 4
+        },
+        "dimensions": {
+          "cpu": 1.3999999999958e-05,
+          "elapsed": 0,
+          "heap_kib": 66471.895507812,
+          "calls": 4
+        },
+        "transport": {
+          "cpu": 0.114707,
+          "elapsed": 0.19000029563904,
+          "heap_kib": 124235.4296875,
+          "calls": 2
+        },
+        "client_schema": {
+          "cpu": 5.9999999999505e-06,
+          "elapsed": 0,
+          "heap_kib": 66166.975585938,
+          "calls": 2
+        },
+        "extract": {
+          "cpu": 0.00026700000000002,
+          "elapsed": 0,
+          "heap_kib": 124251.50097656,
+          "calls": 2
+        },
+        "strip_reserved": {
+          "cpu": 0.015654,
+          "elapsed": 0.014999866485596,
+          "heap_kib": 66140.381835938,
+          "calls": 2
+        }
+      },
+      "diagnose": {
+        "index_stats": {
+          "indexed_depth": 3,
+          "spill_file_bytes": 0,
+          "spill_live_regions": 0,
+          "spill_free_regions": 0,
+          "structural_index_bytes": 98304,
+          "lookup_cache_bytes": 0,
+          "lookup_cache_hits": 0,
+          "lookup_cache_misses": 0,
+          "preloaded_nodes": 2,
+          "preloaded_payload_bytes": 19,
+          "preload_path_nodes": 1,
+          "preloaded_key_bytes": 11,
+          "index_depth": 3,
+          "index_array_limit": 3,
+          "budget_bytes": 1048576,
+          "index_bytes": 100864,
+          "indexed_nodes": 16
+        },
+        "source_io": {
+          "transport": {
+            "bytes": 134340885,
+            "calls": 6155
+          },
+          "decode": {
+            "bytes": 67142805,
+            "calls": 1026
+          },
+          "candidates": {
+            "bytes": 8,
+            "calls": 1
+          },
+          "strip_reserved": {
+            "bytes": 27778,
+            "calls": 2050
+          }
+        },
+        "readers": 2,
+        "max_chunk": 65536,
+        "files": 1,
+        "output_paused": false,
+        "gc_stopped": false,
+        "profile": {
+          "decode": {
+            "cpu": 1.341956,
+            "elapsed": 1.3439998626709,
+            "heap_kib": 132834.70117188,
+            "calls": 2
+          },
+          "request_factors": {
+            "cpu": 3.999999999893e-06,
+            "elapsed": 0,
+            "heap_kib": 66471.981445312,
+            "calls": 4
+          },
+          "authorize": {
+            "cpu": 2.7000000000221e-05,
+            "elapsed": 0,
+            "heap_kib": 66171.405273438,
+            "calls": 2
+          },
+          "admit": {
+            "cpu": 0.0012259999999999,
+            "elapsed": 0.0030002593994141,
+            "heap_kib": 66529.801757812,
+            "calls": 4
+          },
+          "sync_begin": {
+            "cpu": 0.00013400000000008,
+            "elapsed": 0,
+            "heap_kib": 66180.735351562,
+            "calls": 2
+          },
+          "candidates": {
+            "cpu": 0.0022710000000001,
+            "elapsed": 0.0019998550415039,
+            "heap_kib": 66463.719726562,
+            "calls": 4
+          },
+          "dimensions": {
+            "cpu": 1.3999999999958e-05,
+            "elapsed": 0,
+            "heap_kib": 66471.895507812,
+            "calls": 4
+          },
+          "transport": {
+            "cpu": 0.114707,
+            "elapsed": 0.19000029563904,
+            "heap_kib": 124235.4296875,
+            "calls": 2
+          },
+          "client_schema": {
+            "cpu": 5.9999999999505e-06,
+            "elapsed": 0,
+            "heap_kib": 66166.975585938,
+            "calls": 2
+          },
+          "extract": {
+            "cpu": 0.00026700000000002,
+            "elapsed": 0,
+            "heap_kib": 124251.50097656,
+            "calls": 2
+          },
+          "strip_reserved": {
+            "cpu": 0.015654,
+            "elapsed": 0.014999866485596,
+            "heap_kib": 66140.381835938,
+            "calls": 2
+          }
+        },
+        "memory": 1,
+        "closed": 2,
+        "hooks": 9258
+      },
+      "variant": "optimized-inline-schema",
+      "batch": "final-controlled",
+      "wall_time_utc": "2026-11-04T07:37:38Z",
+      "worker_hwm_kib": 159756,
+      "source_read_bytes": 201511476,
+      "source_read_calls": 9232
+    }
+  ]
+}

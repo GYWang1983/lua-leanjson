@@ -21,10 +21,11 @@ function M.open(raw, opts, codec)
     if source == nil then error(shared.result_error(result), 0) end
     source = ffi.gc(source, C.leanjson_source_v1_release)
     local backend = setmetatable({ raw = raw, memory = true, opts = opts, state = { source = source } }, Memory)
-    backend.loading = require("leanjson.loading").new(backend)
     -- Construction events are drained per bounded feed; unselected bytes and
     -- native input pointers are never retained by the validator.
     local ok, value = pcall(function()
+    shared.configure_source(backend, codec)
+    backend.loading = require("leanjson.loading").new(backend)
     local first = 0
     repeat
         local count = math.min(#raw - first, opts.chunk_size)

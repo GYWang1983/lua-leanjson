@@ -137,6 +137,39 @@ creates ordinary Lua values; reserve it for consumers that require them.
 
 ## Choose what to load
 
+`decode`, `decode_file` and `new_decoder` accept `structural_index` (default
+`true`). Set it to `false` to disable the optional validated string-boundary
+index. This preserves validation and lazy access; automatic prefix indexes and
+the shared demand cache remain controlled by the existing index settings.
+All three retained metadata stores share `index_budget_bytes`.
+
+To validate a request while it is scanned, compile its Schema once and pass the
+plan as `schema`:
+
+```lua
+local plan = json.compile_schema {
+    type = "object",
+    required = { "model", "messages" },
+    properties = {
+        model = { type = "string" },
+        messages = { type = "array", minItems = 1, items = {
+            type = "object", required = { "role", "content" },
+            properties = { role = { type = "string" }, content = { type = "string" } },
+        } },
+    },
+}
+local body = json.decode_file("request.json", {
+    schema = plan,
+    structural_index = true, -- false disables boundary retention, not validation
+})
+json.close(body)
+```
+
+The same native scan performs JSON and Schema checks before returning a value.
+Type/length-only strings do not become full Lua strings. See
+[scan-time Schema validation](docs/schema-validation.md) for the executable
+subset, compilation errors, numeric semantics and memory costs.
+
 By default, `decode()` returns lazy proxies. Use `preload_paths` to have selected
 fields ready when decoding finishes:
 
@@ -623,6 +656,16 @@ normalization can spill its exact key index to temporary storage; choose a
 writable disk-backed `temp_dir` when that storage must not consume RAM. A
 memory-backed filesystem and the OS page cache still count toward system or
 container memory even when process RSS stays low.
+
+Successful lazy lookups can add final per-key/index results, including confirmed
+absence and path ancestors, even outside the automatic prefix/depth bounds.
+They remain subject to the byte budget. Repeated lookups and forks share this
+immutable-source cache; branch edits take precedence. Partial automatic indexes
+never certify an earlier duplicate as the final value. `source_stats()` reports
+`structural_index_bytes`, `lookup_cache_bytes`, `lookup_cache_hits` and
+`lookup_cache_misses`; `index_bytes` includes all retained optional metadata and
+may change after reads. Structural storage retains selected validated value-string
+spans with 64-bit coordinates, rather than a full member tree or all punctuation.
 
 ## Native OpenResty integration
 

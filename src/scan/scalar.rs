@@ -11,7 +11,7 @@ impl Scanner for ScalarScanner {
 /// Single-pass: emit structural offsets AND validate bracket pairing inline.
 /// Replaces the two-pass `scan_emit_resume` + `validate_brackets` sequence.
 pub(crate) fn scan_and_validate(buf: &[u8], out: &mut Vec<u32>) -> Result<(), usize> {
-    out.reserve(buf.len() / 6);
+    out.reserve((buf.len() / 6).min(256));
     let mut i = 0usize;
     let mut in_str = false;
     let mut stack: Vec<u8> = Vec::with_capacity(32);

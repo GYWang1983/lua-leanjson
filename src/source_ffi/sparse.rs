@@ -52,11 +52,17 @@ pub struct leanjson_source_v2_stats {
 pub struct leanjson_source_v2_workspace_stats {
     pub spill_file_bytes: u64, pub spill_live_regions: u64, pub spill_free_regions: u64,
 }
-enum CacheWalk { Prefix { ordinal: u64, offset: u64 }, Index(u64), Object { remaining: usize, hash: u64 }, Streaming, Finished }
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct leanjson_source_v2_index_stats {
+    pub structural_index_bytes: u64, pub lookup_cache_bytes: u64,
+    pub lookup_cache_hits: u64, pub lookup_cache_misses: u64,
+}
+enum CacheWalk { Confirmed, Prefix { ordinal: u64, offset: u64 }, Index(u64), Object { remaining: usize, hash: u64 }, Streaming, Finished }
 pub struct leanjson_source_v2_iter {
     source: Rc<leanjson_source_v1>, span: Span, mode: u32, lookup: Option<Lookup>,
     cached: CacheWalk, walker: Option<Walker>, pending: Option<SpanMember>, key_reader: Option<SourceReader>,
-    key: Vec<u8>, failure: Option<SourceError>,
+    key: Vec<u8>, failure: Option<SourceError>, confirmed: bool,
 }
 
 /// Create a capacity-bounded source. Feed/finish/abort/retain/release use v1.
@@ -81,6 +87,31 @@ pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_
         Ok(Err(error)) => { write_result(out, leanjson_source_v1_result::error(error)); ptr::null_mut() },
         Err(_) => { write_result(out, oom()); ptr::null_mut() },
     }
+}
+/// Enable/disable validated string-boundary retention before the first feed.
+/// # Safety
+/// Handle and result obey the v1 source contract; enabled must be zero or one.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_set_structural_index(handle: *const leanjson_source_v1, enabled: u32, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        if enabled > 1 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
+        source(handle)?.inner.borrow_mut().set_structural_index(enabled != 0)?;
+        Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
+    })
+}
+/// Additive metadata accounting; existing v2 stats/layout stay unchanged.
+/// # Safety
+/// Handle and output pointers obey the v1 source contract.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_get_index_stats(handle: *const leanjson_source_v1, stats: *mut leanjson_source_v2_index_stats, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        if stats.is_null() { return Err(invalid_arg()); }
+        let source = source(handle)?.inner.borrow(); source.ready()?;
+        if source.index_options().is_none() { return Err(invalid_arg()); }
+        *stats = leanjson_source_v2_index_stats { structural_index_bytes: source.structural_index_bytes() as u64,
+            lookup_cache_bytes: source.lookup_cache_bytes() as u64, lookup_cache_hits: source.lookup_cache_hits(), lookup_cache_misses: source.lookup_cache_misses() };
+        Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
+    })
 }
 /// Return the immutable root span after full validation and EOF.
 /// # Safety
@@ -143,7 +174,9 @@ unsafe fn iter_begin(node: leanjson_source_v2_node, normalize: u32, lookup: Opti
         return Err(SourceError::json(leanjson_err::LEANJSON_TYPE_MISMATCH, span.raw_start));
     }
     let handle = source(node.source)?;
-    let cached = match &lookup {
+    let demand = lookup.as_ref().and_then(|lookup| handle.inner.borrow_mut().lookup_cached(span.raw_start, lookup));
+    let confirmed = demand.is_some();
+    let cached = if confirmed { CacheWalk::Confirmed } else { match &lookup {
         Some(Lookup::Index(index)) if *index >= span.child_count => CacheWalk::Finished,
         Some(Lookup::Index(index)) => CacheWalk::Index(*index),
         Some(Lookup::Key(key)) => match handle.inner.borrow().cached_count(span.raw_start) {
@@ -156,10 +189,10 @@ unsafe fn iter_begin(node: leanjson_source_v2_node, normalize: u32, lookup: Opti
         },
         None if normalize != 0 && span.kind == leanjson_type::LEANJSON_T_OBJ => CacheWalk::Streaming,
         None => CacheWalk::Prefix { ordinal: 0, offset: span.raw_start },
-    };
+    }};
     *iter_out = Box::into_raw(Box::new(leanjson_source_v2_iter { source: clone_source(node.source), span,
-        mode: normalize, lookup, cached, walker: None, pending: None, key_reader: None,
-        key: Vec::new(), failure: None }));
+        mode: normalize, lookup, cached, walker: None, pending: demand.flatten(), key_reader: None,
+        key: Vec::new(), failure: None, confirmed }));
     Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
 }
 /// Start lexical (0), normalized (1), or lexical with final-occurrence metadata
@@ -202,6 +235,19 @@ impl leanjson_source_v2_iter {
         Ok(())
     }
     fn next(&mut self) -> Result<WalkStep, SourceError> {
+        let step = self.next_uncached()?;
+        if !self.confirmed {
+            if let Some(lookup) = &self.lookup {
+                match &step {
+                    WalkStep::Member(member) => { self.source.inner.borrow_mut().cache_lookup(self.span.raw_start, lookup, Some(member)); self.confirmed = true; },
+                    WalkStep::Done => { self.source.inner.borrow_mut().cache_lookup(self.span.raw_start, lookup, None); self.confirmed = true; },
+                    WalkStep::NeedRead { .. } => {},
+                }
+            }
+        }
+        Ok(step)
+    }
+    fn next_uncached(&mut self) -> Result<WalkStep, SourceError> {
         if let Some(error) = self.failure { return Err(error); }
         loop {
             if let Some(reader) = self.key_reader.as_mut() {
@@ -220,16 +266,20 @@ impl leanjson_source_v2_iter {
                 return Ok(WalkStep::Member(member));
             }
             match self.cached {
+                CacheWalk::Confirmed => {
+                    self.cached = CacheWalk::Finished;
+                    return Ok(match self.pending.take() { Some(member) => WalkStep::Member(member), None => WalkStep::Done });
+                },
                 CacheWalk::Finished => return Ok(WalkStep::Done),
                 CacheWalk::Streaming => {
                     if self.walker.is_none() {
                         let source = self.source.inner.borrow();
-                        self.walker = Some(if self.mode == 2 && self.span.kind == leanjson_type::LEANJSON_T_OBJ {
+                        self.walker = Some((if self.mode == 2 && self.span.kind == leanjson_type::LEANJSON_T_OBJ {
                             Walker::linked(self.span, source.window_size(), self.source.spill_dir.clone(), source.workspace(), source.policy())
                         } else {
                             Walker::new(self.span, source.window_size(), self.mode == 1,
                                 self.lookup.clone(), self.source.spill_dir.clone(), source.workspace(), source.policy())
-                        });
+                        }).with_structural_index(source.structural_index()));
                     }
                     return self.walker.as_mut().unwrap().next();
                 },
@@ -248,7 +298,8 @@ impl leanjson_source_v2_iter {
                         else { return Ok(WalkStep::Member(SpanMember { ordinal, key_start: 0, key_end: 0, key: Vec::new(), value })); }
                     } else {
                         self.walker = Some(Walker::resume(self.span, (offset, ordinal), self.source.inner.borrow().window_size(),
-                            self.mode == 1, self.source.spill_dir.clone(), self.source.inner.borrow().workspace(), self.source.inner.borrow().policy()));
+                            self.mode == 1, self.source.spill_dir.clone(), self.source.inner.borrow().workspace(), self.source.inner.borrow().policy())
+                            .with_structural_index(self.source.inner.borrow().structural_index()));
                         self.cached = CacheWalk::Streaming;
                     }
                 },

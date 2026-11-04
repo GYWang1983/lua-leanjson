@@ -9,6 +9,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 ### Added
 
 - Add optional-path `len`, `exists` and `is_empty` queries over memory/file/feed proxies and eager values, preserving Lua truthiness and counting lazy string bytes without full materialization.
+- Add reusable `compile_schema` plans and scan-time Schema assertions for memory/file/incremental input, without materializing type/length-only string bodies.
+- Add the default-on `structural_index` switch, budgeted string-boundary metadata and final positive/negative demand lookup caching shared across forks, with additive native stats.
+
+### Changed
+
+- Bound legacy scanners' initial structural-offset reservation and reuse synchronous file-read buffers up to 64 KiB to reduce temporary allocation.
 
 ## [0.1.0] - 2026-11-03
 

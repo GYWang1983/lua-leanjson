@@ -41,6 +41,20 @@ function M.native_options(opts)
     return ffi.new("leanjson_source_v2_options[1]", { { 2, mode, opts.max_depth, opts.chunk_size,
         opts.index_depth, opts.index_array_limit, opts.index_budget_bytes, 0, opts.temp_dir, #opts.temp_dir } })
 end
+function M.configure_source(backend, codec)
+    local result = ffi.new("leanjson_source_v1_result[1]")
+    M.require_status(C.leanjson_source_v2_set_structural_index(backend.state.source,
+        backend.opts.structural_index and 1 or 0, result), READY, result, backend.state.source)
+    if backend.opts.schema ~= nil then
+        local schema = require("leanjson.schema")
+        local plan = schema.compile(backend.opts.schema, codec)
+        M.require_status(C.leanjson_source_v2_set_schema(backend.state.source,
+            schema.pointer(plan), result), READY, result, backend.state.source)
+        -- The native validator owns its own plan reference. Do not keep a Lua
+        -- wrapper alive for the lifetime of an already decoded request body.
+        backend.opts.schema = nil
+    end
+end
 function M.type(self, handle) self:check_open(); return kinds[tonumber(handle.kind)] end
 function M.identity(self, handle) return M.exact(handle.raw_start) end
 function M.span(self, handle) self:check_open(); return M.exact(handle.raw_start), M.exact(handle.raw_end) end
@@ -61,6 +75,11 @@ function M.stats(self)
     local out = {}
     for _, name in ipairs({ "budget_bytes", "index_bytes", "indexed_nodes", "indexed_depth", "index_depth", "index_array_limit" }) do
         out[name] = M.exact(stats[0][name])
+    end
+    local index = ffi.new("leanjson_source_v2_index_stats[1]")
+    M.require_status(C.leanjson_source_v2_get_index_stats(self.state.source, index, result), READY, result)
+    for _, name in ipairs({ "structural_index_bytes", "lookup_cache_bytes", "lookup_cache_hits", "lookup_cache_misses" }) do
+        out[name] = M.exact(index[0][name])
     end
     local workspace = ffi.new("leanjson_source_v2_workspace_stats[1]")
     M.require_status(C.leanjson_source_v2_get_workspace_stats(self.state.source, workspace, result), READY, result)

@@ -20,11 +20,17 @@ test-panic = []
 memchr = "2"
 rustc-hash = "2"
 once_cell = "1"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+num-bigint = "0.4"
+num-traits = "0.2"
+regress = "0.10"
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+fluent-uri = "0.4"
 
 [dev-dependencies]
 proptest = "1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [profile.release]

@@ -40,7 +40,7 @@ impl Scanner for NeonScanner {
         if buf.is_empty() {
             return Ok(());
         }
-        out.reserve(buf.len() / 6);
+        out.reserve((buf.len() / 6).min(256));
         // SAFETY: caller (dispatcher in mod.rs) verified `aes` feature is
         // present at runtime via `is_aarch64_feature_detected!("aes")`.
         unsafe { scan_neon_impl(buf, out) }

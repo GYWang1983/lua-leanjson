@@ -11,6 +11,12 @@ do
 end
 
 local raw = '{"model":"original","nested":{"n":42},"items":[false,null]}'
+local plan = leanjson.compile_schema({type = "object", required = {"model"},
+    properties = {model = {type = "string"}}})
+local checked = leanjson.decode(raw, {schema = plan, structural_index = false})
+assert(checked.model == "original")
+assert(leanjson.source_stats(checked).structural_index_bytes == 0)
+leanjson.close(checked)
 local memory = leanjson.decode(raw)
 assert(memory.model == "original")
 leanjson.close(memory)

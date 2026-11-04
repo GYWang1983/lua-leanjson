@@ -613,6 +613,7 @@ local function new_codec()
     end
     codec.decode_file = function(filename, opts) return require("leanjson.source").decode_file(filename, opts, codec) end
     codec.new_decoder = function(opts) return require("leanjson.source").new_decoder(opts, codec) end
+    codec.compile_schema = function(schema) return require("leanjson.schema").compile(schema, codec) end
     codec.fork = function(value) return proxy.fork(value, codec) end
     codec.type = function(value) return proxy.type(value, classify_table) end
     codec.get = function(value, path) return require("leanjson.path").get(value, path, codec) end
@@ -623,7 +624,7 @@ local function new_codec()
 end
 
 local default = new_codec()
-local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader",
+local public_methods = { "encode", "decode", "decode_file", "new_decoder", "reader", "compile_schema",
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
     "encode_indent", "encode_skip_unsupported_value_types", "encode_keep_buffer",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",

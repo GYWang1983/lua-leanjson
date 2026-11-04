@@ -293,6 +293,7 @@ _M.decode_array_with_array_mt = _lazy.decode_array_with_array_mt
 _M._LazyObject    = _lazy._LazyObject
 _M._LazyArray     = _lazy._LazyArray
 _M.decode_file    = _lazy.decode_file
+_M.compile_schema = _lazy.compile_schema
 _M.new_decoder    = _lazy.new_decoder
 _M.get            = _lazy.get
 

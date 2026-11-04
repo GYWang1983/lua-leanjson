@@ -14,7 +14,7 @@ pub struct Avx2Scanner;
 impl Scanner for Avx2Scanner {
     fn scan(buf: &[u8], out: &mut Vec<u32>) -> Result<(), usize> {
         if buf.is_empty() { return Ok(()); }
-        out.reserve(buf.len() / 6);
+        out.reserve((buf.len() / 6).min(256));
         // SAFETY: target feature presence is verified at runtime by the
         // dispatcher (Task 16). Direct calls in tests assume the host has
         // AVX2+PCLMUL (the CI / test runner is responsible for this).

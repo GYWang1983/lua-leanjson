@@ -18,6 +18,8 @@ mod sparse;
 pub use sparse::*;
 mod loading;
 pub use loading::*;
+mod schema;
+pub use schema::*;
 
 pub const LEANJSON_SOURCE_V1_API: u32 = 1;
 pub const LEANJSON_SOURCE_V1_READY: u32 = 0;

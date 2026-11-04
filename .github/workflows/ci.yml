@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [master, main, feat/openresty-json-source]
+    branches: [master, main, release-0.1, feat/openresty-json-source]
   pull_request:
 
 permissions:
@@ -438,11 +438,7 @@ jobs:
         env:
           LUAJIT_BIN: ${{ steps.luajit.outputs.path }}
         run: |
-          # ffi.load("leanjson") uses dlopen which respects LD_LIBRARY_PATH,
-          # not LuaJIT's package.cpath. Point dlopen at the release build dir.
-          LD_LIBRARY_PATH="$PWD/target/release" \
-            busted --lua="$LUAJIT_BIN" tests/lua \
-              --lpath='./lua/?.lua'
+          scripts/verify-luajit.sh plain
 
       - name: Validate LuaRocks package
         if: matrix.runtime.validate_rockspec
@@ -462,7 +458,7 @@ jobs:
               LUA_CPATH='/tmp/lua-leanjson-rock/lib/lua/5.1/?.so' \
               "$LUAJIT_BIN" "$SMOKE"
           )
-          busted --lua="$LUAJIT_BIN" tests/lua
+          "$LUAJIT_BIN" scripts/run-busted.lua tests/lua
 
   lua-valgrind:
     name: Lua valgrind memcheck (upstream LuaJIT)
@@ -501,31 +497,23 @@ jobs:
           LUAJIT_BIN: ${{ steps.luajit.outputs.path }}
           LUA_INIT: if jit then jit.off() end
         run: |
-          # Valgrind is an end-to-end canary for the real LuaJIT FFI path.
-          # Disable JIT compilation so Memcheck observes the interpreter + FFI
-          # boundary instead of LuaJIT's generated traces. Trace children so
-          # the LuaRocks busted launcher re-execs into the selected LuaJIT
-          # binary under Memcheck. Keep PR coverage to focused smoke specs;
-          # full Lua Valgrind runs live in lua-valgrind-full.yml.
-          LD_LIBRARY_PATH="$PWD/target/release" \
-            valgrind \
-              --trace-children=yes \
-              --error-exitcode=1 \
-              --leak-check=full \
-              --show-leak-kinds=definite,indirect,possible \
-              --errors-for-leak-kinds=definite,indirect,possible \
-              --num-callers=24 \
-              --suppressions=valgrind.supp \
-              busted --lua="$LUAJIT_BIN" \
-                tests/lua/basic_spec.lua \
-                tests/lua/escape_spec.lua \
-                tests/lua/gc_spec.lua \
-                tests/lua/lazy_table_spec.lua \
-                tests/lua/ordered_encode_spec.lua \
-                tests/lua/encode_errors_spec.lua \
-                tests/lua/encode_cjson_compat_spec.lua \
-                tests/lua/options_spec.lua \
-                --lpath='./lua/?.lua'
+          scripts/verify-luajit.sh memcheck \
+            tests/lua/basic_spec.lua \
+            tests/lua/escape_spec.lua \
+            tests/lua/gc_spec.lua \
+            tests/lua/lazy_table_spec.lua \
+            tests/lua/ordered_encode_spec.lua \
+            tests/lua/encode_errors_spec.lua \
+            tests/lua/encode_cjson_compat_spec.lua \
+            tests/lua/options_spec.lua
+
+      - name: Preserve Memcheck diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: luajit-memcheck
+          path: target/luajit-verification/
+          if-no-files-found: ignore
 
   openresty:
     name: OpenResty runtime (${{ matrix.openresty.version }})

@@ -290,14 +290,16 @@ V07 最终 HTTP 使用镜像原配 cjson（SHA-256 `1a1a63451597f538bd6c595cc279
 
 ## 复现与证据导航
 
-下表列出当前结果对应的证据。四个归档各有内部 `SHA256SUMS`；外部 [SHA256SUMS](SHA256SUMS) 校验本报告和归档本身。文件数不含归档根目录的 `SHA256SUMS`。
+发布前已清理本目录的临时归档和校验文件；下列下载链接固定到清理前的 `7232dec` 提交，保留历史证据导航。验证结果及其覆盖边界未因此改变，也未重新执行全量验证。
+
+下表列出当前结果对应的证据。四个归档各有内部 `SHA256SUMS`；外部 [SHA256SUMS](https://github.com/GYWang1983/lua-leanjson/blob/7232dec8672c1dcd9cf38c2cf9c57de6fdc3d7f6/docs/verification/SHA256SUMS) 校验本报告和归档本身。文件数不含归档根目录的 `SHA256SUMS`。
 
 | 交付物 | 大小 / 内容文件数 | SHA-256 |
 | --- | --- | --- |
-| [V05–V08 运行时验证证据](runtime-verification-evidence.tar.gz) | 5,958,484 字节 / 1,472 个 | `244e983bb8b2dc40371608642a7683705f0bbcb69eb0fba04e61f3a08f7ea7b6` |
-| [核心门禁与兼容性证据](v01-v03-fixes-evidence.tar.gz) | 33,521,157 字节 / 4,925 个 | `b35a2d73764f87ce11ea509768482a311209a39c46a00327398c6ba7c2649e50` |
-| [内存与安装验证证据](full-verification-primary-evidence.tar.gz) | 17,642,272 字节 / 2,570 个 | `77aea26436ad83fec617436a88ef0a3782d9b8678fe97e4c962d9ba09d028c29` |
-| [扩展环境验证证据](full-verification-extended-evidence.tar.gz) | 1,863,542 字节 / 6,254 个 | `68968f66b45de528e36991741d8ace1990199e68022cba8a59ec59522e8323b3` |
+| [V05–V08 运行时验证证据](https://github.com/GYWang1983/lua-leanjson/blob/7232dec8672c1dcd9cf38c2cf9c57de6fdc3d7f6/docs/verification/runtime-verification-evidence.tar.gz) | 5,958,484 字节 / 1,472 个 | `244e983bb8b2dc40371608642a7683705f0bbcb69eb0fba04e61f3a08f7ea7b6` |
+| [核心门禁与兼容性证据](https://github.com/GYWang1983/lua-leanjson/blob/7232dec8672c1dcd9cf38c2cf9c57de6fdc3d7f6/docs/verification/v01-v03-fixes-evidence.tar.gz) | 33,521,157 字节 / 4,925 个 | `b35a2d73764f87ce11ea509768482a311209a39c46a00327398c6ba7c2649e50` |
+| [内存与安装验证证据](https://github.com/GYWang1983/lua-leanjson/blob/7232dec8672c1dcd9cf38c2cf9c57de6fdc3d7f6/docs/verification/full-verification-primary-evidence.tar.gz) | 17,642,272 字节 / 2,570 个 | `77aea26436ad83fec617436a88ef0a3782d9b8678fe97e4c962d9ba09d028c29` |
+| [扩展环境验证证据](https://github.com/GYWang1983/lua-leanjson/blob/7232dec8672c1dcd9cf38c2cf9c57de6fdc3d7f6/docs/verification/full-verification-extended-evidence.tar.gz) | 1,863,542 字节 / 6,254 个 | `68968f66b45de528e36991741d8ace1990199e68022cba8a59ec59522e8323b3` |
 
 | 归档 | 当前结果的证据路径 |
 | --- | --- |
@@ -321,7 +323,7 @@ V07 最终 HTTP 使用镜像原配 cjson（SHA-256 `1a1a63451597f538bd6c595cc279
 工具链、Cargo target/cache 和完整 Docker 镜像不包含在归档内，可按固定来源重新构建。证据中的绝对工作路径需按自己的环境重定位；安装 smoke 的部分 receipt 是步骤简写，具体安装树、加载路径和脚本另有记录。
 
 ```sh
-# 在 docs/verification 中校验交付物
+# 从上述历史链接下载原始交付物到独立目录后校验（包含原版报告）
 shasum -a 256 -c SHA256SUMS
 
 # 每个归档解压到独立空目录后，在该目录校验内部文件

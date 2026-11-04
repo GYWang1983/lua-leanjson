@@ -72,12 +72,25 @@ the package version in `Cargo.toml`. Independent codecs from `new()`,
 LeanJSON, rather than the reference lua-cjson implementation; the LuaRocks
 `scm-1` value describes the development rock revision.
 
-## Install from source
+## Install
 
-The renamed package has **not yet been published to LuaRocks**. From a checkout
-of this fork, install the checked-out revision with the command below. Pin the
-commit you have validated; published branches may not yet include the runtime
-described in the latest local verification report.
+```sh
+luarocks --lua-version=5.1 install lua-leanjson 0.1.0-1
+```
+
+Version 0.1.0 provides a source rock and Linux x86_64/amd64 and ARM64/aarch64
+binary rocks targeting glibc 2.35. Binary installation requires no Rust
+compiler. Configure LuaRocks for the LuaJIT/OpenResty Lua 5.1 module tree;
+PUC Lua and musl/Alpine binaries are not supported by this release.
+
+Release notes: [English](docs/releases/0.1.0.en.md) /
+[简体中文](docs/releases/0.1.0.zh-CN.md).
+
+### Install from a source checkout
+
+From a checkout of this fork, install the checked-out revision with the
+command below. Use the `v0.1.0` tag for the release or pin the development
+commit you have validated.
 
 ```sh
 luarocks --lua-version=5.1 make rockspec/lua-leanjson-scm-1.rockspec

@@ -4,7 +4,7 @@ supported_platforms = { "linux", "macosx" }
 
 source = {
     url = "git+https://github.com/GYWang1983/lua-leanjson.git",
-    branch = "feat/openresty-json-source",
+    branch = "main",
 }
 
 description = {

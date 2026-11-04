@@ -6,10 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-11-03
+
+First release of the lua-leanjson fork. Release notes:
+[English](docs/releases/0.1.0.en.md) · [简体中文](docs/releases/0.1.0.zh-CN.md).
+
 ### Changed
 
 - Rename the fork, Lua module, Rust crate, native library, C ABI, header and environment variables to `lua-leanjson` / `leanjson` / `LEANJSON_*`; existing imports and native consumers must migrate and rebuild. No `qjson` compatibility module is installed.
-- Use an SCM development rockspec for the fork branch; no new release or LuaRocks publication is implied.
+- Publish a versioned source rock and Linux x86_64/aarch64 binary rocks targeting glibc 2.35; retain the SCM rockspec for main development.
 
 ### Added
 
@@ -25,7 +30,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - Run Lua CI integration tests under both upstream LuaJIT and OpenResty LuaJIT.
 - Add optional Miri, ASan, and LuaJIT valgrind CI coverage for the FFI boundary.
 
-## [0.1.0] - 2026-05-19
+## [upstream-0.1.0] - 2026-05-19
 
 ### Added
 
@@ -39,5 +44,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 - RFC 8259 validation coverage, cjson/simdjson fixture coverage, and release CI for Rust, Lua, and LuaRocks package checks.
 - Benchmark harness comparing `qjson` with `lua-cjson` and `lua-resty-simdjson`, with benchmark summaries in the README and documentation.
 
-[Unreleased]: https://github.com/GYWang1983/lua-leanjson/compare/8e1b394e0dd0322bedae3a9fc87d15d8049a02ce...feat/openresty-json-source
-[0.1.0]: https://github.com/api7/lua-qjson/releases/tag/v0.1.0
+[Unreleased]: https://github.com/GYWang1983/lua-leanjson/compare/v0.1.0...main
+[0.1.0]: https://github.com/GYWang1983/lua-leanjson/releases/tag/v0.1.0
+[upstream-0.1.0]: https://github.com/api7/lua-qjson/releases/tag/v0.1.0

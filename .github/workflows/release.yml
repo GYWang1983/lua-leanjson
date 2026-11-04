@@ -1,164 +1,212 @@
 name: Release
 
 on:
+  push:
+    tags: ["v*.*.*"]
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version, for example 0.1.0 or v0.1.0"
+        description: "Existing stable tag version, for example 0.1.0"
         required: true
-  push:
-    branches:
-      - "main"
-    paths:
-      - "rockspec/**"
+        default: "0.1.0"
+      publish:
+        description: "Publish verified packages to LuaRocks and GitHub"
+        type: boolean
+        default: false
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: luarocks-release
+  cancel-in-progress: false
 
 jobs:
-  release:
-    name: Release
-    runs-on: ubuntu-latest
+  source:
+    name: Package exact-tag source
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check release identity and notes
+        id: version
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          PUBLISH: ${{ github.event_name == 'push' || inputs.publish }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED_VERSION:-${GITHUB_REF_NAME#v}}"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          if git rev-parse --verify "refs/tags/v$version^{commit}" > /dev/null 2>&1; then
+            test "$(git rev-parse "refs/tags/v$version^{commit}")" = "$GITHUB_SHA"
+          else
+            test "$PUBLISH" = false
+            echo "Preflight of the exact commit before creating v$version"
+          fi
+          git merge-base --is-ancestor origin/main HEAD
+          test -f "rockspec/lua-leanjson-$version-1.rockspec"
+          test -s "docs/releases/$version.en.md"
+          test -s "docs/releases/$version.zh-CN.md"
+          test -s docs/verification/full-verification.md
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Check publication tooling
+        run: python3 -m unittest discover -s tests -p test_publish_rocks.py -v
+
+      - name: Install source packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y luarocks
+
+      - name: Pack immutable source
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cd dist
+          if git -C "$GITHUB_WORKSPACE" rev-parse --verify "refs/tags/v$VERSION" > /dev/null 2>&1; then
+            luarocks pack "$GITHUB_WORKSPACE/rockspec/lua-leanjson-$VERSION-1.rockspec"
+          else
+            # Preflight only: a source rock contains its rockspec and source
+            # archive. Use the exact candidate tree before its public tag exists.
+            git -C "$GITHUB_WORKSPACE" archive --format=tar.gz \
+              --prefix="lua-leanjson-$VERSION/" HEAD > "v$VERSION.tar.gz"
+            python3 - <<'PYZIP'
+          import os
+          from pathlib import Path
+          import zipfile
+          version = os.environ['VERSION']
+          spec = Path(os.environ['GITHUB_WORKSPACE']) / 'rockspec' / ('lua-leanjson-' + version + '-1.rockspec')
+          source = Path('v' + version + '.tar.gz')
+          with zipfile.ZipFile('lua-leanjson-' + version + '-1.src.rock', 'w', zipfile.ZIP_DEFLATED) as archive:
+              archive.write(spec, spec.name)
+              archive.write(source, source.name)
+          source.unlink()
+          PYZIP
+          fi
+          cp "$GITHUB_WORKSPACE/rockspec/lua-leanjson-$VERSION-1.rockspec" .
+          cp "$GITHUB_WORKSPACE/docs/releases/$VERSION.en.md" RELEASE_NOTES.en.md
+          cp "$GITHUB_WORKSPACE/docs/releases/$VERSION.zh-CN.md" RELEASE_NOTES.zh-CN.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-source
+          path: dist/*
+          if-no-files-found: error
+
+  binary:
+    name: Binary rock (${{ matrix.arch }})
+    needs: source
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: linux-x86_64
+          - runner: ubuntu-22.04-arm
+            arch: linux-aarch64
+    steps:
+      - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
-      - name: Install Lua
-        uses: ./.github/actions/setup-lua
+      - uses: actions/download-artifact@v4
         with:
-          lua-version: "5.1.5"
-          packages: https://luarocks.org/dkjson-2.10-1.src.rock
+          name: release-source
+          path: dist
 
-      - name: Extract release name
-        id: release_env
-        shell: bash
-        env:
-          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
-          RELEASE_VERSION: ${{ inputs.version }}
+      - name: Install pinned toolchain and packaging tools
         run: |
-          semver_re="^v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$"
-          if [ -n "$RELEASE_VERSION" ]; then
-              if [[ $RELEASE_VERSION =~ $semver_re ]]; then
-                  version="${BASH_REMATCH[1]}"
-              else
-                  echo "version input is not correct (expected: X.Y.Z[-prerelease])"
-                  exit 1
-              fi
+          rustup toolchain install 1.90.0 --profile minimal --no-self-update
+          rustup default 1.90.0
+          sudo apt-get update
+          sudo apt-get install -y luarocks luajit binutils ripgrep
+
+      - name: Build and verify installed source and binary rocks
+        env:
+          VERSION: ${{ needs.source.outputs.version }}
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: .github/scripts/build-release-rock.sh "$VERSION" "$EXPECTED_ARCH"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.arch }}
+          path: |
+            dist/*.${{ matrix.arch }}.rock
+            dist/build-info.${{ matrix.arch }}.txt
+          if-no-files-found: error
+
+  publish:
+    name: Publish matching LuaRocks and GitHub artifacts
+    if: github.event_name == 'push' || inputs.publish
+    needs: [source, binary]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Create checksums and bilingual release body
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum *) > "$RUNNER_TEMP/SHA256SUMS"
+          mv "$RUNNER_TEMP/SHA256SUMS" dist/SHA256SUMS
+          cat dist/RELEASE_NOTES.en.md > "$RUNNER_TEMP/release-notes.md"
+          printf '\n---\n\n' >> "$RUNNER_TEMP/release-notes.md"
+          cat dist/RELEASE_NOTES.zh-CN.md >> "$RUNNER_TEMP/release-notes.md"
+
+      - name: Stage GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: |
+          set -euo pipefail
+          tag="v$VERSION"
+          if gh release view "$tag" --json isDraft > "$RUNNER_TEMP/release.json" 2>/dev/null; then
+            test "$(jq -r .isDraft "$RUNNER_TEMP/release.json")" = true
+            gh release upload "$tag" dist/* --clobber
+            gh release edit "$tag" --notes-file "$RUNNER_TEMP/release-notes.md"
           else
-              title="${HEAD_COMMIT_MESSAGE%%$'\n'*}"
-              if [[ $title =~ ^(.*)\ \(#[0-9]+\)$ ]]; then
-                  title="${BASH_REMATCH[1]}"
-              fi
-              title_re="^feat: release v?([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?)$"
-              if [[ $title =~ $title_re ]]; then
-                  version="${BASH_REMATCH[1]}"
-              else
-                  echo "commit format is not correct (expected: feat: release vX.Y.Z[-prerelease])"
-                  exit 1
-              fi
+            gh release create "$tag" dist/* --verify-tag --draft \
+              --title "LeanJSON $VERSION" --notes-file "$RUNNER_TEMP/release-notes.md"
           fi
 
-          echo "version=v${version}" >> $GITHUB_OUTPUT
-          echo "version_without_v=${version}" >> $GITHUB_OUTPUT
-          if [[ $version == *-* ]]; then
-              echo "is_prerelease=true" >> $GITHUB_OUTPUT
-          else
-              echo "is_prerelease=false" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Verify rockspec exists
-        id: verify_rockspec
-        shell: bash
-        env:
-          VERSION_WITHOUT_V: ${{ steps.release_env.outputs.version_without_v }}
-        run: |
-          rockspec_file="$(.github/scripts/latest-rockspec.py --version "$VERSION_WITHOUT_V")"
-          echo "rockspec_file=${rockspec_file}" >> $GITHUB_OUTPUT
-
-      - name: Extract changelog entry
-        id: changelog
-        shell: bash
-        env:
-          VERSION_WITHOUT_V: ${{ steps.release_env.outputs.version_without_v }}
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-
-          version = os.environ["VERSION_WITHOUT_V"]
-          changelog = Path("CHANGELOG.md")
-          if not changelog.is_file():
-              raise SystemExit("CHANGELOG.md not found")
-
-          lines = changelog.read_text(encoding="utf-8").splitlines()
-          heading = re.compile(r"^## \[" + re.escape(version) + r"\](?:\s+-\s+.*)?\s*$")
-          start = None
-          for index, line in enumerate(lines):
-              if heading.match(line):
-                  start = index + 1
-                  break
-
-          if start is None:
-              raise SystemExit(
-                  "CHANGELOG.md is missing a '## [" + version + "]' section; "
-                  "promote the [Unreleased] notes before publishing this release"
-              )
-
-          end = len(lines)
-          for index in range(start, len(lines)):
-              if re.match(r"^## \[[^]]+\]", lines[index]):
-                  end = index
-                  break
-
-          section_lines = lines[start:end]
-          while section_lines and not section_lines[-1].strip():
-              section_lines.pop()
-          while section_lines and re.match(r"^\[[^]]+\]:\s+", section_lines[-1]):
-              section_lines.pop()
-              while section_lines and not section_lines[-1].strip():
-                  section_lines.pop()
-
-          body = "\n".join(section_lines).strip()
-          if not body:
-              raise SystemExit("CHANGELOG.md section for " + version + " is empty")
-
-          body_path = Path(os.environ.get("RUNNER_TEMP", ".")) / "release-notes.md"
-          body_path.write_text(body + "\n", encoding="utf-8")
-          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
-              print(f"body_path={body_path}", file=output)
-          print(f"Using CHANGELOG.md entry for {version}: {body_path}")
-          PY
-
-      - name: Validate LuaRocks token
-        shell: bash
+      - name: Publish source and both binary rocks
         env:
           LUAROCKS_TOKEN: ${{ secrets.LUAROCKS_TOKEN }}
-        run: |
-          if [ -z "$LUAROCKS_TOKEN" ]; then
-              echo "LUAROCKS_TOKEN secret is not configured"
-              exit 1
-          fi
+          VERSION: ${{ needs.source.outputs.version }}
+        run: python3 .github/scripts/publish-rocks.py dist --version "$VERSION"
 
-      - name: Create Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.release_env.outputs.version }}
-          name: ${{ steps.release_env.outputs.version }}
-          body_path: ${{ steps.changelog.outputs.body_path }}
-          draft: false
-          prerelease: ${{ steps.release_env.outputs.is_prerelease }}
-
-      - name: Upload to LuaRocks
+      - name: Verify LuaRocks downloads
         env:
-          LUAROCKS_TOKEN: ${{ secrets.LUAROCKS_TOKEN }}
-          ROCKSPEC_FILE: ${{ steps.verify_rockspec.outputs.rockspec_file }}
-        shell: bash
+          VERSION: ${{ needs.source.outputs.version }}
         run: |
-          mkdir -p "$HOME/.luarocks"
-          chmod 700 "$HOME/.luarocks"
-          lua -e 'local token = os.getenv("LUAROCKS_TOKEN"); assert(token and token ~= "", "missing LUAROCKS_TOKEN"); local f = assert(io.open(os.getenv("HOME") .. "/.luarocks/upload_config.lua", "w")); f:write(("key = %q\n"):format(token)); f:write("server = \"https://luarocks.org\"\nversion = \"1.0\"\n"); f:close()'
-          chmod 600 "$HOME/.luarocks/upload_config.lua"
-          luarocks upload "$ROCKSPEC_FILE"
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/luarocks-downloads"
+          for file in dist/*.rock dist/*.rockspec; do
+            name=$(basename "$file")
+            curl --fail --location --retry 10 --retry-delay 3 --retry-all-errors \
+              "https://luarocks.org/$name" -o "$RUNNER_TEMP/luarocks-downloads/$name"
+            cmp "$file" "$RUNNER_TEMP/luarocks-downloads/$name"
+          done
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.source.outputs.version }}
+        run: gh release edit "v$VERSION" --draft=false --latest

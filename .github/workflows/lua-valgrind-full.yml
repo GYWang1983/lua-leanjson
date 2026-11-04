@@ -63,17 +63,7 @@ jobs:
           LUAJIT_BIN: ${{ steps.luajit.outputs.path }}
           LUA_INIT: if jit then jit.off() end
         run: |
-          LD_LIBRARY_PATH="$PWD/target/release" \
-            valgrind \
-              --trace-children=yes \
-              --error-exitcode=1 \
-              --leak-check=full \
-              --show-leak-kinds=definite,indirect,possible \
-              --errors-for-leak-kinds=definite,indirect,possible \
-              --num-callers=24 \
-              --suppressions=valgrind.supp \
-              busted --lua="$LUAJIT_BIN" tests/lua \
-                --lpath='./lua/?.lua'
+          scripts/verify-luajit.sh memcheck
 
       - name: Open or update failure issue
         if: failure() && github.event_name == 'schedule'

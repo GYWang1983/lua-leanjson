@@ -247,6 +247,64 @@ evaluates and loads `body.prompt` before calling the helper. The query family
 is also available on independent and safe codecs; inspection errors are
 thrown rather than protected conversion results.
 
+## Map values with explicit source references
+
+`ref(value[, path])` captures an immutable logical value without reading a lazy
+string into Lua. It accepts the same optional paths as the inspection helpers:
+
+```lua
+local json = require "leanjson"
+local a = json.decode_file("/tmp/input.json")
+local b = json.decode('{}')
+b.messages = json.ref(a, "$.prompt")
+```
+
+Assigning to a proxy copies the captured value's ownership, sharing its source nodes.
+It preserves the JSON type: a referenced string becomes a string at `b.messages`.
+For a chat message array, construct the small wrapper around the reference:
+
+```lua
+local prompt = json.ref(a, "$.prompt")
+b.messages = { { role = "user", content = prompt } }
+json.close(prompt)       -- b now holds its own source lease
+json.close(a)
+local reader = json.reader(b, { chunk_size = 65536 })
+json.close(b)            -- the reader independently owns its snapshot
+-- Consume reader:next() chunks; close the reader on an early exit/error.
+```
+
+References capture the **current** value, including edits and preloads; later
+source writes do not change them. Source-backed strings/subtrees stay shared.
+Existing Lua strings are shared, while ordinary/eager Lua containers are
+snapshotted under the normal assignment rules. `ref` does not make already
+eager input lazy. A retained reference/target/reader can extend the lifetime of
+the entire original buffer or source file. Close retained handles explicitly;
+unretained temporary handles also release their leases through GC.
+
+A reference is an opaque handle: normal field access and mutation are rejected.
+It uses userdata when available and a protected table otherwise. The fallback
+cannot intercept Lua raw operations such as `rawset`; added raw fields are not
+part of its captured JSON value. Use `json.type`, `json.len`, `json.exists`,
+`json.is_empty`, `json.encode`, `json.reader`, `json.materialize` and `json.close`
+for inspection/output. `materialize` explicitly loads the logical value.
+`fork(ref)` returns an independent mutable proxy for a container; scalar refs
+remain references so forking a long string does not decode it. Container views
+returned by `get`/iteration are detached and cannot mutate the captured handle.
+Ordinary target getters still return their normal values and may load strings.
+
+An ordinary Lua table only stores the reference handle; its assignment has no
+snapshot hook. Keep that handle open until encoding finishes or until a proxy
+assignment, `fork`, or `reader` has captured it. For example,
+`local reader = json.reader({ content = prompt })` captures ownership when
+the reader is created, so `prompt` can then be closed.
+
+A missing/nil or non-traversable path returns nil, so ordinary nil-assignment
+rules apply. JSON null and false produce valid handles. The handle itself is
+truthy in Lua; query helpers inspect the captured logical value (`is_empty` is
+true for a false-valued reference). Invalid paths, closed sources and I/O errors
+raise, including on safe codecs. Destination encoder policies and depth checks
+continue to apply; references do not bypass validation or escaping.
+
 ## Independent codec instances
 
 `leanjson.new()` returns an independent encoder/decoder API table, like

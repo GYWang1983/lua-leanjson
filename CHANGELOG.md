@@ -8,6 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Added
 
+- Add explicit `ref(value[, path])` snapshot handles for source-backed mapping, independent leases and bounded serialization without decoding long scalar strings.
 - Add optional-path `len`, `exists` and `is_empty` queries over memory/file/feed proxies and eager values, preserving Lua truthiness and counting lazy string bytes without full materialization.
 
 ## [0.1.0] - 2026-11-03

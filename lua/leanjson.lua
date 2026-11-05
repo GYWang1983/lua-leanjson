@@ -260,6 +260,7 @@ local _lazy = require("leanjson.table")
 _M.decode         = _lazy.decode
 _M.encode         = _lazy.encode
 _M.fork           = _lazy.fork
+_M.ref            = _lazy.ref
 _M.close          = _lazy.close
 _M.type           = _lazy.type
 _M.array_insert   = _lazy.array_insert

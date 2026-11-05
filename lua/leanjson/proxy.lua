@@ -18,6 +18,7 @@ end
 local Object, ObjectPrototype = carrier()
 local Array, ArrayPrototype = carrier()
 local MarkedArray, MarkedArrayPrototype = carrier()
+local Reference, ReferencePrototype = carrier()
 local config
 local function live_holder(cell)
     local value = cell.public and cell.public[1]
@@ -73,11 +74,14 @@ local function wrap(cell, prepared)
     local holder, value = live_holder(cell)
     if holder then return value end
     local mt, prototype = Object, ObjectPrototype
-    if cell.node.kind == "array" then
+    if cell.reference then mt, prototype = Reference, ReferencePrototype
+    elseif cell.node.kind == "array" then
         if M.array_marked(cell.node) then mt, prototype = MarkedArray, MarkedArrayPrototype
         else mt, prototype = Array, ArrayPrototype end
     end
-    if cell.proxy_mode == "userdata" then
+    if cell.reference then
+        value = prototype and userdata_factory(prototype) or setmetatable({}, mt)
+    elseif cell.proxy_mode == "userdata" then
         if not prototype then error("leanjson: userdata proxy_mode requires the newproxy factory", 0) end
         value = userdata_factory(prototype)
     else value = setmetatable({}, mt) end
@@ -93,6 +97,11 @@ local function wrap(cell, prepared)
 end
 
 local function child_cell(node, parent, key, lexical, scope, expected, codec, mode)
+    -- Reference handles are immutable. Exposed children get independent cells,
+    -- so mutation through get/pairs cannot change the captured reference.
+    if parent and parent.reference then
+        return new_cell(node, nil, nil, lexical, parent.codec, parent.proxy_mode)
+    end
     if parent and not lexical then
         leases.check(scope)
         if parent.closed or parent.node ~= expected then
@@ -179,11 +188,18 @@ function M.node(value)
 end
 function M.scope(value) return META[value] and META[value].scope end
 function M.codec(value) return (META[value] and META[value].cell.codec) or config end
+function M.mode(value) return META[value] and META[value].cell.proxy_mode or "table" end
 function M.from_backend(backend, handle, codec)
     return expose(raw_node(backend, handle), nil, nil, nil, nil, nil, codec, backend.opts and backend.opts.proxy_mode)
 end
 function M.from_node(node, codec, mode) return expose(node, nil, nil, nil, nil, nil, codec, mode) end
-function M.fork(value, codec)
+function M.reference_node(node, codec, mode)
+    local cell = new_cell(node, nil, nil, nil, codec, mode)
+    cell.reference = true
+    return wrap(cell)
+end
+
+local function snapshot(value, codec, reference)
     codec = codec or M.codec(value)
     local holder = META[value]
     local mode = holder and holder.cell.proxy_mode or "table"
@@ -191,12 +207,17 @@ function M.fork(value, codec)
     local ok, result = pcall(function()
         local node = M.snapshot(value, codec.classify, codec.key,
             codec.encode_max_depth and codec.encode_max_depth() or 1000, function(child) leases.pin(captured, child) end)
+        if reference or holder and holder.cell.reference and node.kind ~= "object" and node.kind ~= "array" then
+            return M.reference_node(node, codec, mode)
+        end
         return M.from_node(node, codec, mode)
     end)
     leases.release(captured)
     if not ok then error(result, 0) end
     return result
 end
+function M.fork(value, codec) return snapshot(value, codec, false) end
+function M.reference(value, codec) return snapshot(value, codec, true) end
 
 function M.get_path(value, segments)
     if #segments == 0 then return value end
@@ -273,6 +294,7 @@ end
 -- target/ancestor replacements first, then validate every captured version and
 -- link in one non-yielding step before moving children or publishing any node.
 local function mutate(holder, prepare)
+    if holder.cell.reference then error("leanjson.ref: read-only reference", 0) end
     local scope = holder.scope
     return leases.guard(scope, holder.cell.node, function()
         local records, chain = {}, {}
@@ -375,6 +397,7 @@ Object.__newindex, Array.__newindex = write, write
 function M.len(value)
     local holder = META[value]
     if not holder then return #value end
+    if holder.cell.reference then return require("leanjson.query").len(M.codec(value), value, "$") end
     local cell = holder.cell
     return leases.guard(holder.scope, cell.node, function()
         if cell.node.kind == "array" then return array_length(cell.node, holder.scope) end
@@ -413,6 +436,9 @@ function M.ipairs(value)
     local holder = META[value]
     if not holder then return ipairs(value) end
     leases.check(holder.scope)
+    if holder.cell.reference and holder.cell.node.kind ~= "array" and holder.cell.node.kind ~= "object" then
+        error("leanjson.ref: iteration requires an object or array", 0)
+    end
     if holder.cell.node.kind ~= "array" then
         local cell, version = holder.cell, holder.cell.version
         return function()
@@ -423,8 +449,14 @@ function M.ipairs(value)
     return iterate(value, true)
 end
 function M.pairs(value)
-    if not META[value] then return pairs(value) end
-    return iterate(value, META[value].cell.node.kind == "array")
+    local holder = META[value]
+    if not holder then return pairs(value) end
+    leases.check(holder.scope)
+    local kind = holder.cell.node.kind
+    if holder.cell.reference and kind ~= "array" and kind ~= "object" then
+        error("leanjson.ref: iteration requires an object or array", 0)
+    end
+    return iterate(value, kind == "array")
 end
 Object.__pairs, Array.__pairs = M.pairs, M.pairs
 Object.__ipairs, Array.__ipairs = M.ipairs, M.ipairs
@@ -513,6 +545,12 @@ function M.stats(value)
     if not node or not node.backend or not node.backend.stats then error("leanjson: value has no source diagnostics", 0) end
     return node.backend:stats()
 end
+-- Opaque handles never implicitly decode, serialize or expose source fields.
+Reference.__index = function() error("leanjson.ref: opaque reference; use module helpers", 0) end
+Reference.__newindex = function() error("leanjson.ref: read-only reference", 0) end
+Reference.__tostring = function() return "leanjson.ref" end
+Reference.__metatable = "leanjson.ref"
+Reference.__len, Reference.__pairs, Reference.__ipairs = M.len, M.pairs, M.ipairs
 for key, value in pairs(Array) do MarkedArray[key] = value end
 M.Object, M.Array, M.MarkedArray = Object, Array, MarkedArray
 return M

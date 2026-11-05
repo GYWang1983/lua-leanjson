@@ -35,7 +35,7 @@ local function inspect(value, path, codec, operation, action)
                     leases.check(scope)
                     if node == nil then return action(nil) end
                 end
-                return action(node, scope, true)
+                return action(node, scope, true, proxy.mode(value))
             end)
         end
         if index > #segments then return action(value) end
@@ -81,6 +81,25 @@ function M.len(codec, ...)
         end
         error("leanjson.len: length is only defined for strings, arrays and objects", 0)
     end)
+end
+
+function M.ref(codec, ...)
+    arity("ref", select("#", ...))
+    local value, path = ...
+    local captured
+    local ok, result = pcall(inspect, value, path, codec, "ref", function(item, _, logical, mode)
+        if item == nil then return nil end
+        if logical then captured = proxy.reference_node(item, codec, mode)
+        else captured = proxy.reference(item, codec) end
+        return captured
+    end)
+    -- A retain callback can close the initiating holder after the new handle
+    -- acquires its own lease. guard's final check must not leak that handle.
+    if not ok then
+        if captured then proxy.close(captured) end
+        error(result, 0)
+    end
+    return result
 end
 
 function M.exists(codec, ...)

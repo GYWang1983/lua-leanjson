@@ -493,8 +493,13 @@ local function new_codec()
             if ENCODE_INDENT ~= "" then emit("\n"); emit(string.rep(ENCODE_INDENT, depth)) end
         end
         local function skip(v)
-            return ENCODE_SKIP_UNSUPPORTED and not rawequal(v, _M.null) and not rawequal(v, _M.empty_array)
-                and not proxy.is_proxy(v) and unsupported(type(v), v)
+            if not ENCODE_SKIP_UNSUPPORTED then return false end
+            if proxy.is_proxy(v) then
+                local node = proxy.node(v)
+                return unsupported(node.kind, node.value)
+            end
+            return not rawequal(v, _M.null) and not rawequal(v, _M.empty_array)
+                and unsupported(type(v), v)
         end
         while #stack > 0 do
             local frame = stack[#stack]
@@ -617,6 +622,7 @@ local function new_codec()
     codec.fork = function(value) return proxy.fork(value, codec) end
     codec.type = function(value) return proxy.type(value, classify_table) end
     codec.get = function(value, path) return require("leanjson.path").get(value, path, codec) end
+    codec.ref = function(...) return require("leanjson.query").ref(codec, ...) end
     codec.len = function(...) return require("leanjson.query").len(codec, ...) end
     codec.exists = function(...) return require("leanjson.query").exists(codec, ...) end
     codec.is_empty = function(...) return require("leanjson.query").is_empty(codec, ...) end
@@ -628,7 +634,7 @@ local public_methods = { "encode", "decode", "decode_file", "new_decoder", "read
     "encode_number_precision", "encode_sparse_array", "encode_empty_table_as_object",
     "encode_indent", "encode_skip_unsupported_value_types", "encode_keep_buffer",
     "decode_array_with_array_mt", "decode_invalid_numbers", "decode_validate_utf8", "decode_allow_comment",
-    "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get", "len", "exists", "is_empty" }
+    "encode_invalid_numbers", "encode_escape_forward_slash", "decode_max_depth", "encode_max_depth", "fork", "type", "get", "ref", "len", "exists", "is_empty" }
 local function methods(codec)
     local out = {}
     for _, key in ipairs(public_methods) do out[key] = codec[key] end

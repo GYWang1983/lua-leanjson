@@ -73,6 +73,68 @@ Preloading is source data rather than an edit: untouched spans preserve lexical
 tokens (including large integers), while writes, forks, held children and
 duplicate snapshots keep the usual proxy semantics.
 
+## Explicit immutable references
+
+`leanjson.ref(value[, path])` uses the inspection path grammar, including optional
+`$` roots and zero-based bracket indexes. Omitted/nil/empty paths select the
+whole value. Missing/nil and non-container intermediates return nil; JSON null,
+false and every other present value create an independently owned handle.
+
+```lua
+local prompt = leanjson.ref(a, "$.prompt")
+b.messages = prompt
+leanjson.close(prompt)
+leanjson.close(a)                  -- b owns the captured source independently
+local reader = leanjson.reader(b, { chunk_size = 65536 })
+leanjson.close(b)
+-- Consume reader chunks without concatenating the complete body.
+```
+
+The handle captures the immutable logical node at creation. Lazy strings remain
+source spans; preloaded/edited strings use their existing immutable Lua value.
+A plain/eager table is snapshotted by the existing assignment mechanism, while
+its existing strings remain shared. Capturing a proxy never materializes its
+whole subtree. Subsequent writes to the source, target, or derived mutable views
+are independent. Referencing a root/ancestor into a descendant captures the old
+finite snapshot; encoder depth checks still apply.
+
+Handles reject normal field access/writes and array mutations. They use userdata
+where `newproxy` is available, otherwise a protected private table carrier.
+The table fallback cannot intercept raw Lua primitives such as `rawset`; those
+raw fields are unrelated to the captured JSON node and ignored by serialization.
+Userdata carriers also reject raw table operations.
+They remain opaque; no raw offset/pointer is exposed. `leanjson.type(ref)` reports the
+logical kind, `len(ref)` counts a string's decoded bytes in bounded chunks or a
+container's size, and `exists`/`is_empty` inspect the logical value. In raw Lua,
+a handle is always truthy even when it represents false. Unsupported values and
+invalid scalar lengths follow the existing encoder/query rules.
+
+Assigning a handle to a proxy or inserting it into a proxy array captures its
+node and leases. An ordinary Lua table merely stores the handle: keep it open
+until `encode` finishes or a proxy assignment, `fork`, or `reader` has captured
+the table. A reader that captures its input successfully owns that snapshot
+independently; capture errors follow the usual `next`/`length` error convention.
+`encode`, `reader`, `materialize`,
+`source_stats` and `close` accept it through the private holder registry. Reading
+a mapped target field uses normal getters, so a scalar read can materialize a
+string; merely mapping or streaming does not. A source cannot be freed while a
+handle, assigned target, derived view, or reader still owns it. Explicit `close`
+is idempotent, GC cleans abandoned holders, and failed/cancelled construction
+releases newly acquired resources immediately.
+
+`fork(ref)` preserves scalar references and returns a normal independently
+mutable proxy for containers, retaining their carrier. Children returned by
+`get`/iteration over a container reference are detached mutable views; editing
+them leaves the reference unchanged. An empty `get` path retains its usual
+root-value behavior; use `materialize(ref)` for explicit full Lua values.
+
+Normal/new/safe codecs export `ref`. Construction is an inspection operation
+and throws on malformed paths, closed sources and I/O errors. Referenced
+numbers, strings and containers obey the calling/destination encoder's settings,
+duplicate normalization, depth and escape policies. When raw token reuse is
+ineligible, the existing bounded decoder/encoder transforms the content without
+building a complete string.
+
 ## Path length, presence and Lua falsiness
 
 `leanjson.len(value[, path])`, `leanjson.exists(value[, path])` and

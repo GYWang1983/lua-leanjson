@@ -1,7 +1,7 @@
 //! Native public diagnostics without decoded values or retained input. This
 //! companion tokenizer deliberately accepts native numeric prefixes and raw
 //! control bytes; the strict validator remains authoritative for acceptance.
-use super::validate::NumberState;
+use super::validate::{NumberState, read_escape, EscapeRead};
 
 #[derive(Clone, Copy)]
 enum Context { ArrayFirst, ArrayValue, ArrayAfter, ObjectFirst, ObjectKey, ObjectColon, ObjectValue, ObjectAfter }
@@ -84,6 +84,11 @@ impl Diagnostics {
             if fast && self.seen >= 2 {
                 if self.error.is_some() || self.ended { self.seen += (bytes.len() - i) as u64; break; }
                 if matches!(&self.lex, Some(Lex::String { phase: StringPhase::Plain, .. })) {
+                    if bytes[i] == b'\\' {
+                        if let EscapeRead::Complete { consumed, .. } = read_escape(&bytes[i..]) {
+                            self.seen += consumed as u64; i += consumed; continue;
+                        }
+                    }
                     let (count, _) = super::cjson::plain(&bytes[i..], true);
                     if count != 0 { self.seen += count as u64; i += count; continue; }
                 }

@@ -5,6 +5,7 @@ local input, trials, output = assert(arg[1]), tonumber(arg[2]) or 15, assert(arg
 local schema_file = arg[4] ~= "-" and arg[4] or nil
 local source_mode = arg[5] or "memory"
 local loading_mode = arg[6] or "lazy"
+local preload_paths = arg[7] and arg[7] ~= "-" and cjson.decode(arg[7]) or nil
 assert(source_mode == "memory" or source_mode == "feed")
 assert(loading_mode == "lazy" or loading_mode == "preload" or loading_mode == "eager")
 ffi.cdef[[struct leanjson_bench_timeval { long tv_sec; long tv_usec; }; int gettimeofday(void *, void *);]]
@@ -28,7 +29,7 @@ local function decode(name, source)
     if name == "cjson" then return cjson.decode(source) end
     local opts = {scanner = name == "legacy" and "legacy" or "cjson", schema = schema,
         lazyload = loading_mode ~= "eager",
-        preload_paths = loading_mode == "preload" and {"$.model", "$.stream", "$.messages[*].role"} or nil}
+        preload_paths = loading_mode == "preload" and (preload_paths or {"$.model", "$.stream", "$.messages[*].role"}) or nil}
     if source_mode == "memory" then return json.decode(source, opts) end
     local decoder = json.new_decoder(opts)
     for first = 1, #source, 65536 do assert(decoder:feed(source:sub(first, first + 65535))) end
@@ -67,4 +68,4 @@ for _, name in ipairs(names) do
 end
 print(cjson.encode({measurements = results, cjson_name = cjson._NAME, cjson_version = cjson._VERSION,
     leanjson_name = json._NAME, leanjson_version = json._VERSION, luajit = jit.version,
-    schema = schema_file ~= nil, source_mode = source_mode, loading_mode = loading_mode, methodology = "pre-read fixed-size unique-per-trial input; two GCs before each call; 3 warmups; interleaved order; only decode timed; full output oracle after all trials"}))
+    schema = schema_file ~= nil, source_mode = source_mode, loading_mode = loading_mode, preload_paths = preload_paths, methodology = "pre-read fixed-size unique-per-trial input; two GCs before each call; 3 warmups; interleaved order; only decode timed; full output oracle after all trials"}))

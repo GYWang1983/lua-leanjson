@@ -80,7 +80,7 @@ pub unsafe extern "C" fn leanjson_source_v2_new(opts: *const leanjson_source_v2_
             #[cfg(not(unix))] { std::path::PathBuf::from(std::str::from_utf8(bytes).map_err(|_| invalid_arg())?) }
         };
         let indexes = IndexOptions { depth: opts.index_depth, array_limit: opts.index_array_limit, budget_bytes: opts.index_budget_bytes as usize };
-        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0, comments: opts.mode & MODE_COMMENTS != 0, max_depth: 0 })), spill_dir: directory })) as *mut leanjson_source_v1)
+        Ok(Rc::into_raw(Rc::new(leanjson_source_v1 { inner: RefCell::new(Source::new_sparse(opts.max_depth, opts.window_size as usize, indexes).with_policy(SourcePolicy { invalid_numbers: opts.mode & MODE_INVALID_NUMBERS != 0, raw_bytes: opts.mode & MODE_RAW_BYTES != 0, comments: opts.mode & MODE_COMMENTS != 0, max_depth: 0, fast_strings: false })), spill_dir: directory })) as *mut leanjson_source_v1)
     }));
     match result {
         Ok(Ok(handle)) => { write_result(out, leanjson_source_v1_result::pending(0)); handle },

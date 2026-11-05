@@ -27,6 +27,7 @@ def main():
     parser.add_argument("--synthetic", action="store_true")
     parser.add_argument("--sources", nargs="+", choices=("memory", "feed"), default=["memory", "feed"])
     parser.add_argument("--loading", nargs="+", choices=("lazy", "preload", "eager"), default=["lazy"])
+    parser.add_argument("--preload-path", action="append", help="explicit JSONPath to preload in preload mode")
     parser.add_argument("--trials", type=int, default=21)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -67,7 +68,7 @@ def main():
         schema_bytes = None
     summary = {"image": args.image, "image_id": image_id, "architecture": image["Architecture"],
                "native_sha256": fingerprint, "lua_sha256": lua_hash.hexdigest(), "trials": args.trials,
-               "schema_sha256": digest(schema_bytes) if schema_bytes else None,
+               "schema_sha256": digest(schema_bytes) if schema_bytes else None, "preload_paths": args.preload_path,
                "methodology": "fresh OpenResty process per fixture/source/loading cell; pre-read identical-size input with unique fixed-width marker per trial; implementations interleaved within process; source storage and full output oracles outside timings; feed includes substring/feed overhead; cjson baseline is always memory decode and has no Schema validation",
                "cells": []}
     for name, raw in fixtures:
@@ -82,7 +83,8 @@ def main():
                 cell_dir.mkdir(exist_ok=True)
                 result = subprocess.run(command + ["--entrypoint", "/usr/local/openresty/bin/resty", image_id,
                     "-I", "/workspace/lua", "/workspace/benches/memory_decode.lua", "/measurement/" + name + ".json",
-                    str(args.trials), "/measurement/" + cell_name, schema_name, source, loading],
+                    str(args.trials), "/measurement/" + cell_name, schema_name, source, loading,
+                    json.dumps(args.preload_path) if args.preload_path else "-"],
                     capture_output=True, text=True, timeout=300)
                 (cell_dir / "stderr.log").write_text(result.stderr)
                 if result.returncode:

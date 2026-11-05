@@ -4,9 +4,14 @@
 
 The per-decode `scanner` option accepts `"cjson"` (default) or `"legacy"`.
 It applies to memory, file and incremental inputs, including the OpenResty
-request adapter, eager loading and `preload_paths`. The CJSON-derived C kernel
-scans ordinary string spans without copying them; Rust continues to validate
-syntax, numbers, escapes and strict UTF-8 and produce the same bounded indexes.
+request adapter, eager loading and `preload_paths`. The native block loop handles
+complete string escapes within Rust and retains
+the CJSON-derived C helper for long ordinary spans; dense short spans stay inside
+the Rust loop. Only unfinished escape/UTF-8 state crosses input blocks. The same
+choice applies to scalar string readers and internal walkers. Rust continues to
+validate syntax, numbers, escapes and strict UTF-8 and produce the same bounded
+indexes. Unselected values emit no decoded bytes; selected/Schema data uses a
+bounded native batch, and scalar output keeps at most three remainder bytes.
 Complete-memory input generates native-compatible diagnostics by replaying the
 original input only on error. Streaming sources keep incremental diagnostics,
 with the same plain-string batching. Schema validation receives the same

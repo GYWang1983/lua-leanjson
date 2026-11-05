@@ -250,8 +250,10 @@ adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
 option concerns validation and does not disable source validation. See the
 [source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
 
-`scanner="cjson"` (default) uses a CJSON-derived C loop for ordinary string
-spans while retaining LeanJSON's Rust grammar, validation and bounded indexes.
+`scanner="cjson"` (default) uses a native block string loop: complete escapes
+are handled inside Rust, with the CJSON-derived C helper retained for long plain
+spans. Only incomplete sequences resume byte state across input blocks. This
+retains LeanJSON's grammar, validation and bounded indexes.
 `scanner="legacy"` selects the previous byte-wise path for comparisons or
 rollback. Both work with lazy/eager/preload and Schema validation. Complete
 memory input runs compatibility diagnostics only after an error; file-backed

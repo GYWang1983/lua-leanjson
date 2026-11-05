@@ -1,0 +1,11 @@
+# Native block string loop
+
+User-approved scope: optimize the native string-processing loop, preserving the Lua interface and its final string construction. Continue from cjson-memory-scan rather than changing storage or routing integration.
+
+The existing optimized path still takes/rebuilds the full String Token for individual escaped bytes and returns to C scanning for short ordinary runs. Replace this with a Rust chunk loop: hold string state and token ownership locally, handle complete short/Unicode escapes in one step, and use the legacy per-byte state only for sequences split at chunk boundaries. Keep the existing C ordinary-run kernel for long runs, but disable repeated C calls after a short run in a block. Validate unselected strings without allocating decoded output. Keys still hash normalized decoded bytes; selected/Schema values emit through a fixed-size native batch rather than per-byte callbacks.
+
+Use the same chunk loop for native scalar string reads with bounded output and a maximum three-byte codepoint remainder. Carry the scanner setting through internal policies to walkers/readers; legacy remains the byte-wise oracle. Incremental diagnostics may skip complete valid escapes in a block, falling back to its existing state machine for incomplete or invalid sequences to preserve exact error wording/positions.
+
+Preserve all source v1/v2 layouts and exports, raw-byte/strict UTF-8 policies, slash/DEL flags, duplicate last-wins behavior, preload/eager and Schema semantics, retained-index budgets and panic barriers. Do not create a complete native decoded buffer or change Lua concatenation. Do not change the legacy Document API or expand into unrelated RSS/output work.
+
+Acceptance: cross-check every split and small output limit against legacy byte-wise validation, including malformed escapes and UTF-8, scalar readers, key hashing and full output. Run native/scalar/panic/Lua, upstream compatibility, HTTP, memory and isolated benchmarks on the same fixtures as the preceding report. Compare against both CJSON and the exact prior kernel build. Report measured remaining gaps and strict RSS failures without adjusting thresholds. No main merge or push is included.

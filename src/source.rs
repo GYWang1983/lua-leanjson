@@ -34,7 +34,7 @@ pub const MODE_RAW_BYTES: u32 = 2;
 pub const MODE_COMMENTS: u32 = 4;
 
 #[derive(Clone, Copy, Default)]
-pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool, pub comments: bool, pub max_depth: u32 }
+pub(crate) struct SourcePolicy { pub invalid_numbers: bool, pub raw_bytes: bool, pub comments: bool, pub max_depth: u32, pub fast_strings: bool }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SourceError { pub code: leanjson_err, pub detail: u32, pub offset: u64 }
@@ -100,7 +100,7 @@ pub struct Source {
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
     loading: Option<loading::Loading>, policy: SourcePolicy,
     diagnostic: Option<diagnostic::Diagnostics>, pending_failure: Option<SourceError>, memory_input: bool, fast_strings: bool,
-    schema: Option<crate::schema::Validator>, schema_failure: Option<String>,
+    schema: Option<crate::schema::Validator>, schema_failure: Option<String>, decoded_batch: Vec<u8>,
 }
 impl Source {
     pub fn new(max_depth: u32, window_size: usize) -> Self {
@@ -114,7 +114,7 @@ impl Source {
             structural_reader: None, string_jump: None,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
             loading: None, policy: SourcePolicy::default(), diagnostic: None, pending_failure: None, memory_input: false, fast_strings: false,
-            schema: None, schema_failure: None,
+            schema: None, schema_failure: None, decoded_batch: Vec::new(),
         }
     }
     pub fn new_sparse(max_depth: u32, window_size: usize, indexes: IndexOptions) -> Self {
@@ -126,6 +126,7 @@ impl Source {
     pub(crate) fn with_policy(mut self, mut policy: SourcePolicy) -> Self {
         policy.max_depth = self.max_depth;
         self.diagnostic = Some(diagnostic::Diagnostics::new(self.max_depth, policy.invalid_numbers, policy.comments));
+        self.fast_strings = policy.fast_strings;
         self.policy = policy; self
     }
     pub(crate) fn public_error(&self) -> Option<String> {
@@ -145,6 +146,7 @@ impl Source {
             IndexOptions { depth: 0, array_limit: 0, budget_bytes: 0 });
         source.max_depth = if policy.max_depth == 0 { LEANJSON_MAX_MAX_DEPTH } else { policy.max_depth };
         source.policy = policy;
+        source.fast_strings = policy.fast_strings;
         source.next_offset = start;
         source.events = true;
         source.detect_duplicates = detect;
@@ -251,6 +253,7 @@ impl Source {
             return Err(SourceError::argument(DETAIL_BAD_OPTIONS, self.next_offset));
         }
         self.fast_strings = fast;
+        self.policy.fast_strings = fast;
         Ok(())
     }
     pub(crate) fn feed_memory(&mut self, base: u64, bytes: &[u8]) -> Result<(), SourceError> {
@@ -276,21 +279,49 @@ impl Source {
         diagnostic.finish(bytes.len() as u64);
         self.diagnostic = Some(diagnostic);
     }
-    fn plain_string(&mut self, bytes: &[u8], escape: bool) {
+    fn string_chunk(&mut self, bytes: &[u8], offset: u64) -> Result<usize, (SourceError, usize)> {
         let Some(Token::String { start, value, mut state, mut key, mut key_hash, key_limit }) = self.token.take() else { unreachable!() };
-        state.plain(escape);
-        if value.is_none() {
-            for &byte in bytes { key_hash ^= byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
-        }
-        if let Some(value) = &value { self.scalar_data(value, bytes); }
-        if let Some(key) = key.as_mut() {
-            let count = bytes.len().min(key_limit.saturating_sub(key.len()));
-            key.extend_from_slice(&bytes[..count]);
-        }
-        self.token = Some(Token::String { start, value, state, key, key_hash, key_limit });
+        let scanned = match value.as_ref() {
+            None => state.scan_chunk(bytes, true, usize::MAX, true, |decoded| {
+                for &byte in decoded { key_hash ^= byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
+                if let Some(key) = key.as_mut() {
+                    let count = decoded.len().min(key_limit.saturating_sub(key.len()));
+                    key.extend_from_slice(&decoded[..count]);
+                }
+            }),
+            Some(value) if self.schema.is_some() || value.loading.as_ref().is_some_and(|s| s.full) => {
+                self.string_data_chunk(&mut state, value, bytes)
+            },
+            Some(_) => state.scan_chunk(bytes, true, usize::MAX, false, |_| {}),
+        };
+        let scanned = scanned.map_err(|error| (SourceError::json(error.code, start), error.index))?;
+        let token = Token::String { start, value, state, key, key_hash, key_limit };
+        if scanned.closed {
+            self.token_byte(token, b'"', offset+scanned.consumed as u64-1).map_err(|error| (error, scanned.consumed-1))?;
+        } else { self.token = Some(token); }
+        Ok(scanned.consumed)
+    }
+    fn string_data_chunk(&mut self, state: &mut StringState, value: &Value, bytes: &[u8])
+        -> Result<validate::StringRun, validate::StringScanError>
+    {
+        const BATCH: usize = 4096;
+        let mut buffer = std::mem::take(&mut self.decoded_batch);
+        buffer.clear();
+        let scanned = state.scan_chunk(bytes, true, usize::MAX, true, |mut decoded| {
+            if buffer.is_empty() && decoded.len() >= BATCH { self.scalar_data(value, decoded); return; }
+            while !decoded.is_empty() {
+                let count = decoded.len().min(BATCH-buffer.len());
+                buffer.extend_from_slice(&decoded[..count]);
+                decoded = &decoded[count..];
+                if buffer.len() == BATCH { self.scalar_data(value, &buffer); buffer.clear(); }
+            }
+        });
+        if !buffer.is_empty() { self.scalar_data(value, &buffer); buffer.clear(); }
+        self.decoded_batch = buffer;
+        scanned
     }
     pub(crate) fn feed_member(&mut self, base: u64, bytes: &[u8]) -> Result<(usize, Option<SpanMember>), SourceError> {
-        let count = self.consume(base, bytes, true, false)?;
+        let count = self.consume(base, bytes, true, self.fast_strings)?;
         Ok((count, self.member.take()))
     }
     fn consume(&mut self, base: u64, bytes: &[u8], stop: bool, fast: bool) -> Result<usize, SourceError> {
@@ -315,26 +346,21 @@ impl Source {
                 while i < bytes.len() && is_whitespace(bytes[i]) { i += 1; }
                 continue;
             }
-            if fast && matches!(&self.token, Some(Token::String { state, .. }) if state.at_boundary()) {
-                let (count, escape) = cjson::plain(&bytes[i..], self.policy.raw_bytes);
-                if count != 0 {
-                    self.plain_string(&bytes[i..i + count], escape);
-                    i += count;
-                    continue;
-                }
-            }
-            let result = match self.token.take() {
-                Some(token) => self.token_byte(token, bytes[i], offset),
-                None => self.structural_byte(bytes[i], offset).map(|()| true),
+            let result = if fast && matches!(&self.token, Some(Token::String { .. })) {
+                self.string_chunk(&bytes[i..], offset)
+            } else {
+                match self.token.take() {
+                    Some(token) => self.token_byte(token, bytes[i], offset),
+                    None => self.structural_byte(bytes[i], offset).map(|()| true),
+                }.map(usize::from).map_err(|error| (error, 0))
             };
             match result {
-                Ok(true) => i += 1,
-                Ok(false) => {},
-                Err(error) => {
+                Ok(count) => i += count,
+                Err((error, relative)) => {
                     if self.diagnostic.as_ref().is_some_and(|diagnostic| diagnostic.error().is_none()) {
                         self.pending_failure = Some(error); self.next_offset = base + bytes.len() as u64; return Ok(bytes.len());
                     }
-                    self.next_offset = offset; return self.fail(error);
+                    self.next_offset = offset+relative as u64; return self.fail(error);
                 }
             }
             if stop && (self.member.is_some() || self.string_jump.is_some()) { break; }
@@ -375,6 +401,7 @@ impl Source {
         self.schema = None;
         self.finished = true;
         self.frames = Vec::new();
+        self.decoded_batch = Vec::new();
         self.diagnostic = None;
         Ok(())
     }

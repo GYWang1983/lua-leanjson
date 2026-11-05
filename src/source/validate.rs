@@ -1,4 +1,6 @@
 //! Fixed-size token state shared by incremental validation and string output.
+mod scan;
+pub(super) use scan::{read_escape, EscapeRead, StringRun, StringScanError};
 use crate::error::leanjson_err;
 
 #[derive(Clone, Copy)]
@@ -161,11 +163,6 @@ impl StringState {
         Self { phase: StringPhase::Plain, utf8_remaining: 0, utf8_low: 0x80, utf8_high: 0xBF, raw_bytes, needs_escape: false }
     }
 
-    pub(super) fn plain(&mut self, needs_escape: bool) {
-        debug_assert!(self.at_boundary());
-        self.needs_escape |= needs_escape;
-    }
-
     pub(super) fn needs_escape(&self) -> bool { self.needs_escape }
 
     pub(super) fn at_boundary(&self) -> bool {
@@ -251,3 +248,6 @@ impl StringState {
         if self.utf8_remaining != 0 { Ok(Decoded::byte(byte)) } else { Ok(Decoded::empty()) }
     }
 }
+
+#[cfg(test)]
+mod string_loop_tests;

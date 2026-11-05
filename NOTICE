@@ -1,0 +1,8 @@
+LeanJSON
+
+The ordinary-string scan kernel in src/source/cjson_scan.c is adapted from
+OpenResty lua-cjson (json_next_string_token), revision
+617164a0fe3bb647128178f9caefb304b8573bb6.
+Copyright (c) 2010-2012 Mark Pulford <mark@kyne.com.au>.
+The upstream MIT permission notice is reproduced in LICENSES/lua-cjson.txt
+and in the derived source file. Other LeanJSON code remains Apache-2.0.

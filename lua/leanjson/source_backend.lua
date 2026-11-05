@@ -43,6 +43,8 @@ function M.native_options(opts)
 end
 function M.configure_source(backend, codec)
     local result = ffi.new("leanjson_source_v1_result[1]")
+    M.require_status(C.leanjson_source_v2_set_scanner(backend.state.source,
+        backend.opts.scanner == "cjson" and 1 or 0, result), READY, result, backend.state.source)
     M.require_status(C.leanjson_source_v2_set_structural_index(backend.state.source,
         backend.opts.structural_index and 1 or 0, result), READY, result, backend.state.source)
     if backend.opts.schema ~= nil then

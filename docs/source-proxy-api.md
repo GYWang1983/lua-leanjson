@@ -2,6 +2,19 @@
 
 `leanjson.decode(string)` keeps the validated JSON source and decodes fields on demand. Memory, file and incremental input share the sparse native source path; the legacy `leanjson.parse` ABI remains separate. Objects and arrays remain proxies after writes. Use `leanjson.type(value)` to distinguish `"object"`, `"array"`, `"null"`, and scalar types. With `decode_array_with_array_mt(true)`, array views expose the public `array_mt` marker through a private metatable; their proxy mechanics remain active. Use `leanjson.pairs`, `leanjson.ipairs`, and `leanjson.len` on LuaJIT builds without Lua 5.2 compatibility.
 
+The per-decode `scanner` option accepts `"cjson"` (default) or `"legacy"`.
+It applies to memory, file and incremental inputs, including the OpenResty
+request adapter, eager loading and `preload_paths`. The CJSON-derived C kernel
+scans ordinary string spans without copying them; Rust continues to validate
+syntax, numbers, escapes and strict UTF-8 and produce the same bounded indexes.
+Complete-memory input generates native-compatible diagnostics by replaying the
+original input only on error. Streaming sources keep incremental diagnostics,
+with the same plain-string batching. Schema validation receives the same
+logical decoded bytes in batches; it is never skipped. Neither setting changes
+metadata budgets or the input storage policy. `"legacy"` remains available for
+controlled comparisons and rollback. This is not a runtime dependency on
+lua-cjson and does not materialize a full Lua tree unless eager mode requests it.
+
 The per-decode `proxy_mode` option accepts `"table"` (default) or `"userdata"`.
 It applies to `decode`, `decode_file`, and `new_decoder`, including normal/safe
 modules and independent codecs. Lazy object/array roots, nested and preloaded

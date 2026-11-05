@@ -29,7 +29,9 @@ build = {
     build_command = "CARGO_TARGET_DIR=target cargo build --locked --release",
     install_command = [[
         set -e
-        mkdir -p "$(LUADIR)/leanjson" "$(LIBDIR)"
+        mkdir -p "$(LUADIR)/leanjson" "$(LIBDIR)" "$(PREFIX)/doc"
+        cp LICENSE NOTICE "$(PREFIX)/doc/"
+        cp LICENSES/lua-cjson.txt "$(PREFIX)/doc/lua-cjson-LICENSE.txt"
         cp lua/leanjson.lua "$(LUADIR)/leanjson.lua"
         cp lua/leanjson/lib.lua "$(LUADIR)/leanjson/lib.lua"
         cp lua/leanjson/table.lua "$(LUADIR)/leanjson/table.lua"

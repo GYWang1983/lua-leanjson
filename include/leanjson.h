@@ -266,6 +266,19 @@ typedef struct {
  * release diagnostic workspace. Same live-handle contract as v2_root. */
 size_t leanjson_source_v2_format_error(const leanjson_source_v1 *, uint8_t *, size_t);
 leanjson_source_v1 *leanjson_source_v2_new(const leanjson_source_v2_options *, leanjson_source_v1_result *);
+/* Select legacy (0) or batched CJSON-derived (1) string scanning before the
+ * first feed. New/native sources default to legacy unless explicitly selected. */
+int leanjson_source_v2_set_scanner(const leanjson_source_v1 *, uint32_t, leanjson_source_v1_result *);
+/* Complete-memory path. Select batched strings with set_scanner(1) first;
+ * the native constructor default remains byte-wise. Both selectors defer
+ * diagnostics until error. document points to the full immutable input on
+ * every call; feed processes only [base, base+len). No input pointer is retained.
+ * Only v2 sources are accepted. Do not mix with v1 feeds. Finish with the same
+ * document. Error diagnostics may inspect the full document, including bytes
+ * beyond the current feed. Successful calls retain the same bounded indexes
+ * and construction events as v1 feeds. */
+int leanjson_source_v2_feed_memory(leanjson_source_v1 *, const uint8_t *document, size_t document_len, uint64_t base, size_t len, leanjson_source_v1_result *);
+int leanjson_source_v2_finish_memory(leanjson_source_v1 *, const uint8_t *document, size_t document_len, leanjson_source_v1_result *);
 int leanjson_source_v2_root(const leanjson_source_v1 *, leanjson_source_v2_node *, leanjson_source_v1_result *);
 int leanjson_source_v2_get_stats(const leanjson_source_v1 *, leanjson_source_v2_stats *, leanjson_source_v1_result *);
 int leanjson_source_v2_clear_indexes(const leanjson_source_v1 *, leanjson_source_v1_result *);

@@ -97,4 +97,22 @@ describe("leanjson native loader", function()
         assert.matches("missing required symbol leanjson_source_v2_next_loading_event", err, 1, true)
     end)
 
+    it("rejects stale libraries missing any scanner entry point", function()
+        for _, missing in ipairs({"leanjson_source_v2_set_scanner", "leanjson_source_v2_feed_memory", "leanjson_source_v2_finish_memory"}) do
+            local old_lib, old_ffi, old_cpath = package.loaded["leanjson.lib"], package.loaded.ffi, package.cpath
+            package.loaded["leanjson.lib"] = nil
+            package.loaded.ffi = { cdef = function() end, load = function()
+                return setmetatable({}, { __index = function(_, symbol)
+                    if symbol == missing then error("missing scanner ABI") end
+                    return true
+                end })
+            end }
+            package.cpath = ""
+            local ok, err = pcall(require, "leanjson.lib")
+            package.loaded["leanjson.lib"], package.loaded.ffi, package.cpath = old_lib, old_ffi, old_cpath
+            assert.is_false(ok)
+            assert.matches("missing required symbol " .. missing, err, 1, true)
+        end
+    end)
+
 end)

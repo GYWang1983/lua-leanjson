@@ -22,8 +22,10 @@ import time
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = "617164a0fe3bb647128178f9caefb304b8573bb6"
-IMAGE = "lua-qjson-dev:task3-repro"
-IMAGE_ID = "sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47"
+IMAGE = os.environ.get("CJSON_COMPAT_IMAGE", "lua-qjson-dev:task3-repro")
+IMAGE_ID = os.environ.get("CJSON_COMPAT_IMAGE_ID", "sha256:1a287857f8122e23a0ae0e5cf74227b747ea0dd40fa71b4b2be2f5ce58036a47")
+TARGET_VOLUME = os.environ.get("CJSON_COMPAT_TARGET_VOLUME", "leanjson-bounded-target")
+REGISTRY_VOLUME = os.environ.get("CJSON_COMPAT_REGISTRY_VOLUME", "qjson-cargo-registry")
 DEFAULT_OUTPUT = ".superpowers/sdd/2026-11-02-upstream-cjson-matrix/task-1-artifacts"
 MODES = ("lazy", "eager", "preload")
 SOURCES = ("memory", "file", "feed")
@@ -290,8 +292,8 @@ class Environment:
             if observed != IMAGE_ID + " arm64":
                 raise HarnessError("pinned image provenance mismatch: " + observed)
             self.container = self.run(["docker", "run", "--rm", "-d", "-v", str(self.root) + ":/workspace",
-                                       "-v", "leanjson-bounded-target:/workspace/target",
-                                       "-v", "qjson-cargo-registry:/usr/local/cargo/registry", "-w", "/workspace",
+                                       "-v", TARGET_VOLUME + ":/workspace/target",
+                                       "-v", REGISTRY_VOLUME + ":/usr/local/cargo/registry", "-w", "/workspace",
                                        self.image, "sleep", "infinity"]).stdout.decode().strip()
         self.temp = tempfile.TemporaryDirectory(prefix=".native-", dir=self.output)
         self.native = Path(self.temp.name) / "lua-cjson"
@@ -312,6 +314,8 @@ class Environment:
             raise HarnessError("upstream generated UTF-8 fixture hash mismatch")
         self.provenance = {"image": self.image if self.docker else None, "image_id": IMAGE_ID if self.docker else None,
                            "proxy_mode": self.proxy_mode,
+                           "target_volume": TARGET_VOLUME if self.docker else None,
+                           "registry_volume": REGISTRY_VOLUME if self.docker else None,
                            "build_directory": self.path(self.native), "native_library": self.path(self.native / "cjson.so"),
                            "native_library_sha256": digest(self.native / "cjson.so"),
                            "build_settings": {"target": "cjson.so", "cc": "cc", "CFLAGS": "-O3 -Wall -pedantic -DNDEBUG -g",

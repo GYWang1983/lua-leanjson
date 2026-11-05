@@ -21,6 +21,9 @@ function M.normalize(opts)
     if opts.file_in_memory ~= nil and type(opts.file_in_memory) ~= "boolean" then
         error("leanjson: file_in_memory must be a boolean", 0)
     end
+    if opts.scanner ~= nil and opts.scanner ~= "cjson" and opts.scanner ~= "legacy" then
+        error('leanjson: scanner must be "cjson" or "legacy"', 0)
+    end
     if opts.structural_index ~= nil and type(opts.structural_index) ~= "boolean" then
         error("leanjson: structural_index must be a boolean", 0)
     end
@@ -45,6 +48,7 @@ function M.normalize(opts)
         index_array_limit = integer(opts.index_array_limit, "index_array_limit", 3, 0, 4294967295),
         index_budget_bytes = integer(opts.index_budget_bytes, "index_budget_bytes", 1048576, 0, 4294967295),
         structural_index = opts.structural_index ~= false,
+        scanner = opts.scanner or "cjson",
         schema = opts.schema,
         lazyload = opts.lazyload ~= false,
         file_in_memory = opts.file_in_memory ~= false,

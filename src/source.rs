@@ -4,6 +4,7 @@ use crate::error::{leanjson_err, leanjson_type};
 use crate::options::{LEANJSON_DEFAULT_MAX_DEPTH, LEANJSON_MAX_MAX_DEPTH};
 
 mod validate;
+mod cjson;
 mod diagnostic;
 mod comment;
 mod window;
@@ -98,7 +99,7 @@ pub struct Source {
     structural_reader: Option<structural::SharedIndex>, string_jump: Option<structural::StringSpan>,
     events: bool, detect_duplicates: bool, member: Option<SpanMember>, spill_dir: std::path::PathBuf, workspace: duplicates::WorkspacePool,
     loading: Option<loading::Loading>, policy: SourcePolicy,
-    diagnostic: Option<diagnostic::Diagnostics>, pending_failure: Option<SourceError>,
+    diagnostic: Option<diagnostic::Diagnostics>, pending_failure: Option<SourceError>, memory_input: bool, fast_strings: bool,
     schema: Option<crate::schema::Validator>, schema_failure: Option<String>,
 }
 impl Source {
@@ -112,7 +113,7 @@ impl Source {
             structural_enabled: true, feed_started: false, structural: Default::default(), lookup_cache: Default::default(),
             structural_reader: None, string_jump: None,
             detect_duplicates: false, member: None, spill_dir: std::env::temp_dir(), workspace: duplicates::WorkspacePool::default(),
-            loading: None, policy: SourcePolicy::default(), diagnostic: None, pending_failure: None,
+            loading: None, policy: SourcePolicy::default(), diagnostic: None, pending_failure: None, memory_input: false, fast_strings: false,
             schema: None, schema_failure: None,
         }
     }
@@ -241,21 +242,65 @@ impl Source {
     fn fail<T>(&mut self, error: SourceError) -> Result<T, SourceError> { self.failure = Some(error); Err(error) }
 
     pub fn feed(&mut self, base: u64, bytes: &[u8]) -> Result<(), SourceError> {
+        if self.memory_input { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, base)); }
         self.feed_started = true;
-        self.consume(base, bytes, false).map(|_| ())
+        self.consume(base, bytes, false, self.fast_strings).map(|_| ())
+    }
+    pub(crate) fn set_scanner(&mut self, fast: bool) -> Result<(), SourceError> {
+        if self.feed_started || self.finished || self.failure.is_some() || self.indexes.is_none() {
+            return Err(SourceError::argument(DETAIL_BAD_OPTIONS, self.next_offset));
+        }
+        self.fast_strings = fast;
+        Ok(())
+    }
+    pub(crate) fn feed_memory(&mut self, base: u64, bytes: &[u8]) -> Result<(), SourceError> {
+        if self.indexes.is_none() || self.feed_started && !self.memory_input {
+            return Err(SourceError::argument(DETAIL_BAD_OPTIONS, base));
+        }
+        self.memory_input = true;
+        self.feed_started = true;
+        self.diagnostic = None;
+        self.consume(base, bytes, false, self.fast_strings).map(|_| ())
+    }
+    pub(crate) fn finish_memory(&mut self, bytes: &[u8]) -> Result<(), SourceError> {
+        if !self.memory_input { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, self.next_offset)); }
+        self.finish(bytes.len() as u64)
+    }
+    pub(crate) fn diagnose_memory(&mut self, bytes: &[u8], error: SourceError) {
+        use leanjson_err::*;
+        let json_error = error.detail == DETAIL_NONE && matches!(error.code, LEANJSON_PARSE_ERROR | LEANJSON_NESTING_TOO_DEEP
+            | LEANJSON_TRAILING_CONTENT | LEANJSON_INVALID_NUMBER | LEANJSON_INVALID_STRING | LEANJSON_INVALID_UTF8);
+        if !json_error || !self.memory_input || self.failure.is_none() || self.schema_failure.is_some() { return; }
+        let mut diagnostic = diagnostic::Diagnostics::new(self.max_depth, self.policy.invalid_numbers, self.policy.comments);
+        diagnostic.feed_slice(bytes, 0, true);
+        diagnostic.finish(bytes.len() as u64);
+        self.diagnostic = Some(diagnostic);
+    }
+    fn plain_string(&mut self, bytes: &[u8], escape: bool) {
+        let Some(Token::String { start, value, mut state, mut key, mut key_hash, key_limit }) = self.token.take() else { unreachable!() };
+        state.plain(escape);
+        if value.is_none() {
+            for &byte in bytes { key_hash ^= byte as u64; key_hash = key_hash.wrapping_mul(0x100000001b3); }
+        }
+        if let Some(value) = &value { self.scalar_data(value, bytes); }
+        if let Some(key) = key.as_mut() {
+            let count = bytes.len().min(key_limit.saturating_sub(key.len()));
+            key.extend_from_slice(&bytes[..count]);
+        }
+        self.token = Some(Token::String { start, value, state, key, key_hash, key_limit });
     }
     pub(crate) fn feed_member(&mut self, base: u64, bytes: &[u8]) -> Result<(usize, Option<SpanMember>), SourceError> {
-        let count = self.consume(base, bytes, true)?;
+        let count = self.consume(base, bytes, true, false)?;
         Ok((count, self.member.take()))
     }
-    fn consume(&mut self, base: u64, bytes: &[u8], stop: bool) -> Result<usize, SourceError> {
+    fn consume(&mut self, base: u64, bytes: &[u8], stop: bool, fast: bool) -> Result<usize, SourceError> {
         self.ready()?;
         if self.finished { return Err(SourceError::argument(DETAIL_CLOSED, self.next_offset)); }
         if base != self.next_offset || base.checked_add(bytes.len() as u64).is_none() {
             return self.fail(SourceError::argument(DETAIL_BAD_OFFSET, base));
         }
         if let Some(diagnostic) = &mut self.diagnostic {
-            for (index, &byte) in bytes.iter().enumerate() { diagnostic.feed(byte, base + index as u64); }
+            diagnostic.feed_slice(bytes, base, fast);
         }
         if let Some(error) = self.pending_failure {
             self.next_offset = base + bytes.len() as u64;
@@ -269,6 +314,14 @@ impl Source {
                 i += 1;
                 while i < bytes.len() && is_whitespace(bytes[i]) { i += 1; }
                 continue;
+            }
+            if fast && matches!(&self.token, Some(Token::String { state, .. }) if state.at_boundary()) {
+                let (count, escape) = cjson::plain(&bytes[i..], self.policy.raw_bytes);
+                if count != 0 {
+                    self.plain_string(&bytes[i..i + count], escape);
+                    i += count;
+                    continue;
+                }
             }
             let result = match self.token.take() {
                 Some(token) => self.token_byte(token, bytes[i], offset),

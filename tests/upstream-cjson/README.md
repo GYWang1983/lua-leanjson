@@ -159,3 +159,12 @@ Each CLI invocation clears prior `summary.json` and `harness-error.json` before
 work. A failure removes any partial summary before writing its current error;
 other logs and diagnostics are retained. Use separate output directories when
 preserving previous runs.
+
+
+For a restored development image or an isolated target volume, set
+`CJSON_COMPAT_IMAGE`, `CJSON_COMPAT_IMAGE_ID`, `CJSON_COMPAT_TARGET_VOLUME` and
+`CJSON_COMPAT_REGISTRY_VOLUME` before invoking the runner or its Python controls.
+The image ID must be the actual immutable `sha256:...` digest; the runner still
+rejects image identity or architecture mismatches. Defaults retain the original
+pinned environment. Keep the output directory inside the mounted checkout and
+pass `--locale-dir` for the prepared `cs_CZ` locale when running the full matrix.

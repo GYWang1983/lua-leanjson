@@ -28,6 +28,9 @@ base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 fluent-uri = "0.4"
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 proptest = "1"
 serde = { version = "1", features = ["derive"] }

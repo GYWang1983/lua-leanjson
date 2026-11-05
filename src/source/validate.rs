@@ -161,6 +161,11 @@ impl StringState {
         Self { phase: StringPhase::Plain, utf8_remaining: 0, utf8_low: 0x80, utf8_high: 0xBF, raw_bytes, needs_escape: false }
     }
 
+    pub(super) fn plain(&mut self, needs_escape: bool) {
+        debug_assert!(self.at_boundary());
+        self.needs_escape |= needs_escape;
+    }
+
     pub(super) fn needs_escape(&self) -> bool { self.needs_escape }
 
     pub(super) fn at_boundary(&self) -> bool {

@@ -14,7 +14,9 @@ and LuaJIT FFI integration. The fork adds source-backed mutation, independent
 snapshots, bounded output, file/incremental sources and native OpenResty body
 adapters. It is distributed under its own name, **`lua-leanjson`**, with the Lua
 module **`leanjson`**. Credit for the original implementation belongs to the
-qjson authors; the project retains the [Apache-2.0 license](LICENSE).
+qjson authors; the project retains the [Apache-2.0 license](LICENSE). The
+CJSON-derived string scanning kernel retains its [MIT notice](LICENSES/lua-cjson.txt);
+see [NOTICE](NOTICE) for provenance.
 
 ## Why LeanJSON?
 
@@ -97,6 +99,9 @@ luarocks --lua-version=5.1 make rockspec/lua-leanjson-scm-1.rockspec
 ```
 
 Building requires Rust/Cargo and LuaRocks configured for LuaJIT's Lua 5.1 ABI.
+Source builds also require a C99 compiler for the statically linked scanning
+kernel; they do not require a runtime lua-cjson dependency.
+
 The pinned verification environment uses Rust 1.90 and OpenResty LuaJIT.
 Standard PUC Lua is not supported: the library requires LuaJIT FFI.
 
@@ -244,6 +249,14 @@ These options apply to `decode`, `decode_file`, `new_decoder`, and OpenResty
 adapters via `opts.decode`. `lazyload` controls value loading; the older `lazy`
 option concerns validation and does not disable source validation. See the
 [source API](docs/file-source-api.md) for ownership and decoder lifecycle details.
+
+`scanner="cjson"` (default) uses a CJSON-derived C loop for ordinary string
+spans while retaining LeanJSON's Rust grammar, validation and bounded indexes.
+`scanner="legacy"` selects the previous byte-wise path for comparisons or
+rollback. Both work with lazy/eager/preload and Schema validation. Complete
+memory input runs compatibility diagnostics only after an error; file-backed
+and incremental sources retain resumable diagnostics and batch their string
+scans. The option does not call `cjson.decode` or build a cjson tree.
 
 ## Inspect fields without loading their contents
 

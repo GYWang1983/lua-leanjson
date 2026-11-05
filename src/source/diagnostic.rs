@@ -77,6 +77,21 @@ impl Diagnostics {
             else { self.frames.push(if kind == Kind::Array { ArrayFirst } else { ObjectFirst }); }
         }
     }
+    pub(super) fn feed_slice(&mut self, bytes: &[u8], base: u64, fast: bool) {
+        let mut i = 0;
+        while i < bytes.len() {
+            // The first two bytes have special encoding-detection semantics.
+            if fast && self.seen >= 2 {
+                if self.error.is_some() || self.ended { self.seen += (bytes.len() - i) as u64; break; }
+                if matches!(&self.lex, Some(Lex::String { phase: StringPhase::Plain, .. })) {
+                    let (count, _) = super::cjson::plain(&bytes[i..], true);
+                    if count != 0 { self.seen += count as u64; i += count; continue; }
+                }
+            }
+            self.feed(bytes[i], base + i as u64);
+            i += 1;
+        }
+    }
     pub(super) fn feed(&mut self, byte: u8, offset: u64) {
         if self.seen == 0 { self.first = Some(byte); }
         if self.seen == 1 && (self.first == Some(0) || byte == 0) { self.error = Some(Diagnostic::Encoding); }

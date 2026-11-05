@@ -27,14 +27,21 @@ function M.open(raw, opts, codec)
     shared.configure_source(backend, codec)
     backend.loading = require("leanjson.loading").new(backend)
     local first = 0
+    local document = ffi.cast("const uint8_t *", raw)
+    local fast = opts.scanner == "cjson"
     repeat
         local count = math.min(#raw - first, opts.chunk_size)
-        shared.require_status(C.leanjson_source_v1_feed(source, first,
-            ffi.cast("const uint8_t *", raw) + first, count, result), 2, result, source)
+        local status
+        if fast then status = C.leanjson_source_v2_feed_memory(source, document, #raw, first, count, result)
+        else status = C.leanjson_source_v1_feed(source, first, document + first, count, result) end
+        shared.require_status(status, 2, result, source)
         if backend.loading then backend.loading:drain() end
         first = first + count
     until first == #raw
-    shared.require_status(C.leanjson_source_v1_finish(source, #raw, result), 0, result, source)
+    local status
+    if fast then status = C.leanjson_source_v2_finish_memory(source, document, #raw, result)
+    else status = C.leanjson_source_v1_finish(source, #raw, result) end
+    shared.require_status(status, 0, result, source)
     if backend.loading then backend.loading:finish() end
     local root = ffi.new("leanjson_source_v2_node[1]")
     shared.require_status(C.leanjson_source_v2_root(source, root, result), 0, result)

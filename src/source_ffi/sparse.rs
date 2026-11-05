@@ -398,3 +398,54 @@ pub unsafe extern "C" fn leanjson_source_v2_format_error(handle: *const leanjson
         message.len()
     })).unwrap_or(0)
 }
+
+/// Feed a bounded range of a complete, immutable memory document. Neither the
+/// range nor the document pointer is retained. The full input is used only to
+/// recover native-compatible diagnostics after a validation error.
+/// # Safety
+/// Handle/result obey v1. Document must be readable for document_len bytes on
+/// every call and contain the same bytes throughout all feeds and finalization.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_feed_memory(handle: *mut leanjson_source_v1, document: *const u8, document_len: usize, base: u64, len: usize, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        let bytes = input(document, document_len)?;
+        let first = usize::try_from(base).ok().filter(|&first| first <= bytes.len())
+            .ok_or_else(|| SourceError::argument(crate::source::DETAIL_BAD_OFFSET, base))?;
+        let end = first.checked_add(len).filter(|&end| end <= bytes.len())
+            .ok_or_else(|| SourceError::argument(crate::source::DETAIL_BAD_OFFSET, base))?;
+        let mut source = source(handle)?.inner.borrow_mut();
+        match source.feed_memory(base, &bytes[first..end]) {
+            Ok(()) => Ok(leanjson_source_v1_result::pending(source.offset())),
+            Err(error) => { source.diagnose_memory(bytes, error); Err(error) },
+        }
+    })
+}
+
+/// Confirm EOF for a memory-feed source, using the complete original input for
+/// error diagnostics only. Successful finalization remains idempotent.
+/// # Safety
+/// Same handle/document/result contract as leanjson_source_v2_feed_memory.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_finish_memory(handle: *mut leanjson_source_v1, document: *const u8, document_len: usize, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        let bytes = input(document, document_len)?;
+        let mut source = source(handle)?.inner.borrow_mut();
+        match source.finish_memory(bytes) {
+            Ok(()) => Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY)),
+            Err(error) => { source.diagnose_memory(bytes, error); Err(error) },
+        }
+    })
+}
+
+/// Select scalar byte-wise (0) or CJSON-derived batched string scanning (1)
+/// before any feed, including an empty one. Existing v1/v2 defaults are unchanged.
+/// # Safety
+/// Handle/result obey the v1 source contract.
+#[no_mangle]
+pub unsafe extern "C" fn leanjson_source_v2_set_scanner(handle: *const leanjson_source_v1, scanner: u32, out: *mut leanjson_source_v1_result) -> i32 {
+    boundary(out, || {
+        if scanner > 1 { return Err(SourceError::argument(DETAIL_BAD_OPTIONS, u64::MAX)); }
+        source(handle)?.inner.borrow_mut().set_scanner(scanner == 1)?;
+        Ok(leanjson_source_v1_result::status(LEANJSON_SOURCE_V1_READY))
+    })
+}

@@ -1,6 +1,12 @@
 local ffi = require("ffi")
 
 ffi.cdef[[
+typedef struct { size_t offset; uint32_t escape_offset, reserved; } leanjson_encode_cursor;
+typedef struct { uint32_t depth, maximum, quoted, escaped; } leanjson_encode_depth_state;
+int leanjson_encode_string_length(const uint8_t *, size_t, uint32_t, size_t *);
+int leanjson_encode_string_chunk(const uint8_t *, size_t, uint32_t,
+    leanjson_encode_cursor *, uint8_t *, size_t, size_t *);
+int leanjson_encode_depth_chunk(const uint8_t *, size_t, leanjson_encode_depth_state *);
 typedef struct leanjson_doc leanjson_doc;
 typedef struct {
     int code;
@@ -198,6 +204,7 @@ local tried = {}
 local attempts = {}
 local last_error
 local required_symbols = {
+    "leanjson_encode_string_length", "leanjson_encode_string_chunk", "leanjson_encode_depth_chunk",
     "leanjson_strerror",
     "leanjson_format_error",
     "leanjson_doc_last_error_offset",

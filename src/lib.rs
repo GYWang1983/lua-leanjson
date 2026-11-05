@@ -30,3 +30,6 @@ pub mod __bench_api {
 
 pub mod schema;
 pub mod schema_ffi;
+
+mod encode;
+pub mod encode_ffi;

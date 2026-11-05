@@ -134,7 +134,7 @@ describe("explicit immutable value references", function()
                 assert.are.equal("string", json.type(copy))
                 assert.are.equal(count * shape.decoded, json.len(copy))
                 b.messages = { { role = "user", content = copy } }
-                reader = json.reader(b, { chunk_size = 257 })
+                reader = json.reader(b, { chunk_size = 257, preserve_raw_strings = false })
                 json.close(a); json.close(ref); json.close(copy); json.close(b)
                 local expected = #'{"messages":[{"role":"user","content":' + count * shape.encoded + 2 + #'}]}'
                 assert.are.equal(expected, reader:length())

@@ -256,7 +256,7 @@ describe("cjson indentation and unsupported value settings", function()
                 return original_read(self, offset, length, scope)
             end
             function backend:scalar() error("full scalar materialization", 0) end
-            local reader = c.reader(body, { chunk_size = 7 })
+            local reader = c.reader(body, { chunk_size = 7, preserve_raw_strings = false })
             local want = #'{\n  "blob": "' + 4 * 65536 + #'",\n  "empty": {}\n}'
             assert.equal(want, reader:length())
             c.close(body); collectgarbage("stop")

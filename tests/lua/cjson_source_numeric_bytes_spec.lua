@@ -1,7 +1,7 @@
 local json = require("leanjson")
 
 local function collect(c, value, size)
-    local r, parts = c.reader(value, { chunk_size = size or 1 }), {}
+    local r, parts = c.reader(value, { chunk_size = size or 1, preserve_raw_strings = false }), {}
     local length, err = r:length(); assert.is_nil(err)
     while true do
         local chunk, failure = r:next(); assert.is_nil(failure)
@@ -180,7 +180,7 @@ describe("source number and byte-string compatibility", function()
             local c=json.new()
             local backend, handle=require("leanjson.source_memory").open('{"s":"a/b"}',nil,c)
             local value=hold(c,require("leanjson.proxy").from_backend(backend,handle,c))
-            local r=c.reader(value,{chunk_size=1})
+            local r=c.reader(value,{chunk_size=1,preserve_raw_strings=false})
             if during=="next" then assert.equal(#'{"s":"a\\/b"}',r:length()) end
             local original=backend.read
             function backend:read(offset,length)

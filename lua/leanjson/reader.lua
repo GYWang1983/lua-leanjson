@@ -5,15 +5,11 @@ local leases = require("leanjson.leases")
 local M = {}
 local Reader = {}; Reader.__index = Reader
 local bit = require("bit")
+local native_encode = require("leanjson.encode")
 local CLOSED = "leanjson.reader: closed"
 
 local function string_length(value, codec)
-    local length = #value + 2
-    for i = 1, #value do
-        local escaped = codec.escape(string.byte(value, i))
-        if escaped then length = length + #escaped - 1 end
-    end
-    return length
+    return native_encode.length(value, codec.escape_slash)
 end
 
 local function raw_span(node, normalize, scope, codec)
@@ -23,9 +19,10 @@ local function raw_span(node, normalize, scope, codec)
         -- Rebuild affected containers through bounded member iterators. Child
         -- spans without comments remain eligible for their original spelling.
         if bit.band(flags, 16) ~= 0 then return end
-        -- Special source strings and numbers must obey the calling codec even
-        -- when their surrounding original bytes could otherwise be reused.
-        if bit.band(flags, 4) ~= 0 then return end
+        -- Strict string formatting rebuilds affected raw spans; forwarding
+        -- readers may retain their validated spelling. Nonfinite numbers below
+        -- always obey the calling codec, including inside raw containers.
+        if bit.band(flags, 4) ~= 0 and not codec.preserve_raw_strings then return end
         if bit.band(flags, 8) ~= 0 then
             if node.kind ~= "number" then return end
             local n = proxy.scalar(node, scope)
@@ -80,24 +77,15 @@ local function check_depth(node, depth, codec, backend, first, last, scope)
     if not backend then return end
     local accepted = backend.opts and backend.opts.max_depth
     if type(accepted) == "number" and accepted > 0 and accepted <= maximum - depth + 1 then return end
-    local nested, quoted, escaped = depth - 1, false, false
+    local state = native_encode.depth_state(depth - 1, maximum)
     while first < last do
         leases.check(scope)
         local bytes = backend:read(first, math.min(last - first, backend.opts and backend.opts.chunk_size or 65536, codec.scan_window or 65536), scope)
         leases.check(scope)
         if #bytes == 0 then error("leanjson.reader: unexpected source EOF", 0) end
-        for i = 1, #bytes do
-            local byte = bytes:byte(i)
-            if quoted then
-                if escaped then escaped = false
-                elseif byte == 92 then escaped = true
-                elseif byte == 34 then quoted = false end
-            elseif byte == 34 then quoted = true
-            elseif byte == 91 or byte == 123 then
-                nested = nested + 1
-                if nested > maximum then excessive() end
-            elseif byte == 93 or byte == 125 then nested = nested - 1 end
-        end
+        local code = native_encode.depth(state, bytes)
+        if code == 9 then excessive() end
+        if code ~= 0 then error("leanjson.reader: invalid source depth state", 0) end
         first = first + #bytes
     end
 end
@@ -159,7 +147,7 @@ end
 
 local function literal(value) return { tag = "literal", value = value, pos = 1 } end
 local function string_frame(value, chunks)
-    return { tag = "string", value = value or "", pos = 1, phase = "open", chunks = chunks }
+    return { tag = "string", value = value or "", phase = "open", chunks = chunks }
 end
 local function indent_frame(depth)
     return { tag = "indent", remaining = depth, pos = 1, newline = true }
@@ -219,26 +207,14 @@ local function next_chunk(self)
         elseif tag == "string" then
             if frame.phase == "open" then
                 fragment, frame.phase = '"', "body"
-            elseif frame.pos > #frame.value then
-                local chunk = frame.chunks and frame.chunks()
-                if self.closed then return nil end
-                if chunk then frame.value, frame.pos = chunk, 1
-                else
-                    fragment = '"'
-                    stack[#stack] = nil
-                end
             else
-                local first = frame.pos
-                local last = math.min(#frame.value, first + room - 1)
-                local i = first
-                while i <= last and not self.codec.escape(string.byte(frame.value, i)) do i = i + 1 end
-                if i > first then
-                    fragment = frame.value:sub(first, i - 1)
-                    frame.pos = i
-                else
-                    local escaped = self.codec.escape(string.byte(frame.value, i))
-                    frame.pos = i + 1
-                    stack[#stack + 1] = literal(escaped)
+                if not frame.encoder then frame.encoder = native_encode.cursor(frame.value, self.codec.escape_slash) end
+                fragment = native_encode.next(frame.encoder, room)
+                if not fragment then
+                    local chunk = frame.chunks and frame.chunks()
+                    if self.closed then return nil end
+                    if chunk then frame.value, frame.encoder = chunk, nil
+                    else fragment = '"'; stack[#stack] = nil end
                 end
             end
         elseif tag == "container" then
@@ -332,6 +308,10 @@ function M.new(value, options, codec)
     if options.normalize_duplicates ~= nil and type(options.normalize_duplicates) ~= "boolean" then
         error("leanjson.reader: normalize_duplicates must be a boolean", 0)
     end
+    if options.preserve_raw_strings ~= nil and type(options.preserve_raw_strings) ~= "boolean" then
+        error("leanjson.reader: preserve_raw_strings must be a boolean", 0)
+    end
+    codec.preserve_raw_strings = options.preserve_raw_strings ~= false
     codec.scan_window = size
     local self = setmetatable({ chunk_size = size, normalize = options.normalize_duplicates == true, codec = codec }, Reader)
     local captured = leases.acquire()

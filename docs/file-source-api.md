@@ -16,7 +16,7 @@ an original path. Eager results own no descriptors after file decode completes.
 local body = leanjson.decode_file(path, { chunk_size = 65536 })
 local branch = leanjson.fork(body)
 branch.model = "replacement"
-local reader = leanjson.reader(branch, { normalize_duplicates = true })
+local reader = leanjson.reader(branch, { normalize_duplicates = true }) -- raw strings preserved by default
 local length, err = reader:length()
 if err then error(err) end
 -- Send length and consume reader:next(), preserving any returned error.
@@ -170,3 +170,12 @@ releases unfinished input. This option removes source-file rereads, not all
 possible disk I/O: exact duplicate-key workspace may still spill in `temp_dir`.
 It is separate from loading fields into ordinary Lua objects and does not make
 initial file reads asynchronous.
+
+## Output string preservation
+
+Readers preserve unmodified source string tokens by default, including original
+escape spellings. Length uses the raw span and output reads bounded source
+windows. `preserve_raw_strings=false` applies the previous codec string policy;
+`encode()` keeps that policy. New/modified strings are encoded in Rust with
+bounded reader output. This choice is independent of `file_in_memory`, lazy
+loading and preload selection; it changes JSON spelling, not the decoded value.

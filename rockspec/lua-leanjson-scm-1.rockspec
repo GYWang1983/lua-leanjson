@@ -34,6 +34,7 @@ build = {
         cp LICENSES/lua-cjson.txt "$(PREFIX)/doc/lua-cjson-LICENSE.txt"
         cp lua/leanjson.lua "$(LUADIR)/leanjson.lua"
         cp lua/leanjson/lib.lua "$(LUADIR)/leanjson/lib.lua"
+        cp lua/leanjson/encode.lua "$(LUADIR)/leanjson/encode.lua"
         cp lua/leanjson/table.lua "$(LUADIR)/leanjson/table.lua"
         cp lua/leanjson/safe.lua "$(LUADIR)/leanjson/safe.lua"
         cp lua/leanjson/settings.lua "$(LUADIR)/leanjson/settings.lua"

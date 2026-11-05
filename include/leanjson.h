@@ -350,6 +350,21 @@ void leanjson_source_v2_selector_release(leanjson_source_v2_selector *);
 int leanjson_source_v2_set_loading(const leanjson_source_v1 *, const leanjson_source_v2_selector *, uint32_t, leanjson_source_v1_result *);
 int leanjson_source_v2_next_loading_event(const leanjson_source_v1 *, leanjson_source_v2_loading_event *, leanjson_source_v1_result *);
 
+
+/* Synchronous bounded string output. No pointer is retained. All writable
+ * state/output/count regions must be disjoint from each other and input.
+ * NULL byte buffers are accepted only with zero length/capacity.
+ * Flags: bit 0 escapes '/', no other bits accepted. Length excludes quotes.
+ * Keep input and flags unchanged across chunks; offset advances only after a
+ * complete encoded byte, escape_offset holds at most five pending bytes.
+ * All exports contain panic barriers; normal leanjson_err status values apply. */
+typedef struct { size_t offset; uint32_t escape_offset, reserved; } leanjson_encode_cursor;
+typedef struct { uint32_t depth, maximum, quoted, escaped; } leanjson_encode_depth_state;
+int leanjson_encode_string_length(const uint8_t *, size_t, uint32_t, size_t *);
+int leanjson_encode_string_chunk(const uint8_t *, size_t, uint32_t,
+    leanjson_encode_cursor *, uint8_t *, size_t, size_t *);
+int leanjson_encode_depth_chunk(const uint8_t *, size_t, leanjson_encode_depth_state *);
+
 #ifdef __cplusplus
 }
 #endif

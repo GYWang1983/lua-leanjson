@@ -316,7 +316,7 @@ local prompt = json.ref(a, "$.prompt")
 b.messages = { { role = "user", content = prompt } }
 json.close(prompt)       -- b now holds its own source lease
 json.close(a)
-local reader = json.reader(b, { chunk_size = 65536 })
+local reader = json.reader(b, { chunk_size = 65536 }) -- preserves unchanged string tokens
 json.close(b)            -- the reader independently owns its snapshot
 -- Consume reader:next() chunks; close the reader on an early exit/error.
 ```
@@ -387,8 +387,12 @@ input decoder; it is distinct from `new()`.
   when `value` was created by another instance. A reader snapshots numeric
   formatting, nonfinite-number policy, escaping and table contents when created.
   Unaffected source spans retain original bytes, including finite numeric
-  spellings. Nonfinite numbers and strings/keys containing slash or DEL follow
-  the called codec's encoding policy even inside unchanged source containers.
+  spellings. Nonfinite numbers always follow the called codec's encoding policy.
+  Readers default to `preserve_raw_strings=true`: unchanged source strings keep
+  their original JSON spelling, including slash, Unicode and DEL spellings.
+  Use `reader(value, {preserve_raw_strings=false})` for the previous string
+  formatting policy. `encode()` and `tostring()` keep that previous policy;
+  new/modified Lua strings and reconstructed keys always use the calling codec.
 - Lazy views, child views and incremental decoder results retain their creating
   codec for `tostring` and for classifying plain tables assigned into them.
   Later settings on that codec affect future operations; sibling instances do
@@ -445,7 +449,8 @@ new value; invalid or extra arguments raise errors, including on safe codecs.
 Module, normal/safe `new()` instances each own their setting. **It does not
 change allocation or buffer retention:** LeanJSON has no reusable whole-output
 buffer retained between encoding calls. `encode()` still allocates a complete
-result string; `reader()` generates chunks under its existing lifecycle.
+result string; `reader()` generates chunks under its existing lifecycle. Reader steps use call-owned staging buffers of at most 64 KiB; no writable
+encoder scratch is retained across calls.
 
 `encode_sparse_array([convert[, ratio[, safe]]])` returns all three settings.
 `convert` accepts booleans or exactly `on`/`off`; ratio/safe accept truncated

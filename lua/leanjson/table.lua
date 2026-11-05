@@ -2,6 +2,7 @@
 local ffi = require("ffi")
 local proxy = require("leanjson.proxy")
 local bounded_reader = require("leanjson.reader")
+local native_encode = require("leanjson.encode")
 local leases = require("leanjson.leases")
 local settings = require("leanjson.settings")
 local bit = require("bit")
@@ -135,7 +136,6 @@ function _M.materialize(value, options)
     return value
 end
 
-local string_byte = string.byte
 local string_format = string.format
 local int64_ct = ffi.typeof("int64_t")
 local uint64_ct = ffi.typeof("uint64_t")
@@ -304,48 +304,8 @@ local function new_codec()
         return _ENCODE_NUMBER_PRECISION
     end
 
-    -- Escape lookup table: byte value → escape sequence string (or nil if safe).
-    local ESCAPES = {
-        [0x22] = '\\"',
-        [0x5C] = '\\\\',
-        [0x0A] = '\\n',
-        [0x0D] = '\\r',
-        [0x09] = '\\t',
-        [0x08] = '\\b',
-        [0x0C] = '\\f',
-        [0x7F] = '\\u007f',
-    }
-    for byte = 0, 0x1F do
-        if not ESCAPES[byte] then ESCAPES[byte] = string_format('\\u%04x', byte) end
-    end
-
-    local function escape_byte(byte, escape_slash)
-        if byte == 0x2F then return escape_slash and '\\/' or nil end
-        return ESCAPES[byte]
-    end
-
-    -- JSON string escaper with bulk-copy fast path.
-    -- Scans for bytes that need escaping; copies clean segments via s:sub.
-    -- For strings with no escapes, returns '"' .. s .. '"' with zero table allocations.
-    local function encode_string(s)
-        local n = #s
-        local last, i = 1, 1
-        local out = nil   -- lazily create table only when escapes found
-        while i <= n do
-            local b = string_byte(s, i)
-            local esc = escape_byte(b, ENCODE_ESCAPE_FORWARD_SLASH)
-            if esc then
-                if not out then out = {'"'} end
-                if i > last then out[#out + 1] = s:sub(last, i - 1) end
-                out[#out + 1] = esc
-                last = i + 1
-            end
-            i = i + 1
-        end
-        if not out then return '"' .. s .. '"' end
-        if last <= n then out[#out + 1] = s:sub(last, n) end
-        out[#out + 1] = '"'
-        return table.concat(out)
+    local function encode_string(value)
+        return native_encode.encode(value, ENCODE_ESCAPE_FORWARD_SLASH)
     end
 
     local function encode_number(n, fmt, invalid_mode)
@@ -406,7 +366,7 @@ local function new_codec()
     end
 
     local function encode_proxy(value, depth)
-        local reader = codec._new_reader(value, nil, depth)
+        local reader = codec._new_reader(value, {preserve_raw_strings=false}, depth)
         local parts = {}
         while true do
             local chunk, err = reader:next()
@@ -589,7 +549,7 @@ local function new_codec()
         return bounded_reader.new(value, options, {
             number = function(n) return encode_number(n, fmt, invalid_mode) end,
             key = function(key) return encode_key(key, fmt, invalid_mode) end,
-            escape = function(byte) return escape_byte(byte, escape_slash) end,
+            escape_slash = escape_slash,
             cdata = encode_cdata,
             classify = classify_table,
             indent = ENCODE_INDENT,

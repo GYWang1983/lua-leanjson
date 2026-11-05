@@ -315,6 +315,7 @@ compact-output reuse and normalization behavior remains unchanged.
 local reader = leanjson.reader(body, {
     chunk_size = 65536,
     normalize_duplicates = true,
+    preserve_raw_strings = true, -- default; false restores prior string formatting
 })
 local length, err = reader:length()
 if not length then error(err) end
@@ -326,6 +327,24 @@ while true do
 end
 reader:close()
 ```
+
+`preserve_raw_strings` is a boolean, default `true`. Unmodified source string
+values and eligible source containers retain their original validated JSON bytes,
+including `/`, `\/`, `\uXXXX` and DEL spellings. Their string length is obtained
+from source offsets and output copies bounded raw windows without decoding the
+string. Reconstructed object keys and new/modified Lua values still use the codec.
+Comments are removed and requested duplicate normalization still applies.
+`preserve_raw_strings=false` restores the previous reader string formatting;
+`encode()` and `tostring()` select this behavior internally. JSON values are
+unchanged, but byte hashes/signatures may differ between the two reader modes.
+
+String encoded-length calculation and escaping for both reader output and full
+encode, including keys, run in Rust. Tiny output windows may split an escape;
+only its bounded cursor is retained. The raw-container output depth check also
+runs in Rust across windows. Lua schedules nodes/chunks and concatenates only
+when the API explicitly returns a complete output string. Reader steps use call-owned staging buffers of at most 64 KiB, never a complete
+decoded source string. Full encode may allocate its explicitly requested complete
+encoded string. Scratch is not shared across reentrant calls.
 
 Reader construction freezes proxy and ordinary Lua values, including mixed trees. It evaluates external array callbacks; acquiring captured proxy leases itself performs no source I/O. `length()` validates/counts the actual encoded bytes without building output or advancing the output cursor. `next()` ensures that complete validation/count first when needed. Each nonempty chunk is at most `chunk_size` bytes. Original spans and newly assigned Lua strings are emitted with bounded buffers, including JSON escapes. The reader does not call the complete encoder for scalar strings or documents.
 

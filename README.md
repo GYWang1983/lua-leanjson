@@ -54,8 +54,8 @@ zero: selected values and the paths needed to reach them have separate storage.
 | Mutable JSON proxies | Read and assign fields without decoding untouched sibling values. |
 | Copy-on-write forks | Create independent request variants that share immutable source data. |
 | Bounded JSON reader | Emit original spans and changed values in chunks, and calculate the encoded length without building a complete output string. |
-| File-backed decoding | Validate and access a file through bounded windows instead of reading the whole file into Lua. |
-| Incremental input | Feed incoming chunks into a parser and owned disk spool. Final values become available after complete validation. |
+| File input | Retain source chunks in memory by default; opt into bounded disk windows with `file_in_memory=false`. |
+| Incremental input | Scan and retain incoming chunks in memory by default, with an optional owned disk spool. Final values require complete validation. |
 | Bounded metadata | Configure indexing depth, array prefix and a per-source index budget; access deferred content without retaining a complete node tree. |
 | Explicit path preloading | Load routing fields during scanning while preserving lazy access to the rest of the document and complete output. |
 | Eager decoding | Set `lazyload=false` to return ordinary Lua tables and scalars for consumers that need them. |
@@ -659,6 +659,7 @@ local body, variant, reader
 
 local ok, err = pcall(function()
     body = json.decode_file("request.json", {
+        file_in_memory = false, -- keep this example file-backed
         chunk_size = 65536,
         index_depth = 3,
         index_array_limit = 3,
@@ -695,7 +696,8 @@ advancing output. `next()` returns `nil, nil` at EOF and `nil, error` on failure
 It completes validation/counting before returning its first chunk. Do not turn
 reader errors into ordinary EOF when integrating with an HTTP client.
 
-The input file must stay immutable while holders use it. LeanJSON closes its
+The example explicitly selects `file_in_memory=false`, so the input file must
+stay immutable while holders use it. LeanJSON closes its
 file descriptor when the final holder releases it; it never deletes an
 original input file. Incremental decoder spools are owned by LeanJSON and are
 removed after their final holder closes.
@@ -731,8 +733,10 @@ spans with 64-bit coordinates, rather than a full member tree or all punctuation
 local input = require "leanjson.openresty"
 ```
 
-- `input.read_body(opts)` waits for Nginx to receive the body, then uses its
-  memory buffer or temporary file.
+- `input.read_body(opts)` automatically receives/scans an unread fixed-length
+  HTTP/1.1 body through `ngx.req.socket()`, waits for validated EOF and returns
+  the owned value. HTTP/2, chunked and already-buffered bodies use the completed
+  Nginx body path.
 - `input.start_body(opts)` can receive and scan chunks while a fixed-length
   HTTP/1.1 upload is arriving. HTTP/2 and chunked uploads use the completed-body
   fallback. The current decoder publishes final query values only after EOF
@@ -740,6 +744,16 @@ local input = require "leanjson.openresty"
 - `input.request(httpc, request, value, opts)` sends bounded JSON chunks through
   lua-resty-http, sets the encoded Content-Length, and preserves reader errors.
   It makes one attempt and does not retry automatically.
+
+File/incremental source storage defaults to memory, independently of lazy field
+loading. `file_in_memory=false` selects the original fd/window or decoder spool
+mode. This option is accepted by `decode_file`/`new_decoder`, HTTP `opts.decode`
+and as a top-level HTTP override. A completed Nginx temporary file is read once,
+retained as memory chunks and closed before returning by default. Later reads and
+output do not reread that source file; no whole-body concat/reparse is needed.
+`info.storage` reports `memory` or `file`; `info.mode` reports the input path.
+Internal duplicate-key workspace can still spill, and memory storage grows with
+input size and the number of independently retained sources.
 
 The [complete handler](examples/openresty/handler.lua) covers client aborts,
 source errors, holder cleanup and connection cleanup. Configure

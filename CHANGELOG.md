@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ### Changed
 
+- Receive unread fixed-length HTTP/1.1 bodies through `ngx.req.socket()` in `read_body`, with safe completed-body fallbacks. File and incremental input retain source chunks in memory by default; `file_in_memory=false` preserves fd/spool storage.
 - Bound legacy scanners' initial structural-offset reservation and reuse synchronous file-read buffers up to 64 KiB to reduce temporary allocation.
 
 ## [0.1.0] - 2026-11-03

@@ -1,5 +1,5 @@
 -- Native OpenResty I/O only. The JSON core never waits for a socket or yields
--- through an FFI call. Completed file reads remain synchronous, bounded reads.
+-- through an FFI call. Source bytes stay in memory unless explicitly disabled.
 local leanjson = require "leanjson"
 local ngx = ngx
 local _M = {}
@@ -20,6 +20,7 @@ local function options(opts)
     json.chunk_size = opts.chunk_size == nil and 65536 or opts.chunk_size
     json.on_chunk = opts.on_chunk == nil and function() ngx.sleep(0) end or opts.on_chunk
     if opts.temp_dir ~= nil then json.temp_dir = opts.temp_dir end
+    if opts.file_in_memory ~= nil then json.file_in_memory = opts.file_in_memory end
     json = normalize(json)
     return opts, json, json.chunk_size
 end
@@ -60,6 +61,7 @@ local function completed(opts, json)
     local data = ngx.req.get_body_data()
     local file = data == nil and ngx.req.get_body_file() or nil
     local info = { mode = file and "completed-file" or "completed-memory", source = file and "file" or "memory" }
+    info.storage = file and not json.file_in_memory and "file" or "memory"
     local cancellation = { aborted = false }
     local value
     local unregister, err = on_abort(function()
@@ -79,8 +81,8 @@ local function completed(opts, json)
     end
     local ok
     if file then
-        -- decode_file keeps an open fd; the Nginx-owned pathname is never removed
-        -- or read into a full Lua string by this adapter.
+        -- The Nginx-owned pathname is never removed. By default its bytes are
+        -- retained in memory during this single bounded scan and the fd closes.
         ok, value = pcall(leanjson.decode_file, file, json)
     else
         ok, value = pcall(leanjson.decode, data or "", json)
@@ -93,8 +95,21 @@ local function completed(opts, json)
 end
 
 function _M.read_body(opts)
-    local normalized, json = options(opts)
-    return completed(normalized, json)
+    local session, err, info = _M.start_body(opts)
+    if not session then return nil, err, info end
+    local ok, value, failure = pcall(session.finish, session)
+    if not ok then failure, value = value, nil end
+    if failure then session:close(); return nil, failure, info end
+    if info.mode == "incremental" then
+        -- Transfer from the session's input owner to the returned value, while
+        -- preserving read_body's automatic abort cleanup for its caller.
+        local unregister
+        unregister, err = on_abort(function() release(value) end)
+        if not unregister then session:close(); return nil, err, info end
+    end
+    session.value = nil
+    session:close()
+    return value, nil, info
 end
 
 function Session:_signal()
@@ -170,6 +185,8 @@ function _M.start_body(opts)
     if version ~= 1.1 then reason = "http-version"
     elseif headers["transfer-encoding"] then reason = "transfer-encoding"
     elseif type(length) ~= "string" or not length:match("^%d+$") then reason = "content-length"
+    elseif tonumber(length) == 0 then reason = "empty-body"
+    elseif ngx.req.get_body_data() ~= nil or ngx.req.get_body_file() ~= nil then reason = "body-buffered"
     end
     if reason then
         local value, err, info = completed(normalized, json)
@@ -213,7 +230,7 @@ function _M.start_body(opts)
         local ran, producer_err = pcall(produce)
         if not ran then session:_fail(producer_err) end
     end)
-    return session, nil, { mode = "incremental", source = "decoder" }
+    return session, nil, { mode = "incremental", source = "decoder", storage = json.file_in_memory and "memory" or "file" }
 end
 
 -- The client must be connected already. This method sends once, and leaves a

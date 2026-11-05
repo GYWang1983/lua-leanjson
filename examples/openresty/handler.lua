@@ -27,10 +27,10 @@ end
 local function run()
     local err, info
     if ngx.var.uri == "/incremental" then
-        session, err, info = adapter.start_body { chunk_size = 65536 }
+        session, err, info = adapter.start_body { chunk_size = 65536, file_in_memory = ngx.var.arg_file_in_memory ~= "false" }
         if session then body, err = session:finish() end
     else
-        body, err, info = adapter.read_body { chunk_size = 65536 }
+        body, err, info = adapter.read_body { chunk_size = 65536, file_in_memory = ngx.var.arg_file_in_memory ~= "false" }
     end
     if err then return bad(400, err) end
     -- Every holder created below is owned before its first yielding operation.

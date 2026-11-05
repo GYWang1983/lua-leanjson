@@ -17,6 +17,7 @@ describe("source resource leases", function()
     local function decoder(raw, opts)
         opts = opts or {}
         opts.temp_dir = directory
+        opts.file_in_memory = false
         local value = leanjson.new_decoder(opts)
         assert.is_true(value:feed(raw))
         return value, assert(value:finish())
@@ -137,20 +138,20 @@ describe("source resource leases", function()
     end)
 
     it("cleans unfinished input immediately on abort, close, parse failure and hook failure", function()
-        local input = leanjson.new_decoder({ temp_dir = directory })
+        local input = leanjson.new_decoder({ file_in_memory = false, temp_dir = directory })
         assert.are.equal(1, #files())
         input:abort("cancelled")
         closed()
-        input = leanjson.new_decoder({ temp_dir = directory })
+        input = leanjson.new_decoder({ file_in_memory = false, temp_dir = directory })
         input:close()
         closed()
         local _, status = input:get("missing")
         assert.are.equal("ERROR", status)
-        input = leanjson.new_decoder({ temp_dir = directory })
+        input = leanjson.new_decoder({ file_in_memory = false, temp_dir = directory })
         assert.is_true(input:feed('{"x":'))
         assert.is_nil(input:finish())
         closed()
-        input = leanjson.new_decoder({ temp_dir = directory, chunk_size = 2,
+        input = leanjson.new_decoder({ file_in_memory = false, temp_dir = directory, chunk_size = 2,
             on_chunk = function() error("hook cancelled") end })
         local ok, err = input:feed('{}')
         assert.is_nil(ok)
@@ -291,7 +292,7 @@ describe("source resource leases", function()
     end)
 
     it("closes a suspended feed without requiring collection of the worker stack", function()
-        local input = leanjson.new_decoder({ temp_dir = directory, chunk_size = 1,
+        local input = leanjson.new_decoder({ file_in_memory = false, temp_dir = directory, chunk_size = 1,
             on_chunk = function() coroutine.yield("feed step") end })
         local worker = coroutine.create(function() return input:feed('{"x":1}') end)
         assert.are.same({ true, "feed step" }, { coroutine.resume(worker) })

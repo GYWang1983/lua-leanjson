@@ -43,7 +43,7 @@ if ngx.var.uri == "/lifecycle/retained" then
         if session then session:close() end
     end
     local ok, result = pcall(function()
-        session = assert(adapter.start_body { temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder" })
+        session = assert(adapter.start_body { file_in_memory = false, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder" })
         unregister = assert(adapter.on_abort(cleanup))
         local status, err
         child, status, err = session:get("model")
@@ -62,13 +62,14 @@ end
 local value, err, info
 if ngx.var.uri == "/lifecycle/core" then
     ngx.req.read_body()
-    value = leanjson.decode_file(assert(ngx.req.get_body_file()))
+    value = leanjson.decode_file(assert(ngx.req.get_body_file()), {file_in_memory = false})
     info = { mode = "completed-file" }
 elseif ngx.var.uri == "/lifecycle/adapter" then
-    value, err, info = adapter.read_body()
+    ngx.req.read_body()
+    value, err, info = adapter.read_body({file_in_memory = false})
 else
     local session
-    session, err, info = adapter.start_body()
+    session, err, info = adapter.start_body({file_in_memory = false})
     if session then value, err = session:finish() end
 end
 assert(not err, err)

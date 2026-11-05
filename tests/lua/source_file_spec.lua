@@ -74,7 +74,7 @@ describe("file JSON source", function()
 
     it("reports an early source EOF as failure and keeps the original path", function()
         local path = fixture('{"x":"source bytes"}')
-        local root = leanjson.decode_file(path, { chunk_size = 3 })
+        local root = leanjson.decode_file(path, { file_in_memory = false, chunk_size = 3 })
         local reader = leanjson.reader(root)
         local file = assert(io.open(path, "wb"))
         file:close()

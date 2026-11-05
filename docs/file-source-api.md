@@ -1,6 +1,16 @@
 # File and incremental JSON sources
 
-`leanjson.decode_file(path, opts)` validates a complete file using bounded windows and returns the same values as `leanjson.decode`: lazy scalar/proxy values by default, or complete ordinary Lua values with `lazyload=false`. It raises on invalid JSON, options or I/O. It never reads or concatenates the complete file into a Lua input string. The original file must remain immutable while proxies/readers use it; the library never unlinks that path. Eager results own no descriptors and remain usable after the file is closed or removed.
+`leanjson.decode_file(path, opts)` validates a complete file once through bounded
+reads and returns lazy scalar/proxy values, or ordinary Lua values with
+`lazyload=false`. It raises on invalid JSON, options or I/O. By default,
+`file_in_memory=true` retains immutable input chunks in memory and closes the
+input fd before returning, including for lazy values. Later getters, forks and
+readers use those chunks; modifying/removing the original after decode does not
+change the snapshot. There is no whole-input concat or second parse.
+
+Set `file_in_memory=false` to retain the original bounded fd/window behavior.
+That file must remain immutable while any holder uses it. LeanJSON never unlinks
+an original path. Eager results own no descriptors after file decode completes.
 
 ```lua
 local body = leanjson.decode_file(path, { chunk_size = 65536 })
@@ -23,6 +33,7 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 
 | Option | Default | Behavior |
 | --- | --- | --- |
+| `file_in_memory` | `true` | Boolean; retain file/feed bytes in memory. False keeps an original source fd or creates an owned incremental spool. Independent of lazy/eager/preload loading. |
 | `chunk_size` | `65536` | Positive uint32 integer; bounds file reads, feed steps and native scalar windows. |
 | `max_depth` | codec `decode_max_depth()` (`1000`) | Nonnegative uint32 integer; zero inherits the codec default, nonzero overrides it. Source v2 does not clamp at 4096; the legacy parse/v1 limits remain separate. |
 | `index_depth` | `3` | Nonnegative uint32 integer; root depth is 0 and `a.b.c` is the default span frontier. Zero retains no optional children. |
@@ -33,10 +44,10 @@ These functions are independent of `ngx`. File I/O is synchronous. Smaller windo
 | `lazy` | `false` | High-level sources support eager validation only; `true` is rejected. |
 | `lazyload` | `true` | Boolean. `false` builds complete ordinary tables/scalars during the scan, without proxy descendants or hidden source ownership. |
 | `preload_paths` | absent | Dense array of JSONPath-subset strings. Selected values/subtrees and their required route metadata load during scanning independently of every index bound. All remaining fields remain lazy/readable. Syntax is checked even when `lazyload=false`. |
-| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for decoder input spools and active duplicate-normalization spill storage. Memory/original-file decoding creates no input spool; wide normalized operations may create an unlinked spill file. |
-| `on_chunk(bytes_sofar)` | absent | Runs between bounded file/feed source steps and may yield; not invoked by memory decoding. The argument is the received/scanned byte total and stays fixed during later value reads. |
+| `temp_dir` | `$TMPDIR` or `/tmp` | Existing directory for decoder input spools when file_in_memory=false and active duplicate-normalization spill storage. Default memory-backed input creates no source spool; wide normalized operations may create an unlinked spill file. |
+| `on_chunk(bytes_sofar)` | absent | Runs between bounded file/feed source steps and may yield; not invoked by direct string decoding. Memory-backed file/feed input still invokes it. The argument is the received/scanned byte total and stays fixed during later value reads. |
 
-The same loading options and bounds propagate through OpenResty `read_body`/`start_body` in `opts.decode`; HTTP chunk/callback overrides preserve them. Metadata bounds do not weaken full eager JSON validation or the independent nesting limit. See [loading modes and selector syntax](source-proxy-api.md) for wildcards, escaping, duplicates and the separate selected-data diagnostic units. Preloading never produces a projection; unmodified semantic values remain available. With `decode_allow_comment(true)`, source/decoder creation freezes comment acceptance, and all output paths omit actual comments while preserving eligible clean child spans. The codec setter is independent of the loading options and defaults to false.
+The same loading options and bounds propagate through OpenResty `read_body`/`start_body` in `opts.decode`; HTTP chunk/callback overrides preserve them. The HTTP adapter also accepts top-level `file_in_memory`, which overrides `opts.decode.file_in_memory`; invalid nested options are still rejected before input is consumed. Metadata bounds do not weaken full eager JSON validation or the independent nesting limit. See [loading modes and selector syntax](source-proxy-api.md) for wildcards, escaping, duplicates and the separate selected-data diagnostic units. Preloading never produces a projection; unmodified semantic values remain available. With `decode_allow_comment(true)`, source/decoder creation freezes comment acceptance, and all output paths omit actual comments while preserving eligible clean child spans. The codec setter is independent of the loading options and defaults to false.
 
 The index byte budget covers automatic prefixes, structural spans and confirmed
 demand results, including unused allocation capacity. Reading a path can retain
@@ -74,9 +85,9 @@ decoder:close() -- body remains usable
 leanjson.close(body)
 ```
 
-`new_decoder(opts)` validates its options and creates an exclusive owner-only (0600) spool with `mkstemp` in the configured directory. Construction errors raise. `feed(chunk)` accepts a Lua string and returns `true` or `nil, error`; even a large caller chunk is processed through bounded feed/write steps. No borrowed input pointer survives a native call.
+`new_decoder(opts)` validates its options and retains bounded immutable Lua chunks in memory by default, without a source spool. With `file_in_memory=false`, it creates an exclusive owner-only (0600) spool with `mkstemp`. Construction errors raise. `feed(chunk)` returns `true` or `nil, error`; large chunks are processed through bounded feed steps. No borrowed input pointer survives a native call.
 
-`finish()` confirms EOF and returns `value` or `nil, error`. Strings, numbers, booleans, null and containers all require successful completion. Repeated successful `finish()` calls create independent views of the same immutable source. With `lazyload=false`, the first finish transfers its ordinary value; later finish calls rebuild independent ordinary values from bounded source windows, so caller edits cannot affect subsequent results. The decoder retains its explicit spool ownership until close, without retaining a second full Lua value. Feeding after completion is rejected without invalidating completed values.
+`finish()` confirms EOF and returns `value` or `nil, error`. Strings, numbers, booleans, null and containers all require successful completion. Repeated successful `finish()` calls create independent views of the same immutable source. With `lazyload=false`, the first finish transfers its ordinary value; later finish calls rebuild independent ordinary values from bounded source windows, so caller edits cannot affect subsequent results. The decoder retains its input chunks or spool until close, without retaining a second full Lua value. Feeding after completion is rejected without invalidating completed values.
 
 `feed()` and `finish()` reject overlapping calls with `nil, error` while an earlier input/completion operation is suspended in a callback. Rejection does not abort the source or accept any bytes from the overlapping call. Resume/complete the current operation before feeding or finishing again; `close()` and `abort()` remain available for cancellation.
 
@@ -89,16 +100,16 @@ leanjson.close(body)
 | `nil, "ABSENT"` | The completed object/array has no such field/index. |
 | `nil, "ERROR", error` | Invalid query, malformed input, abort, I/O failure or closed decoder. |
 
-The native `NEED_READ` status is handled internally through bounded file windows. The source APIs deliberately expose no provisional values: a closing root before EOF does not establish final duplicate-key or absence results. Completed decoder queries refer to its immutable source; proxy edits do not rewrite that source.
+The native `NEED_READ` status is handled internally through bounded memory or file windows. The source APIs deliberately expose no provisional values: a closing root before EOF does not establish final duplicate-key or absence results. Completed decoder queries refer to its immutable source; proxy edits do not rewrite that source.
 
 Eager `get` results are independent ordinary values too; a later eager container
 query reconstructs only its requested source subtree. Those repeated eager
-queries can perform source I/O and run `on_chunk`. This Decoder contract is
+queries can read retained chunks (or perform I/O in file mode) and run `on_chunk`. This Decoder contract is
 separate from the OpenResty Session contract: a Session owns one completed value,
 and its later `get`/`finish` calls observe edits to that value in either loading
 mode, including completed-body fallback sessions.
 
-`abort(reason)` invalidates unfinished input and releases its spool ownership. After successful finish it returns `nil, error` and leaves completed values valid. `close()` is idempotent, drops decoder ownership and makes later decoder queries return `ERROR`. It leaves independently returned proxies/readers/forks valid.
+`abort(reason)` invalidates unfinished input and releases its input storage ownership. After successful finish it returns `nil, error` and leaves completed values valid. `close()` is idempotent, drops decoder ownership and makes later decoder queries return `ERROR`. It leaves independently returned proxies/readers/forks valid.
 
 ## Paths, proxies and explicit reads
 
@@ -123,3 +134,39 @@ The final lease closes the descriptor, releases selected caches and unlinks an o
 Reader construction freezes the logical snapshot and acquires leases without source I/O. `length()` performs and caches full length/encoding validation; `next()` performs that validation first if needed, before returning any output. Both operations can yield through source callbacks. Close wins over a late suspended result, while a previously successful length stays available after close.
 
 The additive sparse C ABI is version 2 (`leanjson_source_v2_*`), documented in `include/leanjson.h`. It uses immutable span handles and resumable targeted lookup/iteration with bounded `NEED_READ` windows. Loading adds immutable selector compilation/configuration and drainable BEGIN/DATA/END scan events, copied between bounded feed steps; no event may be published before successful final validation. Feed/finish/abort/source retain/release and scalar operation pumping reuse the unchanged v1 functions. Existing v1/v2 struct layouts and the contiguous `parse` API remain unchanged. Use v1 metadata/node/iteration functions with v1-created sources and v2 span/iteration functions with v2-created sources. The Lua loader requires sparse/loading exports and rejects an older native library with a missing-symbol diagnostic. See [source diagnostics and duplicate workspace](source-proxy-api.md) for the accounting boundary.
+
+## Socket-first OpenResty input
+
+`require("leanjson.openresty").read_body(opts)` automatically uses
+`ngx.req.socket()` for an unread fixed-length HTTP/1.1 body. It scans while
+receiving, retains source chunks in memory by default, waits for EOF/full
+validation, and transfers an independently owned value to its caller.
+`start_body(opts)` exposes the same producer as an explicit Session; its final
+values/absence results still require complete validation.
+
+HTTP/2, Transfer-Encoding/chunked input, missing/invalid Content-Length, empty
+bodies and already-buffered Nginx bodies use the completed-body fallback. A
+Nginx temporary file is copied into retained chunks during its one decode pass
+and closed before returning. Socket read/parse errors are terminal: input is
+never replayed through fallback after socket consumption begins. Other modules
+must not concurrently consume the same body.
+
+```lua
+local input = require "leanjson.openresty"
+local body, err, info = input.read_body({
+    chunk_size = 65536,
+    file_in_memory = true, -- default; false selects fd/spool source storage
+    decode = { preload_paths = { "$.model", "$.stream" } },
+})
+if err then error(err) end
+-- info.mode: incremental, completed-memory or completed-file (input origin).
+-- info.storage: memory or file (retained source storage).
+leanjson.close(body)
+```
+
+Memory storage occupies O(input bytes) plus chunk metadata and is shared by
+independent holders. The final close clears those retained chunks; cancellation
+releases unfinished input. This option removes source-file rereads, not all
+possible disk I/O: exact duplicate-key workspace may still spill in `temp_dir`.
+It is separate from loading fields into ordinary Lua objects and does not make
+initial file reads asynchronous.

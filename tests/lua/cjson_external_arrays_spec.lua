@@ -332,7 +332,7 @@ describe("external array source ownership", function()
     local directory, held, descriptors, spools, restore_open, restore_spool
     local function hold(value) held[#held + 1] = value; return value end
     local function load(c, source, raw, mode, checkpoint)
-        local opts = { lazyload = mode ~= "eager", chunk_size = 7, index_depth = 0,
+        local opts = { file_in_memory = false, lazyload = mode ~= "eager", chunk_size = 7, index_depth = 0,
             index_array_limit = 0, index_budget_bytes = 0,
             preload_paths = mode == "preload" and { "$.selected" } or nil, on_chunk = checkpoint }
         if source == "memory" then return c.decode(raw, opts) end

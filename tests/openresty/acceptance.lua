@@ -48,7 +48,7 @@ end
 local function wait_source(case, event, sock)
     local client = http.new()
     client:set_timeout(6000)
-    local res, err = client:request_uri("http://127.0.0.1:" .. port .. "/lifecycle/wait?case=" .. case .. "&event=" .. event,
+    local res, err = client:request_uri("http://127.0.0.1:" .. port .. "/lifecycle/wait?file_in_memory=false&case=" .. case .. "&event=" .. event,
         { keepalive = false })
     local result = res and cjson.decode(res.body) or { error = err }
     if not result.ready then
@@ -72,6 +72,25 @@ local function closed_source(probe)
     if probe.owned then
         assert(state.close_unlinked and not probe.path_exists, cjson.encode(probe))
     end
+end
+
+for _, mode in ipairs { "automatic", "completed", "snapshot", "file" } do
+    check("socket-first and buffered file input honor memory storage: " .. mode, function()
+        local raw = '{"model":"original","prompt":"' .. ("m"):rep(262144) .. '"}'
+        local completed = mode == "completed" or mode == "snapshot"
+        local endpoint = mode == "snapshot" and "/snapshot-file" or completed and "/completed" or "/automatic"
+        if mode == "file" then endpoint = endpoint .. "?file_in_memory=false" end
+        local status, result = request(endpoint, raw, "storage-" .. mode)
+        assert(status == 200, cjson.encode(result))
+        assert(result.input.mode == (completed and "completed-file" or "incremental"), cjson.encode(result.input))
+        assert(result.input.storage == (mode == "file" and "file" or "memory"), cjson.encode(result.input))
+        assert(result.input.retained_source_fd == (mode == "file"), cjson.encode(result.input))
+        assert(result.input.nginx_body_file == completed, cjson.encode(result.input))
+        if completed then assert(result.input.fallback == "body-buffered") end
+        local body = capture(result)
+        assert(body.prompt == ("m"):rep(262144) and body.model == "rewritten")
+        empty_directory("decoder")
+    end)
 end
 
 for _, proxy_mode in ipairs { "table", "userdata" } do
@@ -212,9 +231,9 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
             get("/gc?action=stop")
             local ok, err = xpcall(function()
                 local case = endpoint:sub(2) .. "-query-" .. model.name
-                local status, result = request(endpoint .. "?case=" .. case, '{"model":' .. model.raw .. ',"prompt":"x"}')
+                local status, result = request(endpoint .. "?file_in_memory=false&case=" .. case, '{"model":' .. model.raw .. ',"prompt":"x"}')
                 assert(status == 200, cjson.encode(result))
-                local probe = get("/lifecycle/probe?case=" .. case)
+                local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
                 assert(probe.owned, cjson.encode(probe))
                 closed_source(probe)
             end, debug.traceback)
@@ -232,7 +251,7 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
             assert(sock:connect("127.0.0.1", port))
             local raw = '{"model":{"nested":1},"prompt":"' .. ("p"):rep(200000) .. '"}'
             local delay = endpoint == "/incremental" and "&prepare_delay=1" or ""
-            assert(sock:send("POST " .. endpoint .. "?case=" .. case .. "&fault=await-abort" .. delay .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
+            assert(sock:send("POST " .. endpoint .. "?file_in_memory=false&case=" .. case .. "&fault=await-abort" .. delay .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
                 #raw .. "\r\n\r\n" .. raw))
             local paused = wait_source(case, "paused", sock)
             assert(paused.state.pause_waiting and not paused.state.aborted and paused.fcntl ~= -1
@@ -252,9 +271,9 @@ for _, endpoint in ipairs { "/example-incremental", "/incremental" } do
         get("/gc?action=stop")
         local ok, err = xpcall(function()
             local case = endpoint:sub(2) .. "-query-error"
-            local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", '{"model":[1,2],"prompt":"x"}')
+            local status, result = request(endpoint .. "?file_in_memory=false&case=" .. case .. "&fault=connect", '{"model":[1,2],"prompt":"x"}')
             assert((status == 500 or status == 502) and result.error, cjson.encode(result))
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             assert(probe.owned, cjson.encode(probe))
             closed_source(probe)
         end, debug.traceback)
@@ -274,7 +293,7 @@ check("isolated incremental requests wake both query waiters and finish without 
             client:set_timeout(5000)
             assert(client:connect { scheme = "http", host = "127.0.0.1", port = port })
             local raw = '{"model":{"nested":1},"prompt":"' .. ("p"):rep(200000) .. '"}'
-            local path = route.endpoint .. "?case=" .. case .. "&fault=pause" .. (route.delay and "&prepare_delay=1" or "")
+            local path = route.endpoint .. "?file_in_memory=false&case=" .. case .. "&fault=pause" .. (route.delay and "&prepare_delay=1" or "")
             assert(client.sock:send("POST " .. path .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
                 #raw .. "\r\n\r\n" .. raw))
             -- Only receive this response until it is complete: no ping, marker
@@ -284,11 +303,11 @@ check("isolated incremental requests wake both query waiters and finish without 
             if res then body, read_err = res:read_body() end
             if not res or res.status ~= 200 or not body then
                 error(cjson.encode { error = response_err or read_err, status = res and res.status, response = body,
-                    probe = get("/lifecycle/probe?case=" .. case) })
+                    probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case) })
             end
             client:close()
             client = nil
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             assert(probe.state.finish_end and probe.state.paused_at and probe.owned, cjson.encode(probe))
             closed_source(probe)
             if route.endpoint == "/incremental" then
@@ -308,9 +327,9 @@ check("an intentionally retained query child survives session close until its ow
     local ok, err = xpcall(function()
         for _, model in ipairs { '{"nested":1}', '[1,2]' } do
             local case = "retained-query-" .. #model
-            local status, result = request("/lifecycle/retained?case=" .. case, '{"model":' .. model .. '}')
+            local status, result = request("/lifecycle/retained?file_in_memory=false&case=" .. case, '{"model":' .. model .. '}')
             assert(status == 200 and result.alive_after_close and type(result.value) == "table", cjson.encode(result))
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             assert(probe.owned, cjson.encode(probe))
             closed_source(probe)
         end
@@ -399,7 +418,7 @@ for _, endpoint in ipairs { "/example", "/completed" } do
             local sock = assert(ngx.socket.tcp())
             assert(sock:connect("127.0.0.1", port))
             local raw = '{"model":"old","prompt":"' .. ("p"):rep(200000) .. '"}'
-            local route = endpoint .. "?case=" .. case .. "&fault=pause"
+            local route = endpoint .. "?file_in_memory=false&case=" .. case .. "&fault=pause"
             assert(sock:send("POST " .. route .. " HTTP/1.1\r\nHost: localhost\r\nContent-Length: " ..
                 #raw .. "\r\n\r\n" .. raw))
             local paused
@@ -411,7 +430,7 @@ for _, endpoint in ipairs { "/example", "/completed" } do
             assert(paused, "first mutation never reached a source read")
             sock:close()
             ngx.sleep(0.3)
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             assert(probe.paused, cjson.encode(probe))
             closed_source(probe)
             assert(sink_count() == before)
@@ -427,9 +446,9 @@ for _, endpoint in ipairs { "/example", "/completed" } do
             local raw = '{"model":"old","prompt":"' .. ("p"):rep(200000) .. '"}'
             local client = http.new()
             local response = assert(client:request_uri("http://127.0.0.1:" .. port .. endpoint ..
-                "?case=" .. case .. "&fault=truncate", { method = "POST", body = raw, keepalive = false }))
+                "?file_in_memory=false&case=" .. case .. "&fault=truncate", { method = "POST", body = raw, keepalive = false }))
             assert(response.status == 500, response.body)
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             assert(probe.truncated, cjson.encode(probe))
             closed_source(probe)
             assert(sink_count() == before)
@@ -444,9 +463,9 @@ for _, endpoint in ipairs { "/example", "/connect-failure" } do
         local ok, err = xpcall(function()
             local case = endpoint:sub(2) .. "-connection-error"
             local raw = '{"model":"old","prompt":"' .. ("c"):rep(200000) .. '"}'
-            local status, result = request(endpoint .. "?case=" .. case .. "&fault=connect", raw)
+            local status, result = request(endpoint .. "?file_in_memory=false&case=" .. case .. "&fault=connect", raw)
             assert((status == 500 or status == 502) and result.error, cjson.encode(result))
-            local probe = get("/lifecycle/probe?case=" .. case)
+            local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case)
             closed_source(probe)
         end, debug.traceback)
         get("/gc?action=restart")
@@ -462,11 +481,11 @@ for _, kind in ipairs { "core", "adapter", "fallback" } do
             raw = string.format("%x\r\n%s\r\n0\r\n\r\n", #raw, raw)
             headers = { ["Transfer-Encoding"] = "chunked" }
         end
-        local status, result = request("/lifecycle/" .. kind .. "?case=" .. case, raw, nil, headers)
+        local status, result = request("/lifecycle/" .. kind .. "?file_in_memory=false&case=" .. case, raw, nil, headers)
         assert(status == 200 and result.decoded and result.input.mode == "completed-file", cjson.encode(result))
         if kind == "fallback" then assert(result.input.fallback == "transfer-encoding") end
         ngx.sleep(0.05)
-        local probe = get("/lifecycle/probe?case=" .. case .. "&gc=1")
+        local probe = get("/lifecycle/probe?file_in_memory=false&case=" .. case .. "&gc=1")
         closed_source(probe)
     end)
 end
@@ -491,6 +510,40 @@ check("HTTP/2 upload uses the completed fallback", function()
     assert(ok, raw)
     local result = cjson.decode(raw)
     assert(result.input.mode == "completed-memory" and result.input.fallback == "http-version", raw)
+end)
+check("read_body scans a partial socket upload in memory before EOF without forwarding", function()
+    local before = sink_count()
+    local first = '{"model":"first","prompt":"' .. ("u"):rep(32768)
+    local last = '","model":"last"}'
+    local marker = os.getenv("LEANJSON_TEST_PREFIX") .. "/memory-upload-scanning"
+    os.remove(marker)
+    local client = http.new()
+    client:set_timeout(5000)
+    assert(client:connect {scheme = "http", host = "127.0.0.1", port = port})
+    local step = 0
+    local res, err = client:request {method = "POST", path = "/memory-upload",
+        headers = {["Content-Length"] = tostring(#first + #last)}, body = function()
+            step = step + 1
+            if step == 1 then return first end
+            if step == 2 then
+                local scanned, deadline = false, ngx.now() + 2
+                repeat
+                    local file = io.open(marker, "r")
+                    if file then scanned = file:read("*a") == "socket"; file:close() end
+                    if not scanned then ngx.sleep(0.005) end
+                until scanned or ngx.now() >= deadline
+                assert(scanned, "read_body did not scan before the remaining upload was sent")
+                assert(sink_count() == before, "an incomplete JSON body reached the upstream")
+                return last
+            end
+        end}
+    assert(res, err)
+    local result = cjson.decode(assert(res:read_body())); client:close()
+    assert(res.status == 200 and result.original_model == "last", cjson.encode(result))
+    assert(result.input.mode == "incremental" and result.input.storage == "memory")
+    assert(not result.input.nginx_body_file and not result.input.retained_source_fd)
+    assert(sink_count() == before + 1)
+    assert(os.remove(marker))
 end)
 check("a slow duplicate does not trigger an upstream side effect before finish", function()
     local before = sink_count()

@@ -9,7 +9,14 @@ if ngx.var.uri == "/gc" then
 end
 local started = ngx.now()
 local opts = { chunk_size = 16384, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .. "/decoder",
-    decode = { proxy_mode = ngx.var.arg_proxy_mode or "table" } }
+    decode = { proxy_mode = ngx.var.arg_proxy_mode or "table" },
+    file_in_memory = ngx.var.arg_file_in_memory ~= "false" }
+-- Completed-input and file-fault cases deliberately exercise Nginx buffering;
+-- other routes exercise read_body's socket-first behavior.
+if ngx.var.uri == "/completed" or ngx.var.uri == "/snapshot-file" or ngx.var.uri == "/io-failure" or ngx.var.uri == "/unlink-source"
+    or ngx.var.uri == "/abort-file-parse" or ngx.var.uri == "/abort-output-length"
+    or ngx.var.uri == "/output-hook-failure" then ngx.req.read_body() end
+if ngx.var.uri == "/io-failure" then opts.file_in_memory = false end
 local output_phase = "input"
 if ngx.var.arg_prepare_delay == "1" then
     local delayed = false
@@ -18,7 +25,18 @@ if ngx.var.arg_prepare_delay == "1" then
     end
 end
 if ngx.var.arg_hook == "1" then opts.on_chunk = function() error("intentional source hook failure") end end
-if ngx.var.arg_temp_error == "1" then opts.temp_dir = "/proc/leanjson-unwritable-spool" end
+if ngx.var.arg_temp_error == "1" then
+    opts.temp_dir = "/proc/leanjson-unwritable-spool"
+    opts.file_in_memory = false
+end
+if ngx.var.uri == "/memory-upload" then
+    opts.on_chunk = function()
+        local marker = assert(io.open(os.getenv("LEANJSON_TEST_PREFIX") .. "/memory-upload-scanning", "w"))
+        marker:write(ngx.req.get_body_file() == nil and "socket" or "buffered")
+        marker:close()
+        ngx.sleep(0)
+    end
+end
 if ngx.var.uri == "/external-abort" then assert(ngx.on_abort(function() end)) end
 if ngx.var.uri == "/abort-file-parse" then
     opts.on_chunk = function()
@@ -139,6 +157,9 @@ local function run()
         return
     end
     -- Own every subsequent holder before its first mutation/read can yield.
+    local node = require("leanjson.proxy").node(body)
+    info.retained_source_fd = node and node.backend and node.backend.state.fd ~= nil or false
+    info.nginx_body_file = ngx.req.get_body_file() ~= nil
     body_type = type(body)
     if not unregister then unregister = assert(adapter.on_abort(cleanup)) end
     if ngx.var.uri == "/abort-callbacks" then
@@ -187,7 +208,7 @@ local function run()
     leanjson.close(original_view)
     original_view = nil
     phase("original-closed")
-    if ngx.var.uri == "/io-failure" then
+    if ngx.var.uri == "/io-failure" or ngx.var.uri == "/snapshot-file" then
         local source = assert(ngx.req.get_body_file())
         assert(io.open(source, "wb")):close() -- real source truncation, no mocked reader
     elseif ngx.var.uri == "/unlink-source" then

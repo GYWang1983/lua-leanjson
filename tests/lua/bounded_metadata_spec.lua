@@ -67,7 +67,7 @@ describe("bounded source metadata", function()
         local output = assert(io.open(filename, "wb"))
         output:write('[{"x":1},{"x":2},{"x":3},{"x":4}]')
         output:close()
-        local body = json.decode_file(filename)
+        local body = json.decode_file(filename, {file_in_memory = false})
         local original, reads = io_source.read, 0
         io_source.read = function(...) reads = reads + 1; return original(...) end
         local ok, err = pcall(function()

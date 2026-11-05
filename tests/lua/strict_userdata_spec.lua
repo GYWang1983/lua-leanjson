@@ -356,7 +356,7 @@ describe("strict userdata carriers", function()
         end
         local ok, err = pcall(function()
             local function abandon()
-                local input = json.new_decoder({ temp_dir = directory, proxy_mode = "userdata" })
+                local input = json.new_decoder({ file_in_memory = false, temp_dir = directory, proxy_mode = "userdata" })
                 assert(input:feed('{"a":{"x":1}}'))
                 local root = assert(input:finish())
                 local child = root.a

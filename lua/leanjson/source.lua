@@ -1,5 +1,5 @@
--- Versioned file/window source. Rust owns only metadata; Lua owns the fd and
--- one lease for every independent consumer. No original file is ever unlinked.
+-- Versioned input source. Rust owns metadata; Lua owns retained memory chunks
+-- or a source fd, with one lease per consumer. Original files are never unlinked.
 local ffi = require("ffi")
 local C = require("leanjson.lib")
 local io_source = require("leanjson.source_io")
@@ -14,6 +14,7 @@ local READY, NEED_INPUT = 0, 2
 local MAX_EXACT = 9007199254740991
 local shared = require("leanjson.source_backend")
 local loading = require("leanjson.loading")
+local buffer = require("leanjson.source_buffer")
 local exact, result_error, require_status = shared.exact, shared.result_error, shared.require_status
 local native_options = shared.native_options
 for _, name in ipairs({ "type", "span", "scalar", "scalar_chunks", "flags", "children", "lookup", "length", "identity", "clean", "stats", "lexical_length", "clear_indexes" }) do
@@ -21,6 +22,7 @@ for _, name in ipairs({ "type", "span", "scalar", "scalar_chunks", "flags", "chi
 end
 
 local function close_state(state)
+    if state.buffer then state.buffer:close() end
     if state.preloaded then
         for identity in pairs(state.preloaded) do state.preloaded[identity] = nil end
         state.preloaded = nil
@@ -60,7 +62,7 @@ function Backend:release(owner)
 end
 
 function Backend:check_open()
-    if self.state.fd == nil then error("leanjson: source closed", 0) end
+    if self.state.source == nil then error("leanjson: source closed", 0) end
     if self.failure then error(self.failure, 0) end
 end
 
@@ -89,7 +91,9 @@ function Backend:read(offset, length, scope)
     local lease = self:retain()
     local record = leases.track(scope, function() self:release(lease) end)
     local ok, chunk = pcall(function()
-        local read_ok, value, err = pcall(io_source.read, self.state.fd, offset, length)
+        local read_ok, value, err
+        if self.buffered then read_ok, value = pcall(self.state.buffer.read, self.state.buffer, offset, length)
+        else read_ok, value, err = pcall(io_source.read, self.state.fd, offset, length) end
         leases.check(scope)
         if not read_ok then error(self:fail(value), 0) end
         if type(value) ~= "string" then error(self:fail(err or "leanjson: source read failed"), 0) end
@@ -106,9 +110,13 @@ end
 local function backend_new(fd, spool_path, opts, codec)
     local result = ffi.new("leanjson_source_v1_result[1]")
     local source = C.leanjson_source_v2_new(native_options(opts), result)
-    if source == nil then io_source.close(fd, spool_path); error(result_error(result), 0) end
+    if source == nil then
+        if fd ~= nil then io_source.close(fd, spool_path) end
+        error(result_error(result), 0)
+    end
     local backend = setmetatable({ state = { fd = fd, path = spool_path, source = source, leases = 0 },
-        total = 0, opts = opts }, Backend)
+        total = 0, opts = opts, buffered = opts.file_in_memory }, Backend)
+    if backend.buffered then backend.state.buffer = buffer.new() end
     local owner = backend:retain()
     local ok, builder = pcall(function()
         shared.configure_source(backend, codec)
@@ -119,16 +127,19 @@ local function backend_new(fd, spool_path, opts, codec)
     return backend, owner
 end
 
-local function feed_bytes(backend, chunk, spool, scope)
+local function feed_bytes(backend, chunk, store, scope)
     if type(chunk) ~= "string" then error("leanjson: feed chunk must be a string", 0) end
     if #chunk > MAX_EXACT - backend.total then error("leanjson: source offset exceeds Lua exact integer range", 0) end
     local result, position = ffi.new("leanjson_source_v1_result[1]"), 0
     while position < #chunk do
         leases.check(scope)
         local count = math.min(#chunk - position, backend.opts.chunk_size)
-        if spool then
-            local written, err = io_source.write(backend.state.fd, backend.total, chunk, position, count)
-            if not written then error(backend:fail(err), 0) end
+        if store then
+            if backend.buffered then backend.state.buffer:append(chunk, position, count)
+            else
+                local written, err = io_source.write(backend.state.fd, backend.total, chunk, position, count)
+                if not written then error(backend:fail(err), 0) end
+            end
         end
         require_status(C.leanjson_source_v1_feed(backend.state.source, backend.total,
             ffi.cast("const uint8_t *", chunk) + position, count, result), NEED_INPUT, result, backend.state.source)
@@ -158,8 +169,9 @@ function M.decode_file(filename, opts, codec)
             if type(chunk) ~= "string" then error(err or "leanjson: source read failed", 0) end
             if #chunk > opts.chunk_size then error("leanjson: source exceeded read bound", 0) end
             if #chunk == 0 then break end
-            feed_bytes(backend, chunk, false)
+            feed_bytes(backend, chunk, backend.buffered)
         end
+        if backend.buffered then io_source.close(fd); backend.state.fd = nil end
         local node = finish_backend(backend)
         if not opts.lazyload then return backend.loading:take() end
         return proxy.from_backend(backend, node.handle, codec)
@@ -171,8 +183,11 @@ end
 
 function M.new_decoder(opts, codec)
     opts = options(opts, codec)
-    local fd, spool_path = io_source.spool(opts.temp_dir)
-    if fd == nil then error(spool_path, 0) end
+    local fd, spool_path
+    if not opts.file_in_memory then
+        fd, spool_path = io_source.spool(opts.temp_dir)
+        if fd == nil then error(spool_path, 0) end
+    end
     local backend, owner = backend_new(fd, spool_path, opts, codec)
     local scope = leases.acquire()
     scope.entries = { { backend, owner } }

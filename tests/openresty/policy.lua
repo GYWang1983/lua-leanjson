@@ -9,6 +9,8 @@ elseif ngx.var.arg_options == "decode-false" then opts.decode = false
 elseif ngx.var.arg_options == "chunk-false" then opts.chunk_size = false
 elseif ngx.var.arg_options == "hook-false" then opts.on_chunk = false
 elseif ngx.var.arg_options == "temp-false" then opts.temp_dir = false end
+if ngx.var.arg_file_in_memory == "false" then opts.file_in_memory = false end
+if ngx.var.uri == "/loading/completed" or ngx.var.uri == "/policy/completed" then ngx.req.read_body() end
 local value, session, info
 local ran, err = pcall(function()
     local failure

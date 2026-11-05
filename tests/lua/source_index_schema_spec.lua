@@ -70,7 +70,7 @@ describe("source index and scan-time schema options", function()
 
     it("reuses complete path and absent-key results across source forks", function()
         local raw = '{"unused":"' .. string.rep("x", 131072) .. '","a":{"b":{"value":1}}}'
-        local root = decode("file", raw, {structural_index = false, index_depth = 0,
+        local root = decode("file", raw, {file_in_memory = false, structural_index = false, index_depth = 0,
             index_array_limit = 0, index_budget_bytes = 65536, chunk_size = 4096})
         local original_read, bytes = source_io.read, 0
         source_io.read = function(...)

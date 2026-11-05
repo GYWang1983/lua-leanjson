@@ -9,6 +9,8 @@ local opts = { chunk_size = 4096, temp_dir = os.getenv("LEANJSON_TEST_PREFIX") .
         preload_paths = { "$.a.b.c.d.e", "$.items[5].x", "$.n", "$.big" } },
     on_chunk = function() calls = calls + 1; ngx.sleep(0) end }
 if ngx.var.arg_invalid == "1" then opts.decode.preload_paths = { "$..invalid" } end
+if ngx.var.arg_file_in_memory == "false" then opts.file_in_memory = false end
+if ngx.var.uri == "/loading/completed" or ngx.var.uri == "/policy/completed" then ngx.req.read_body() end
 local ok, result = pcall(function()
     local err, info
     if ngx.var.uri == "/loading/incremental" then

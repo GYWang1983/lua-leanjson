@@ -25,8 +25,9 @@ local path = os.tmpname()
 local file = assert(io.open(path, "wb"))
 assert(file:write(raw))
 assert(file:close())
+for _, file_in_memory in ipairs({true, false}) do
 local ok, failure = pcall(function()
-    local body = leanjson.decode_file(path, { chunk_size = 3 })
+    local body = leanjson.decode_file(path, { chunk_size = 3, file_in_memory = file_in_memory })
     local branch = leanjson.fork(body)
     leanjson.close(body)
     local nested = leanjson.get(branch, "nested")
@@ -67,10 +68,12 @@ local ok, failure = pcall(function()
     leanjson.close(result_items)
     leanjson.close(result)
 end)
-assert(os.remove(path))
 assert(ok, failure)
+end
+assert(os.remove(path))
 
-local decoder = leanjson.new_decoder({ chunk_size = 2 })
+for _, file_in_memory in ipairs({true, false}) do
+local decoder = leanjson.new_decoder({ chunk_size = 2, file_in_memory = file_in_memory })
 for byte in raw:gmatch(".") do assert(decoder:feed(byte)) end
 local body, err = decoder:finish()
 assert(not err, err)
@@ -81,4 +84,5 @@ decoder:close()
 leanjson.close(body)
 assert(branch.model == "original")
 leanjson.close(branch)
+end
 print("Installed LeanJSON memory/file/feed/fork/get/reader/close and OpenResty imports passed")

@@ -1,5 +1,7 @@
 -- Run outside the checkout with LUA_PATH/LUA_CPATH restricted to the installed tree.
 local leanjson = require("leanjson")
+local expected_version = os.getenv("LEANJSON_EXPECTED_VERSION")
+if expected_version then assert(leanjson._VERSION == expected_version, leanjson._VERSION) end
 local input = require("leanjson.openresty")
 assert(type(input.read_body) == "function")
 assert(type(input.start_body) == "function")

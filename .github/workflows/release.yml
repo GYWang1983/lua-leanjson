@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Existing stable tag version, for example 0.1.0"
+        description: "Existing stable tag version, for example 0.1.1"
         required: true
-        default: "0.1.0"
+        default: "0.1.1"
       publish:
         description: "Publish verified packages to LuaRocks and GitHub"
         type: boolean

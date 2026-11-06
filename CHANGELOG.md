@@ -6,6 +6,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-05
+
+Release notes: [English](docs/releases/0.1.1.en.md) ·
+[简体中文](docs/releases/0.1.1.zh-CN.md).
+
 ### Added
 
 - Add explicit `ref(value[, path])` snapshot handles for source-backed mapping, independent leases and bounded serialization without decoding long scalar strings.
@@ -17,6 +22,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 - Receive unread fixed-length HTTP/1.1 bodies through `ngx.req.socket()` in `read_body`, with safe completed-body fallbacks. File and incremental input retain source chunks in memory by default; `file_in_memory=false` preserves fd/spool storage.
 - Bound legacy scanners' initial structural-offset reservation and reuse synchronous file-read buffers up to 64 KiB to reduce temporary allocation.
+- Accelerate source scanning with a CJSON-derived native kernel and batch escaped-string processing while retaining the legacy scanner option.
+- Move string encoded-length/escaping and raw-container depth checks into Rust; readers preserve eligible raw source strings by default. Set `preserve_raw_strings=false` for the previous reader spelling behavior; `encode()` and `tostring()` keep their encoding behavior.
+- Ship the complete Lua install manifest, CJSON-derived code notices and matching package/module version `0.1.1`.
 
 ## [0.1.0] - 2026-11-03
 
@@ -56,6 +64,7 @@ First release of the lua-leanjson fork. Release notes:
 - RFC 8259 validation coverage, cjson/simdjson fixture coverage, and release CI for Rust, Lua, and LuaRocks package checks.
 - Benchmark harness comparing `qjson` with `lua-cjson` and `lua-resty-simdjson`, with benchmark summaries in the README and documentation.
 
-[Unreleased]: https://github.com/GYWang1983/lua-leanjson/compare/v0.1.0...main
+[Unreleased]: https://github.com/GYWang1983/lua-leanjson/compare/v0.1.1...main
+[0.1.1]: https://github.com/GYWang1983/lua-leanjson/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/GYWang1983/lua-leanjson/releases/tag/v0.1.0
 [upstream-0.1.0]: https://github.com/api7/lua-qjson/releases/tag/v0.1.0

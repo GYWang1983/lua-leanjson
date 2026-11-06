@@ -35,7 +35,7 @@ def pair(case_id, result, reference_result=None, **fields):
 
 class ExpectedDifferenceControls(unittest.TestCase):
     def test_brand_difference_is_accepted_without_changing_exact_verdict(self):
-        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.0")),
+        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.1")),
                                  packed(string("cjson"), string("2.1.0.11")))
         self.assertEqual("expected_difference", runner.classify(reference, target))
         self.assertEqual("module_identity", target["expected_difference"])
@@ -84,7 +84,7 @@ class ExpectedDifferenceControls(unittest.TestCase):
         self.assertEqual("behavioral_difference", runner.classify(reference, target))
 
     def test_removing_declared_policy_removes_its_acceptance(self):
-        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.0")))
+        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.1")))
         with patch.dict(runner.EXPECTED_DIFFERENCES, {}, clear=True):
             self.assertEqual("behavioral_difference", runner.classify(reference, target))
 
@@ -101,7 +101,7 @@ class ExpectedDifferenceControls(unittest.TestCase):
         self.assertEqual("behavioral_difference", runner.classify(reference, target))
 
     def test_setup_errors_and_missing_apis_are_never_allowlisted(self):
-        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.0")))
+        reference, target = pair("test.lua:L94", packed(string("leanjson"), string("0.1.1")))
         target["unsupported"] = ["missing field"]
         self.assertEqual("unsupported", runner.classify(reference, target))
         target["unsupported"] = []

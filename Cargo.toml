@@ -1,6 +1,6 @@
 [package]
 name = "leanjson"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Memory-conscious JSON processing for LuaJIT and OpenResty"
 license = "Apache-2.0"

@@ -68,7 +68,7 @@ zero: selected values and the paths needed to reach them have separate storage.
 The JSON core does not depend on `ngx`. OpenResty integration is isolated in
 `leanjson.openresty`.
 
-The module exposes `_NAME = "leanjson"` and `_VERSION = "0.1.0"`, matching
+The module exposes `_NAME = "leanjson"` and `_VERSION = "0.1.1"`, matching
 the package version in `Cargo.toml`. Independent codecs from `new()`,
 `leanjson.safe` and its instances expose the same identity. These fields identify
 LeanJSON, rather than the reference lua-cjson implementation; the LuaRocks
@@ -77,28 +77,28 @@ LeanJSON, rather than the reference lua-cjson implementation; the LuaRocks
 ## Install
 
 ```sh
-luarocks --lua-version=5.1 install lua-leanjson 0.1.0-1
+luarocks --lua-version=5.1 install lua-leanjson 0.1.1-1
 ```
 
-Version 0.1.0 provides a source rock and Linux x86_64/amd64 and ARM64/aarch64
+Version 0.1.1 provides a source rock and Linux x86_64/amd64 and ARM64/aarch64
 binary rocks targeting glibc 2.35. Binary installation requires no Rust
 compiler. Configure LuaRocks for the LuaJIT/OpenResty Lua 5.1 module tree;
 PUC Lua and musl/Alpine binaries are not supported by this release.
 
-Release notes: [English](docs/releases/0.1.0.en.md) /
-[简体中文](docs/releases/0.1.0.zh-CN.md).
+Release notes: [English](docs/releases/0.1.1.en.md) /
+[简体中文](docs/releases/0.1.1.zh-CN.md).
 
 ### Install from a source checkout
 
 From a checkout of this fork, install the checked-out revision with the
-command below. Use the `v0.1.0` tag for the release or pin the development
+command below. Use the `v0.1.1` tag for the release or pin the development
 commit you have validated.
 
 ```sh
 luarocks --lua-version=5.1 make rockspec/lua-leanjson-scm-1.rockspec
 ```
 
-Building requires Rust/Cargo and LuaRocks configured for LuaJIT's Lua 5.1 ABI.
+Building requires Rust/Cargo, a C99-capable compiler, and LuaRocks configured for LuaJIT's Lua 5.1 ABI.
 Source builds also require a C99 compiler for the statically linked scanning
 kernel; they do not require a runtime lua-cjson dependency.
 

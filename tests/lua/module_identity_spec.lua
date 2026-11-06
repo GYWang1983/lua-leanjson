@@ -15,8 +15,8 @@ describe("LeanJSON module identity", function()
         it("identifies the " .. surface[1] .. " without impersonating cjson", function()
             local codec = surface[2]()
             assert.equal("leanjson", codec._NAME)
-            assert.equal("0.1.0", codec._VERSION)
-            assert.equal("leanjson/0.1.0", ("%s/%s"):format(codec._NAME, codec._VERSION))
+            assert.equal("0.1.1", codec._VERSION)
+            assert.equal("leanjson/0.1.1", ("%s/%s"):format(codec._NAME, codec._VERSION))
         end)
     end
 

@@ -38,7 +38,7 @@ env PATH=/usr/bin:/bin /usr/bin/luarocks --lua-version=5.1 --tree "$runtime_tree
 (
     cd "$RUNNER_TEMP"
     env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH \
-        PATH=/usr/bin:/bin \
+        PATH=/usr/bin:/bin LEANJSON_EXPECTED_VERSION="$version" \
         LUA_PATH="$runtime_tree/share/lua/5.1/?.lua;$runtime_tree/share/lua/5.1/?/init.lua" \
         LUA_CPATH="$runtime_tree/lib/lua/5.1/?.so" \
         /usr/bin/luajit "$repo/.github/scripts/installed-package-smoke.lua"
@@ -47,6 +47,7 @@ env PATH=/usr/bin:/bin /usr/bin/luarocks --lua-version=5.1 --tree "$runtime_tree
 docker run --rm --network none --read-only --tmpfs /tmp \
     -v "$runtime_tree:/opt/leanjson:ro" \
     -v "$repo/.github/scripts/installed-package-smoke.lua:/opt/smoke.lua:ro" \
+    -e LEANJSON_EXPECTED_VERSION="$version" \
     -e LUA_PATH='/opt/leanjson/share/lua/5.1/?.lua;/opt/leanjson/share/lua/5.1/?/init.lua' \
     -e LUA_CPATH='/opt/leanjson/lib/lua/5.1/?.so' \
     --entrypoint /usr/local/openresty/luajit/bin/luajit \

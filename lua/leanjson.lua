@@ -35,7 +35,7 @@ local ERR = {
 
 local _M = {
     _NAME = "leanjson",
-    _VERSION = "0.1.0", -- Keep aligned with the package version in Cargo.toml.
+    _VERSION = "0.1.1", -- Keep aligned with the package version in Cargo.toml.
     T_NULL = 0, T_BOOL = 1, T_NUM = 2,
     T_STR  = 3, T_ARR  = 4, T_OBJ = 5,
 }
